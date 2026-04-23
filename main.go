@@ -3,7 +3,7 @@ package main
 import (
 	"fmt"
 	"log"
-	"tinytikv/memtable"
+	"scoriadb/memtable"
 )
 
 func main() {
