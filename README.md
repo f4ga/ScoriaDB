@@ -1,12 +1,35 @@
 
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://via.placeholder.com/800x200/1e1e2e/ffffff?text=ScoriaDB+Dark">
+  <img alt="ScoriaDB Banner" src="https://via.placeholder.com/800x200/f8f9fa/212529?text=ScoriaDB+Light">
+</picture>
 
+<!-- Анимированный заголовок с эффектом печати -->
 <p align="center">
-  <img src="https://w1.pngwing.com/pngs/426/951/png-transparent-rock-boulder-drawing-angle-rectangle.png" width="120" alt="ScoriaDB logo">
+  <a href="https://git.io/typing-svg">
+    <img src="https://readme-typing-svg.demolab.com?font=Fira+Code&weight=600&size=28&duration=3000&pause=500&color=F7A81E&center=true&vCenter=true&width=500&lines=🪨+ScoriaDB;Fast+embedded+KV-store;Written+in+Go;LSM+tree+engine" alt="Typing SVG">
+  </a>
 </p>
 
-<h1 align="center">🪨 ScoriaDB</h1>
-<h3 align="center">Встраиваемая, быстрая и надёжная key‑value база данных на Go</h3>
+<p align="center">
+  <strong>Встраиваемая, быстрая и надёжная key‑value база данных на Go</strong>
+</p>
+
+<!-- Бейджи с информацией о проекте -->
+<p align="center">
+  <a href="https://go.dev/"><img src="https://img.shields.io/badge/Go-1.23+-00ADD8?style=flat&logo=go" alt="Go version"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/your-org/scoriadb?style=flat&color=blue" alt="License"></a>
+  <a href="https://github.com/your-org/scoriadb/issues"><img src="https://img.shields.io/github/issues/your-org/scoriadb" alt="GitHub issues"></a>
+  <a href="https://github.com/your-org/scoriadb/stargazers"><img src="https://img.shields.io/github/stars/your-org/scoriadb?style=social" alt="GitHub stars"></a>
+  <img src="https://komarev.com/ghpvc/?username=your-org&repo=scoriadb&label=Views&color=brightgreen" alt="Views counter">
+</p>
+
+<!-- Волнистый разделитель (из wavy-divider) -->
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/kevinbatdorf/wavy-divider/main/svgs/wavy.svg">
+  <img src="https://raw.githubusercontent.com/kevinbatdorf/wavy-divider/main/svgs/wavy.svg" alt="Wavy divider">
+</picture>
 
 ---
 
@@ -66,8 +89,12 @@ Web UI откроется по адресу http://localhost:8080.
 ## 💡 Как пользоваться в своём коде
 
 ```go
+package main
+
 import (
     "fmt"
+    "log"
+
     "github.com/your-org/scoriadb/pkg/scoria"
 )
 
@@ -75,19 +102,19 @@ func main() {
     // Открываем базу в папке /tmp/mydb
     db, err := scoria.Open(scoria.DefaultOptions("/tmp/mydb"))
     if err != nil {
-        panic(err)
+        log.Fatal(err)
     }
     defer db.Close()
 
     // Кладём значение
     if err := db.Put([]byte("привет"), []byte("мир")); err != nil {
-        panic(err)
+        log.Fatal(err)
     }
 
     // Читаем значение
     val, err := db.Get([]byte("привет"))
     if err != nil {
-        panic(err)
+        log.Fatal(err)
     }
     fmt.Println(string(val)) // "мир"
 }
@@ -186,5 +213,11 @@ ScoriaDB — учебный проект с открытым исходным к
 MIT
 
 ---
+
+<!-- Завершающая волна -->
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/kevinbatdorf/wavy-divider/main/svgs/wavy-dark.svg">
+  <img src="https://raw.githubusercontent.com/kevinbatdorf/wavy-divider/main/svgs/wavy.svg" alt="Wavy divider">
+</picture>
 
 <p align="center"><i>Крепкий, как камень. Лёгкий, как пепел.</i></p>
