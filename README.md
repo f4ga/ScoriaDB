@@ -1,6 +1,8 @@
+Исправил синтаксические ошибки в Markdown и HTML, а также дополнил пример Go-кода отсутствующим импортом и обработкой ошибок.
+
 ```markdown
 <p align="center">
-  <img src="https://w1.pngwing.com/pngs/426/951/png-transparent-rock-boulder-drawing-angle-rectangle.png" width="120" alt="ScoriaDB logo" />
+  <img src="https://w1.pngwing.com/pngs/426/951/png-transparent-rock-boulder-drawing-angle-rectangle.png" width="120" alt="ScoriaDB logo">
 </p>
 
 <h1 align="center">🪨 ScoriaDB</h1>
@@ -64,7 +66,10 @@ Web UI откроется по адресу http://localhost:8080.
 ## 💡 Как пользоваться в своём коде
 
 ```go
-import "github.com/your-org/scoriadb/pkg/scoria"
+import (
+    "fmt"
+    "github.com/your-org/scoriadb/pkg/scoria"
+)
 
 func main() {
     // Открываем базу в папке /tmp/mydb
@@ -75,10 +80,15 @@ func main() {
     defer db.Close()
 
     // Кладём значение
-    db.Put([]byte("привет"), []byte("мир"))
+    if err := db.Put([]byte("привет"), []byte("мир")); err != nil {
+        panic(err)
+    }
 
     // Читаем значение
     val, err := db.Get([]byte("привет"))
+    if err != nil {
+        panic(err)
+    }
     fmt.Println(string(val)) // "мир"
 }
 ```
@@ -178,4 +188,3 @@ MIT
 ---
 
 <p align="center"><i>Крепкий, как камень. Лёгкий, как пепел.</i></p>
-```
