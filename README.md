@@ -1,6 +1,6 @@
-Исправил синтаксические ошибки в Markdown и HTML, а также дополнил пример Go-кода отсутствующим импортом и обработкой ошибок.
 
-```markdown
+
+
 <p align="center">
   <img src="https://w1.pngwing.com/pngs/426/951/png-transparent-rock-boulder-drawing-angle-rectangle.png" width="120" alt="ScoriaDB logo">
 </p>
