@@ -1,29 +1,27 @@
-Конечно. Вот обновлённый `README.md` с новыми разделами: принципиальное отличие от других embedded-БД, объяснение ключевых функций (Manifest, WiscKey, MVCC) и расширенный информативный FAQ.
 
----
 
 <div align="center">
   <img src="https://capsule-render.vercel.app/api?type=waving&color=gradient&customColorList=12&height=200&section=header&text=🪨%20ScoriaDB&fontSize=70&fontAlignY=40&animation=fadeIn" alt="Header">
   <img src="https://capsule-render.vercel.app/api?type=rect&color=gradient&customColorList=1&height=60&section=header&text=🔥%20Встраиваемая%20LSM%20база%20данных%20на%20Go%20|%20Крепкая%20как%20камень%20и%20лёгкая%20как%20пепел&fontSize=20&fontAlignY=50&animation=twinkling" alt="Subtitle">
 </div>
-
 <div align="center">
-  <a href="#-что-это">Что это</a> •
-  <a href="#-для-кого">Для кого</a> •
-  <a href="#-когда-нужна-scoriadb">Когда нужна</a> •
-  <a href="#-почему-именно-scoriadb">Почему именно</a> •
-  <a href="#-сравнение">Сравнение</a> •
-  <a href="#-чем-scoriadb-принципиально-отличается-от-других-embedded-бд">Отличия</a> •
-  <a href="#-функции-и-возможности">Функции</a> •
-  <a href="#-что-даёт-manifest-и-гарантирует-ли-он-сохранность-данных-при-внезапном-отключении-питания">Manifest</a> •
-  <a href="#-зачем-нужен-wisckey-value-log-и-когда-это-реально-ускоряет-работу">WiscKey</a> •
-  <a href="#-как-работает-mvcc-и-почему-это-важно-для-транзакций">MVCC</a> •
-  <a href="#-использование-из-разных-языков">Языки</a> •
-  <a href="#-прогресс-mvp">Прогресс</a> •
-  <a href="#-faq">FAQ</a> •
-  <a href="#-поддержать-проект">Поддержать</a>
+  <span style="font-size: 1.2em;">
+    <a href="#-что-это">Что это</a><br>
+    <a href="#-для-кого">Для кого</a><br>
+    <a href="#-когда-нужна-scoriadb">Когда нужна</a><br>
+    <a href="#-почему-именно-scoriadb">Почему именно</a><br>
+    <a href="#-сравнение">Сравнение</a><br>
+    <a href="#-чем-scoriadb-принципиально-отличается-от-других-embedded-бд">Отличия</a><br>
+    <a href="#-функции-и-возможности">Функции</a><br>
+    <a href="#-что-даёт-manifest-и-гарантирует-ли-он-сохранность-данных-при-внезапном-отключении-питания">Manifest</a><br>
+    <a href="#-зачем-нужен-wisckey-value-log-и-когда-это-реально-ускоряет-работу">WiscKey</a><br>
+    <a href="#-как-работает-mvcc-и-почему-это-важно-для-транзакций">MVCC</a><br>
+    <a href="#-использование-из-разных-языков">Языки</a><br>
+    <a href="#-прогресс-mvp">Прогресс</a><br>
+    <a href="#-faq">FAQ</a><br>
+    <a href="#-поддержать-проект">Поддержать</a>
+  </span>
 </div>
-<br>
 
 ---
 
