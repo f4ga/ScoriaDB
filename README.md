@@ -95,8 +95,8 @@ ScoriaDB будет полезна:
 - ✅ **Manifest** (журнал метаданных)
 - ✅ **VFS‑абстракция** для тестирования
 - ✅ **Leveled Compaction**
-- 🔜 **MVCC и транзакции** (в процессе)
-- 🔜 **Column Families**
+- ✅ **MVCC и транзакции** 
+- 🔜 **Column Families** (в процессе)
 - 🔜 **gRPC API, CLI, Web UI**
 - 🔜 **Аутентификация (JWT, роли)**
 - 🔜 **Метрики Prometheus**
@@ -179,8 +179,8 @@ fmt.Println(string(val))
 | Manifest (журнал метаданных) | ✅ Готово |
 | VFS‑абстракция | ✅ Готово |
 | Leveled Compaction | ✅ Готово |
-| MVCC + транзакции | 🔜 В работе |
-| Column Families | 🔜 Далее |
+| MVCC + транзакции | ✅ Готово |
+| Column Families | 🔜 В работе |
 | gRPC / REST / CLI / Web UI | 🔜 Далее |
 | Аутентификация и авторизация | 🔜 Далее |
 | Prometheus‑метрики и health‑check | 🔜 Далее |
