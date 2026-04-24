@@ -1,6 +1,7 @@
 package sstable
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -16,6 +17,10 @@ type Reader struct {
 	// Кэшированные данные
 	indexEntries []IndexEntry
 	bloomFilter  *BloomFilter
+
+	// Диапазонные ключи
+	minKey []byte
+	maxKey []byte
 }
 
 // IndexEntry представляет запись в индексе блоков.
@@ -31,8 +36,8 @@ func Open(path string) (*Reader, error) {
 		return nil, fmt.Errorf("failed to open SSTable file: %w", err)
 	}
 
-	// Читаем футер (последние 48 байт)
-	if _, err := file.Seek(-48, io.SeekEnd); err != nil {
+	// Читаем футер (последние 80 байт)
+	if _, err := file.Seek(-80, io.SeekEnd); err != nil {
 		file.Close()
 		return nil, fmt.Errorf("failed to seek to footer: %w", err)
 	}
@@ -95,17 +100,65 @@ func Open(path string) (*Reader, error) {
 	}
 	bloomFilter := DecodeBloomFilter(bloomBytes, 3) // k = 3
 
+	// Читаем минимальный ключ
+	var minKey []byte
+	if footer.MinKeyLength > 0 {
+		if _, err := file.Seek(int64(footer.MinKeyOffset), io.SeekStart); err != nil {
+			file.Close()
+			return nil, fmt.Errorf("failed to seek to min key: %w", err)
+		}
+		var keyLen uint32
+		if err := binary.Read(file, binary.LittleEndian, &keyLen); err != nil {
+			file.Close()
+			return nil, fmt.Errorf("failed to read min key length: %w", err)
+		}
+		minKey = make([]byte, keyLen)
+		if _, err := io.ReadFull(file, minKey); err != nil {
+			file.Close()
+			return nil, fmt.Errorf("failed to read min key: %w", err)
+		}
+	}
+
+	// Читаем максимальный ключ
+	var maxKey []byte
+	if footer.MaxKeyLength > 0 {
+		if _, err := file.Seek(int64(footer.MaxKeyOffset), io.SeekStart); err != nil {
+			file.Close()
+			return nil, fmt.Errorf("failed to seek to max key: %w", err)
+		}
+		var keyLen uint32
+		if err := binary.Read(file, binary.LittleEndian, &keyLen); err != nil {
+			file.Close()
+			return nil, fmt.Errorf("failed to read max key length: %w", err)
+		}
+		maxKey = make([]byte, keyLen)
+		if _, err := io.ReadFull(file, maxKey); err != nil {
+			file.Close()
+			return nil, fmt.Errorf("failed to read max key: %w", err)
+		}
+	}
+
 	return &Reader{
 		file:         file,
 		footer:       footer,
 		indexEntries: indexEntries,
 		bloomFilter:  bloomFilter,
+		minKey:       minKey,
+		maxKey:       maxKey,
 	}, nil
 }
 
 // Lookup ищет ключ в SSTable и возвращает значение, если найдено.
 func (r *Reader) Lookup(key mvcc.MVCCKey) ([]byte, bool) {
 	userKey := key.Key
+
+	// Диапазонный фильтр: если ключ вне диапазона min/max, сразу возвращаем false
+	if len(r.minKey) > 0 && bytes.Compare(userKey, r.minKey) < 0 {
+		return nil, false
+	}
+	if len(r.maxKey) > 0 && bytes.Compare(userKey, r.maxKey) > 0 {
+		return nil, false
+	}
 
 	// Проверяем фильтр Блума (если ключа нет, пропускаем)
 	if !r.bloomFilter.MayContain(userKey) {
@@ -178,18 +231,4 @@ func (r *Reader) Lookup(key mvcc.MVCCKey) ([]byte, bool) {
 // Close закрывает файл SSTable.
 func (r *Reader) Close() error {
 	return r.file.Close()
-}
-
-// compareKeys сравнивает два ключа в лексикографическом порядке.
-func compareKeys(a, b []byte) int {
-	minLen := len(a)
-	if len(b) < minLen {
-		minLen = len(b)
-	}
-	for i := 0; i < minLen; i++ {
-		if a[i] != b[i] {
-			return int(a[i]) - int(b[i])
-		}
-	}
-	return len(a) - len(b)
 }

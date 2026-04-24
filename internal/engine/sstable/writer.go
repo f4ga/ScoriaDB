@@ -38,6 +38,10 @@ type Writer struct {
 
 	// Ключи для фильтра
 	keys [][]byte
+
+	// Минимальный и максимальный ключи (пользовательские ключи)
+	minKey []byte
+	maxKey []byte
 }
 
 // NewWriter создает новый Writer для записи SSTable.
@@ -64,6 +68,14 @@ func (w *Writer) Append(key mvcc.MVCCKey, value []byte) error {
 	// Добавляем ключ в фильтр Блума
 	w.bloomFilter.Add(key.Key)
 	w.keys = append(w.keys, key.Key)
+
+	// Обновляем min/max ключи
+	if w.minKey == nil || compareKeys(key.Key, w.minKey) < 0 {
+		w.minKey = key.Key
+	}
+	if w.maxKey == nil || compareKeys(key.Key, w.maxKey) > 0 {
+		w.maxKey = key.Key
+	}
 
 	// Сериализуем ключ и значение
 	keyBytes := encodeMVCCKey(key)
@@ -119,7 +131,7 @@ func (w *Writer) flushBlock() error {
 	return nil
 }
 
-// Finish завершает запись SSTable, записывает индекс, фильтр Блума и футер.
+// Finish завершает запись SSTable, записывает индекс, фильтр Блума, диапазонные ключи и футер.
 func (w *Writer) Finish() error {
 	// Сбрасываем последний блок
 	if err := w.flushBlock(); err != nil {
@@ -133,13 +145,16 @@ func (w *Writer) Finish() error {
 		if err := binary.Write(w.writer, binary.LittleEndian, uint32(len(key))); err != nil {
 			return err
 		}
+		w.offset += 4
 		if _, err := w.writer.Write(key); err != nil {
 			return err
 		}
+		w.offset += uint64(len(key))
 		// Записываем смещение блока
 		if err := binary.Write(w.writer, binary.LittleEndian, w.indexOffsets[i]); err != nil {
 			return err
 		}
+		w.offset += 8
 	}
 	indexSize := w.offset - indexStart
 
@@ -149,12 +164,38 @@ func (w *Writer) Finish() error {
 	if err := binary.Write(w.writer, binary.LittleEndian, uint32(len(bloomBytes))); err != nil {
 		return err
 	}
+	w.offset += 4
 	if _, err := w.writer.Write(bloomBytes); err != nil {
 		return err
 	}
+	w.offset += uint64(len(bloomBytes))
 	bloomSize := w.offset - bloomStart
 
+	// Записываем минимальный и максимальный ключи (диапазонный фильтр)
+	minKeyStart := w.offset
+	if err := binary.Write(w.writer, binary.LittleEndian, uint32(len(w.minKey))); err != nil {
+		return err
+	}
+	if _, err := w.writer.Write(w.minKey); err != nil {
+		return err
+	}
+	// Обновляем offset после записи минимального ключа
+	w.offset += 4 + uint64(len(w.minKey))
+
+	maxKeyStart := w.offset
+	if err := binary.Write(w.writer, binary.LittleEndian, uint32(len(w.maxKey))); err != nil {
+		return err
+	}
+	if _, err := w.writer.Write(w.maxKey); err != nil {
+		return err
+	}
+	// Обновляем offset после записи максимального ключа
+	w.offset += 4 + uint64(len(w.maxKey))
+
 	// Записываем футер
+	// Вычисляем длины ключей (без префикса длины)
+	minKeyLen := uint64(len(w.minKey))
+	maxKeyLen := uint64(len(w.maxKey))
 	footer := Footer{
 		IndexOffset:   indexStart,
 		IndexSize:     indexSize,
@@ -162,6 +203,10 @@ func (w *Writer) Finish() error {
 		BloomSize:     bloomSize,
 		NumKeys:       uint64(len(w.keys)),
 		Magic:         MagicNumber,
+		MinKeyOffset:  minKeyStart,
+		MinKeyLength:  minKeyLen,
+		MaxKeyOffset:  maxKeyStart,
+		MaxKeyLength:  maxKeyLen,
 	}
 	if err := binary.Write(w.writer, binary.LittleEndian, footer); err != nil {
 		return fmt.Errorf("failed to write footer: %w", err)
@@ -186,12 +231,39 @@ func encodeEntry(key, value []byte) []byte {
 	return buf
 }
 
+// compareKeys сравнивает два ключа лексикографически.
+func compareKeys(a, b []byte) int {
+	minLen := len(a)
+	if len(b) < minLen {
+		minLen = len(b)
+	}
+	for i := 0; i < minLen; i++ {
+		if a[i] != b[i] {
+			if a[i] < b[i] {
+				return -1
+			}
+			return 1
+		}
+	}
+	if len(a) < len(b) {
+		return -1
+	}
+	if len(a) > len(b) {
+		return 1
+	}
+	return 0
+}
+
 // Footer представляет футер SSTable.
 type Footer struct {
-	IndexOffset uint64
-	IndexSize   uint64
-	BloomOffset uint64
-	BloomSize   uint64
-	NumKeys     uint64
-	Magic       uint64
+	IndexOffset   uint64
+	IndexSize     uint64
+	BloomOffset   uint64
+	BloomSize     uint64
+	NumKeys       uint64
+	Magic         uint64
+	MinKeyOffset  uint64
+	MinKeyLength  uint64
+	MaxKeyOffset  uint64
+	MaxKeyLength  uint64
 }

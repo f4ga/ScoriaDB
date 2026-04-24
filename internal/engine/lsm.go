@@ -3,10 +3,10 @@ package engine
 import (
 	"encoding/binary"
 	"fmt"
-	"os"
 	"path/filepath"
 	"sync"
 	"scoriadb/internal/engine/sstable"
+	"scoriadb/internal/engine/vfs"
 	"scoriadb/internal/mvcc"
 )
 
@@ -17,6 +17,8 @@ type LSMEngine struct {
 	memTable  *MemTable
 	vlog      *VLog
 	wal       *WAL
+	manifest  *Manifest           // журнал метаданных SSTable
+	vfs       vfs.VFS             // абстракция файловой системы
 	levels    [][]*sstable.Reader // уровни SSTable (Level0, Level1, ...)
 	LastTS    uint64              // атомарный счетчик timestamp
 	closed    bool
@@ -25,22 +27,35 @@ type LSMEngine struct {
 
 // NewLSMEngine создает новый LSM-движок.
 func NewLSMEngine(dataDir string) (*LSMEngine, error) {
-	if err := os.MkdirAll(dataDir, 0755); err != nil {
+	// Создаём VFS (стандартная реализация, использующая os)
+	vfs := vfs.NewDefaultVFS()
+	
+	// Создаём директорию через VFS
+	if err := vfs.MkdirAll(dataDir, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create data directory: %w", err)
 	}
 
-	// Открываем VLog
+	// Открываем манифест
+	manifestPath := filepath.Join(dataDir, "MANIFEST")
+	manifest, err := NewManifest(vfs, manifestPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open manifest: %w", err)
+	}
+
+	// Открываем VLog (пока используем старый API, позже обновим)
 	vlogPath := filepath.Join(dataDir, "vlog.db")
 	vlog, err := OpenVLog(vlogPath)
 	if err != nil {
+		manifest.Close()
 		return nil, fmt.Errorf("failed to open vlog: %w", err)
 	}
 
-	// Открываем WAL
+	// Открываем WAL (пока используем старый API)
 	walPath := filepath.Join(dataDir, "wal.log")
 	wal, err := OpenWAL(walPath)
 	if err != nil {
 		vlog.Close()
+		manifest.Close()
 		return nil, fmt.Errorf("failed to open wal: %w", err)
 	}
 
@@ -49,18 +64,40 @@ func NewLSMEngine(dataDir string) (*LSMEngine, error) {
 	if err := recoverFromWAL(wal, memTable, vlog); err != nil {
 		vlog.Close()
 		wal.Close()
+		manifest.Close()
 		return nil, fmt.Errorf("failed to recover from wal: %w", err)
 	}
 
 	// Определяем последний timestamp (пока простой счетчик)
 	lastTS := uint64(1) // TODO: восстановить из данных
 
+	// Загружаем существующие SSTable из манифеста
+	levels := make([][]*sstable.Reader, 10) // предполагаем максимум 10 уровней
+	manifestLevels := manifest.GetLevels()
+	for level, infos := range manifestLevels {
+		if level >= len(levels) {
+			continue
+		}
+		for _, info := range infos {
+			// Формируем путь к SSTable файлу
+			sstPath := filepath.Join(dataDir, fmt.Sprintf("%06d.sst", info.FileNum))
+			reader, err := sstable.Open(sstPath)
+			if err != nil {
+				// Если файл отсутствует, игнорируем (возможно, был удалён)
+				continue
+			}
+			levels[level] = append(levels[level], reader)
+		}
+	}
+
 	engine := &LSMEngine{
 		dataDir:  dataDir,
 		memTable: memTable,
 		vlog:     vlog,
 		wal:      wal,
-		levels:   make([][]*sstable.Reader, 2), // Level0 и Level1
+		manifest: manifest,
+		vfs:      vfs,
+		levels:   levels,
 		LastTS:   lastTS,
 		memSize:  0,
 	}
@@ -185,13 +222,23 @@ func (e *LSMEngine) Close() error {
 	e.closed = true
 
 	var errs []error
+	// Закрываем SSTable readers
+	for _, level := range e.levels {
+		for _, reader := range level {
+			if err := reader.Close(); err != nil {
+				errs = append(errs, err)
+			}
+		}
+	}
 	if err := e.vlog.Close(); err != nil {
 		errs = append(errs, err)
 	}
 	if err := e.wal.Close(); err != nil {
 		errs = append(errs, err)
 	}
-	// TODO: закрыть SSTable
+	if err := e.manifest.Close(); err != nil {
+		errs = append(errs, err)
+	}
 	if len(errs) > 0 {
 		return fmt.Errorf("errors while closing engine: %v", errs)
 	}
