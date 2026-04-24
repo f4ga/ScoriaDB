@@ -4,7 +4,7 @@
   <img src="https://capsule-render.vercel.app/api?type=rect&color=gradient&customColorList=1&height=60&section=header&text=🔥%20Встраиваемая%20LSM%20база%20данных%20на%20Go%20|%20Крепкая%20как%20камень%20и%20лёгкая%20как%20пепел&fontSize=20&fontAlignY=50&animation=twinkling" alt="Subtitle">
   <br><br>
 
-  [![CI](https://github.com/f4ga/ScoriaDB/actions/workflows/ci.yml/badge.svg)](https://github.com/f4ga/ScoriaDB/actions/workflows/ci.yml)
+  [![CI](https://github.com/f4ga/ScoriaDB/.github/workflows/ci.yml/badge.svg)](https://github.com/f4ga/ScoriaDB/actions/workflows/ci.yml)
   [![Go Version](https://img.shields.io/badge/Go-1.23+-00ADD8?logo=go)](https://go.dev/)
   [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
