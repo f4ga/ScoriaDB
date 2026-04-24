@@ -118,7 +118,7 @@ ScoriaDB будет полезна:
 ## 🚀 Быстрый старт
 
 ```bash
-git clone https://github.com/your-org/scoriadb.git
+git clone https://github.com/f4ga/scoriadb.git
 cd scoriadb
 go build ./...
 go run cmd/server/main.go   # сервер стартует на :50051 (gRPC) и :8080 (HTTP)
@@ -131,7 +131,7 @@ Docker‑образ появится вместе с первым релизом
 ## 💡 Как использовать (Embedded API)
 
 ```go
-import "github.com/your-org/scoriadb/pkg/scoria"
+import "github.com/f4ga/scoriadb/pkg/scoria"
 
 db, _ := scoria.Open(scoria.DefaultOptions("/tmp/mydb"))
 defer db.Close()
@@ -193,7 +193,7 @@ fmt.Println(string(val))
 ScoriaDB — свободное ПО с лицензией MIT. Вы можете помочь:
 
 - **⭐️ Поставьте звезду** на GitHub — это мотивирует.
-- **🐛 Сообщайте об ошибках** через [Issues](https://github.com/your-org/scoriadb/issues).
+- **🐛 Сообщайте об ошибках** через [Issues](https://github.com/f4ga/scoriadb/issues). 
 - **💻 Присылайте PR** — любое улучшение приветствуется.
 - **📣 Расскажите о проекте** в соцсетях или чатах.
 
