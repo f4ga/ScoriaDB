@@ -1,0 +1,121 @@
+syntax = "proto3";
+
+package scoriadb;
+option go_package = "scoriadb/proto";
+
+// ScoriaDB gRPC service
+service ScoriaDB {
+  // Basic KV operations
+  rpc Get(GetRequest) returns (GetResponse);
+  rpc Put(PutRequest) returns (PutResponse);
+  rpc Delete(DeleteRequest) returns (DeleteResponse);
+  rpc Scan(ScanRequest) returns (stream ScanResponse);
+
+  // Transaction operations
+  rpc BeginTxn(BeginTxnRequest) returns (BeginTxnResponse);
+  rpc CommitTxn(CommitTxnRequest) returns (CommitTxnResponse);
+  rpc RollbackTxn(RollbackTxnRequest) returns (RollbackTxnResponse);
+
+  // Authentication and user management
+  rpc CreateUser(CreateUserRequest) returns (CreateUserResponse);
+  rpc Authenticate(AuthRequest) returns (AuthResponse);
+}
+
+// GetRequest contains key and optional column family name and snapshot timestamp.
+message GetRequest {
+  bytes key = 1;
+  string cf_name = 2;
+  int64 snapshot_ts = 3;
+}
+
+message GetResponse {
+  bytes value = 1;
+  bool found = 2;
+}
+
+message PutRequest {
+  bytes key = 1;
+  bytes value = 2;
+  string cf_name = 3;
+}
+
+message PutResponse {
+  int64 commit_ts = 1;
+}
+
+message DeleteRequest {
+  bytes key = 1;
+  string cf_name = 2;
+}
+
+message DeleteResponse {
+  int64 commit_ts = 1;
+}
+
+message ScanRequest {
+  bytes prefix = 1;
+  string cf_name = 2;
+}
+
+message ScanResponse {
+  bytes key = 1;
+  bytes value = 2;
+}
+
+// Transaction messages
+message BeginTxnRequest {
+  // empty for now
+}
+
+message BeginTxnResponse {
+  string txn_id = 1;
+  int64 start_ts = 2;
+}
+
+message TxnOp {
+  enum OpType {
+    PUT = 0;
+    DELETE = 1;
+  }
+  OpType op = 1;
+  bytes key = 2;
+  bytes value = 3;
+  string cf_name = 4;
+}
+
+message CommitTxnRequest {
+  string txn_id = 1;
+  repeated TxnOp ops = 2;
+}
+
+message CommitTxnResponse {
+  // empty for success
+}
+
+message RollbackTxnRequest {
+  string txn_id = 1;
+}
+
+message RollbackTxnResponse {
+  // empty for success
+}
+
+// User management messages
+message CreateUserRequest {
+  string username = 1;
+  string password = 2;
+  repeated string roles = 3;
+}
+
+message CreateUserResponse {
+  // empty for success
+}
+
+message AuthRequest {
+  string username = 1;
+  string password = 2;
+}
+
+message AuthResponse {
+  string jwt_token = 1;
+}
