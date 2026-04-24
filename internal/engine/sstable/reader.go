@@ -217,11 +217,22 @@ func (r *Reader) Lookup(key mvcc.MVCCKey) ([]byte, bool) {
 		}
 		// Сравниваем ключи
 		if compareKeys(mvccKey.Key, userKey) == 0 {
-			// Проверяем timestamp (MVCCKey содержит timestamp)
-			if mvccKey.Timestamp == key.Timestamp {
+			// Проверяем видимость версии: commitTS <= snapshotTS ?
+			// Это эквивалентно mvccKey.Timestamp >= key.Timestamp (инвертированный timestamp)
+			if mvccKey.Timestamp >= key.Timestamp {
+				// Версия видима. Проверяем tombstone (nil значение)
+				if len(entryVal) == 0 {
+					// Tombstone: ключ удалён для этого snapshot
+					return nil, false
+				}
 				return entryVal, true
 			}
-			// Если timestamp не совпадает, продолжаем искать (в SSTable хранятся разные версии)
+			// Версия слишком новая (commitTS > snapshotTS), продолжаем искать более старые версии
+			// Поскольку версии отсортированы от новых к старым, следующая версия будет старше
+		} else if compareKeys(mvccKey.Key, userKey) > 0 {
+			// Ключ стал больше искомого, значит все последующие ключи также больше
+			// (блок отсортирован). Прерываем поиск.
+			break
 		}
 	}
 

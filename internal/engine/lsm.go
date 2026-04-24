@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"scoriadb/internal/engine/sstable"
 	"scoriadb/internal/engine/vfs"
 	"scoriadb/internal/mvcc"
@@ -102,6 +103,12 @@ func NewLSMEngine(dataDir string) (*LSMEngine, error) {
 		memSize:  0,
 	}
 	return engine, nil
+}
+
+// NextTimestamp возвращает следующий уникальный timestamp (атомарно увеличивает LastTS).
+func (e *LSMEngine) NextTimestamp() uint64 {
+	// Используем атомарную операцию для увеличения LastTS
+	return atomic.AddUint64(&e.LastTS, 1)
 }
 
 // PutWithTS записывает ключ-значение с указанным timestamp.
