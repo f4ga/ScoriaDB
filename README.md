@@ -4,7 +4,6 @@
   <img src="https://capsule-render.vercel.app/api?type=waving&color=gradient&customColorList=12&height=200&section=header&text=🪨%20ScoriaDB&fontSize=70&fontAlignY=40&animation=fadeIn" alt="Header">
   <img src="https://capsule-render.vercel.app/api?type=rect&color=gradient&customColorList=1&height=60&section=header&text=🔥%20Встраиваемая%20LSM%20база%20данных%20на%20Go%20|%20Крепкая%20как%20камень%20и%20лёгкая%20как%20пепел&fontSize=20&fontAlignY=50&animation=twinkling" alt="Subtitle">
 </div>
-<div align="center">
   <span style="font-size: 1.2em;">
     <a href="#-что-это">Что это</a><br>
     <a href="#-для-кого">Для кого</a><br>
