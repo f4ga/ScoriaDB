@@ -3,25 +3,24 @@
 <div align="center">
   <img src="https://capsule-render.vercel.app/api?type=waving&color=gradient&customColorList=12&height=200&section=header&text=🪨%20ScoriaDB&fontSize=70&fontAlignY=40&animation=fadeIn" alt="Header">
   <img src="https://capsule-render.vercel.app/api?type=rect&color=gradient&customColorList=1&height=60&section=header&text=🔥%20Встраиваемая%20LSM%20база%20данных%20на%20Go%20|%20Крепкая%20как%20камень%20и%20лёгкая%20как%20пепел&fontSize=20&fontAlignY=50&animation=twinkling" alt="Subtitle">
+  <br><br>
+  <table align="center" style="font-size: 1.4em; line-height: 2;">
+    <tr><td>📖</td><td><a href="#-что-это">Что такое ScoriaDB</a></td></tr>
+    <tr><td>👥</td><td><a href="#-для-кого">Для кого она создана</a></td></tr>
+    <tr><td>🎯</td><td><a href="#-когда-нужна-scoriadb">Когда стоит применять</a></td></tr>
+    <tr><td>✨</td><td><a href="#-почему-именно-scoriadb">Почему именно ScoriaDB</a></td></tr>
+    <tr><td>📊</td><td><a href="#-сравнение">Сравнение с аналогами</a></td></tr>
+    <tr><td>🚀</td><td><a href="#-чем-scoriadb-принципиально-отличается-от-других-embedded-бд">Принципиальные отличия</a></td></tr>
+    <tr><td>🧩</td><td><a href="#-функции-и-возможности">Функции и возможности</a></td></tr>
+    <tr><td>🛡️</td><td><a href="#-что-даёт-manifest-и-гарантирует-ли-он-сохранность-данных-при-внезапном-отключении-питания">Гарантии сохранности (Manifest)</a></td></tr>
+    <tr><td>⚡</td><td><a href="#-зачем-нужен-wisckey-value-log-и-когда-это-реально-ускоряет-работу">Ускорение с WiscKey</a></td></tr>
+    <tr><td>🕰️</td><td><a href="#-как-работает-mvcc-и-почему-это-важно-для-транзакций">Как работает MVCC</a></td></tr>
+    <tr><td>🌐</td><td><a href="#-использование-из-разных-языков">Поддержка языков</a></td></tr>
+    <tr><td>📈</td><td><a href="#-прогресс-mvp">Прогресс MVP</a></td></tr>
+    <tr><td>❓</td><td><a href="#-faq">Часто задаваемые вопросы</a></td></tr>
+    <tr><td>🤝</td><td><a href="#-поддержать-проект">Поддержать проект</a></td></tr>
+  </table>
 </div>
-  <span style="font-size: 1.2em;">
-    <a href="#-что-это">Что это</a><br>
-    <a href="#-для-кого">Для кого</a><br>
-    <a href="#-когда-нужна-scoriadb">Когда нужна</a><br>
-    <a href="#-почему-именно-scoriadb">Почему именно</a><br>
-    <a href="#-сравнение">Сравнение</a><br>
-    <a href="#-чем-scoriadb-принципиально-отличается-от-других-embedded-бд">Отличия</a><br>
-    <a href="#-функции-и-возможности">Функции</a><br>
-    <a href="#-что-даёт-manifest-и-гарантирует-ли-он-сохранность-данных-при-внезапном-отключении-питания">Manifest</a><br>
-    <a href="#-зачем-нужен-wisckey-value-log-и-когда-это-реально-ускоряет-работу">WiscKey</a><br>
-    <a href="#-как-работает-mvcc-и-почему-это-важно-для-транзакций">MVCC</a><br>
-    <a href="#-использование-из-разных-языков">Языки</a><br>
-    <a href="#-прогресс-mvp">Прогресс</a><br>
-    <a href="#-faq">FAQ</a><br>
-    <a href="#-поддержать-проект">Поддержать</a>
-  </span>
-</div>
-
 ---
 
 ## 📖 Что это?
