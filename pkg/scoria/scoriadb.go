@@ -5,29 +5,138 @@ import (
 	"sync/atomic"
 
 	"scoriadb/internal/cf"
+	"scoriadb/internal/txn"
 )
 
-// CFDB расширяет интерфейс DB поддержкой Column Families.
+// CFDB представляет публичный интерфейс базы данных ScoriaDB с поддержкой
+// Column Families, транзакций, батчей и итераторов.
+// Этот интерфейс соответствует требованиям Промпта 4 (Embedded Go API).
 type CFDB interface {
-	DB
+	// Основные операции (по умолчанию в CF "default")
+	Get(key []byte) ([]byte, error)
+	Put(key, value []byte) error
+	Delete(key []byte) error
+	Scan(prefix []byte) Iterator // итератор по ключам с префиксом
 
-	// GetCF возвращает значение по ключу из указанного Column Family.
+	// Операции с указанием Column Family
 	GetCF(cf string, key []byte) ([]byte, error)
-	// PutCF записывает значение по ключу в указанное Column Family.
 	PutCF(cf string, key, value []byte) error
-	// DeleteCF удаляет ключ из указанного Column Family.
 	DeleteCF(cf string, key []byte) error
-	// CreateCF создаёт новое Column Family.
+	ScanCF(cf string, prefix []byte) Iterator
+
+	// Транзакции
+	NewTransaction() Transaction
+	NewBatch() Batch
+
+	// Администрирование Column Families
 	CreateCF(name string) error
-	// DropCF удаляет Column Family.
 	DropCF(name string) error
-	// ListCFs возвращает список имён всех Column Families.
 	ListCFs() []string
+
+	// Закрытие
+	Close() error
+}
+
+// Iterator представляет итератор по ключам и значениям.
+type Iterator interface {
+	// Next перемещает итератор к следующей записи.
+	// Возвращает false, если больше записей нет.
+	Next() bool
+	// Key возвращает ключ текущей записи.
+	Key() []byte
+	// Value возвращает значение текущей записи.
+	Value() []byte
+	// Err возвращает ошибку, возникшую при итерации.
+	Err() error
+	// Close освобождает ресурсы итератора.
+	Close()
+}
+
+// Transaction представляет интерактивную транзакцию.
+type Transaction interface {
+	// Get возвращает значение ключа в контексте транзакции.
+	Get(key []byte) ([]byte, error)
+	// Put добавляет операцию записи в транзакцию.
+	Put(key, value []byte) error
+	// Delete добавляет операцию удаления в транзакцию.
+	Delete(key []byte) error
+	// Commit применяет все изменения атомарно.
+	Commit() error
+	// Rollback отменяет транзакцию.
+	Rollback() error
+}
+
+// Batch представляет атомарный батч операций.
+type Batch interface {
+	// AddPut добавляет операцию записи в батч.
+	AddPut(key, value []byte)
+	// AddDelete добавляет операцию удаления в батч.
+	AddDelete(key []byte)
+	// Commit применяет все операции батча атомарно.
+	Commit() error
+	// Clear очищает батч.
+	Clear()
+	// Size возвращает количество операций в батче.
+	Size() int
 }
 
 // ScoriaDB реализация CFDB с использованием реестра Column Families.
 type ScoriaDB struct {
 	registry *cf.Registry
+}
+
+// emptyIterator — заглушка итератора, не возвращающая данных.
+type emptyIterator struct{}
+
+func (it *emptyIterator) Next() bool { return false }
+func (it *emptyIterator) Key() []byte { return nil }
+func (it *emptyIterator) Value() []byte { return nil }
+func (it *emptyIterator) Err() error { return nil }
+func (it *emptyIterator) Close() {}
+
+// errorTransaction — транзакция, которая всегда возвращает ошибку.
+type errorTransaction struct {
+	err error
+}
+
+func (tx *errorTransaction) Get(key []byte) ([]byte, error) { return nil, tx.err }
+func (tx *errorTransaction) Put(key, value []byte) error { return tx.err }
+func (tx *errorTransaction) Delete(key []byte) error { return tx.err }
+func (tx *errorTransaction) Commit() error { return tx.err }
+func (tx *errorTransaction) Rollback() error { return nil }
+
+// scoriaBatch — обёртка над txn.WriteBatch, привязанная к конкретному ScoriaDB и CF.
+type scoriaBatch struct {
+	db     *ScoriaDB
+	cfName string
+	inner  *txn.WriteBatch
+}
+
+func (b *scoriaBatch) AddPut(key, value []byte) {
+	b.inner.AddPut(key, value)
+}
+
+func (b *scoriaBatch) AddDelete(key []byte) {
+	b.inner.AddDelete(key)
+}
+
+func (b *scoriaBatch) Commit() error {
+	// Получаем движок для указанного CF
+	eng, err := b.db.registry.GetCF(b.cfName)
+	if err != nil {
+		return err
+	}
+	// Применяем батч
+	_, err = txn.ApplyBatch(eng, b.inner)
+	return err
+}
+
+func (b *scoriaBatch) Clear() {
+	b.inner.Clear()
+}
+
+func (b *scoriaBatch) Size() int {
+	return b.inner.Size()
 }
 
 // NewScoriaDB создаёт новую базу данных ScoriaDB с поддержкой Column Families.
@@ -100,6 +209,41 @@ func (db *ScoriaDB) ListCFs() []string {
 	return db.registry.ListCFs()
 }
 
+// Scan возвращает итератор по ключам с префиксом в CF "default".
+func (db *ScoriaDB) Scan(prefix []byte) Iterator {
+	return db.ScanCF("default", prefix)
+}
+
+// ScanCF возвращает итератор по ключам с префиксом в указанном Column Family.
+// Временная реализация: возвращает пустой итератор (функционал будет добавлен позже).
+func (db *ScoriaDB) ScanCF(cfName string, prefix []byte) Iterator {
+	// TODO: реализовать сканирование с объединением MemTable и SSTable
+	return &emptyIterator{}
+}
+
+// NewTransaction создаёт новую транзакцию.
+func (db *ScoriaDB) NewTransaction() Transaction {
+	// Пока создаём транзакцию на движке CF "default".
+	eng, err := db.registry.GetCF("default")
+	if err != nil {
+		// Если default CF не существует (маловероятно), возвращаем транзакцию-заглушку
+		return &errorTransaction{err: err}
+	}
+	// Используем внутренний пакет txn для создания транзакции
+	// TODO: определить startTS (сейчас используем 0)
+	startTS := uint64(0) // временно
+	return txn.Begin(eng, startTS)
+}
+
+// NewBatch создаёт новый батч операций, привязанный к CF "default".
+func (db *ScoriaDB) NewBatch() Batch {
+	return &scoriaBatch{
+		db:     db,
+		cfName: "default",
+		inner:  txn.NewWriteBatch(),
+	}
+}
+
 // Close закрывает все Column Families и освобождает ресурсы.
 func (db *ScoriaDB) Close() error {
 	return db.registry.Close()
@@ -108,4 +252,11 @@ func (db *ScoriaDB) Close() error {
 // EmbeddedCFDB возвращает интерфейс CFDB для встраивания.
 func EmbeddedCFDB(dataDir string) (CFDB, error) {
 	return NewScoriaDB(dataDir)
+}
+
+// Open открывает (или создаёт) базу данных ScoriaDB с указанными настройками.
+// Возвращает интерфейс DB, соответствующий требованиям Промпта 4.
+func Open(opts Options) (DB, error) {
+	// Пока игнорируем все настройки кроме WorkDir
+	return NewScoriaDB(opts.WorkDir)
 }
