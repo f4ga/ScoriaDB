@@ -1,13 +1,14 @@
-package scoria
+package scoria_test
 
 import (
 	"testing"
+	"scoriadb/pkg/scoria"
 )
 
 func TestScoriaDBCF(t *testing.T) {
 	dir := t.TempDir()
 
-	db, err := NewScoriaDB(dir)
+	db, err := scoria.NewScoriaDB(dir)
 	if err != nil {
 		t.Fatalf("failed to create ScoriaDB: %v", err)
 	}
@@ -88,7 +89,7 @@ func TestScoriaDBCF(t *testing.T) {
 
 func TestScoriaDBDropCF(t *testing.T) {
 	dir := t.TempDir()
-	db, err := NewScoriaDB(dir)
+	db, err := scoria.NewScoriaDB(dir)
 	if err != nil {
 		t.Fatalf("failed to create ScoriaDB: %v", err)
 	}
@@ -120,7 +121,7 @@ func TestScoriaDBDropCF(t *testing.T) {
 
 func TestScoriaDBEmbeddedCFDB(t *testing.T) {
 	dir := t.TempDir()
-	db, err := EmbeddedCFDB(dir)
+	db, err := scoria.EmbeddedCFDB(dir)
 	if err != nil {
 		t.Fatalf("EmbeddedCFDB failed: %v", err)
 	}

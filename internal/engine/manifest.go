@@ -136,7 +136,7 @@ func (m *Manifest) Apply(edit *VersionEdit) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// Сериализуем в JSON с новой строки
+	// Сериализуем в JSON с новой строкой
 	data, err := json.Marshal(edit)
 	if err != nil {
 		return fmt.Errorf("failed to marshal version edit: %w", err)

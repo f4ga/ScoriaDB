@@ -3,6 +3,14 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+# ScoriaDB runtime artifacts
+wal.log
+*.log
+
+# Temporary files
+*.md.tmp
+functz.md
+plan.md   # если не хочешь коммитить план
 # C extensions
 *.so
 

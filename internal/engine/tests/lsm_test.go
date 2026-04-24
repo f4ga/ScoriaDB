@@ -1,26 +1,27 @@
-package engine
+package engine_test
 
 import (
 	"testing"
+	"scoriadb/internal/engine"
 )
 
 func TestLSMEnginePutGet(t *testing.T) {
 	dir := t.TempDir()
 
-	engine, err := NewLSMEngine(dir)
+	eng, err := engine.NewLSMEngine(dir)
 	if err != nil {
 		t.Fatalf("failed to create engine: %v", err)
 	}
-	defer engine.Close()
+	defer eng.Close()
 
 	// Простая запись и чтение
 	key := []byte("test_key")
 	value := []byte("test_value")
-	if err := engine.PutWithTS(key, value, 1); err != nil {
+	if err := eng.PutWithTS(key, value, 1); err != nil {
 		t.Fatalf("failed to put: %v", err)
 	}
 
-	got, err := engine.GetWithTS(key, 1)
+	got, err := eng.GetWithTS(key, 1)
 	if err != nil {
 		t.Fatalf("failed to get: %v", err)
 	}
@@ -29,7 +30,7 @@ func TestLSMEnginePutGet(t *testing.T) {
 	}
 
 	// Чтение с более новым snapshot должно тоже найти (последняя версия)
-	got, err = engine.GetWithTS(key, 100)
+	got, err = eng.GetWithTS(key, 100)
 	if err != nil {
 		t.Fatalf("failed to get with newer ts: %v", err)
 	}
@@ -41,25 +42,25 @@ func TestLSMEnginePutGet(t *testing.T) {
 func TestLSMEngineMultipleVersions(t *testing.T) {
 	dir := t.TempDir()
 
-	engine, err := NewLSMEngine(dir)
+	eng, err := engine.NewLSMEngine(dir)
 	if err != nil {
 		t.Fatalf("failed to create engine: %v", err)
 	}
-	defer engine.Close()
+	defer eng.Close()
 
 	key := []byte("key")
 	v1 := []byte("value1")
 	v2 := []byte("value2")
 
-	if err := engine.PutWithTS(key, v1, 10); err != nil {
+	if err := eng.PutWithTS(key, v1, 10); err != nil {
 		t.Fatalf("failed to put v1: %v", err)
 	}
-	if err := engine.PutWithTS(key, v2, 20); err != nil {
+	if err := eng.PutWithTS(key, v2, 20); err != nil {
 		t.Fatalf("failed to put v2: %v", err)
 	}
 
 	// snapshotTS = 15 должен вернуть v1
-	got, err := engine.GetWithTS(key, 15)
+	got, err := eng.GetWithTS(key, 15)
 	if err != nil {
 		t.Fatalf("failed to get at ts 15: %v", err)
 	}
@@ -68,7 +69,7 @@ func TestLSMEngineMultipleVersions(t *testing.T) {
 	}
 
 	// snapshotTS = 20 должен вернуть v2
-	got, err = engine.GetWithTS(key, 20)
+	got, err = eng.GetWithTS(key, 20)
 	if err != nil {
 		t.Fatalf("failed to get at ts 20: %v", err)
 	}
@@ -80,24 +81,24 @@ func TestLSMEngineMultipleVersions(t *testing.T) {
 func TestLSMEngineDelete(t *testing.T) {
 	dir := t.TempDir()
 
-	engine, err := NewLSMEngine(dir)
+	eng, err := engine.NewLSMEngine(dir)
 	if err != nil {
 		t.Fatalf("failed to create engine: %v", err)
 	}
-	defer engine.Close()
+	defer eng.Close()
 
 	key := []byte("key")
 	value := []byte("value")
 
-	if err := engine.PutWithTS(key, value, 10); err != nil {
+	if err := eng.PutWithTS(key, value, 10); err != nil {
 		t.Fatalf("failed to put: %v", err)
 	}
-	if err := engine.DeleteWithTS(key, 20); err != nil {
+	if err := eng.DeleteWithTS(key, 20); err != nil {
 		t.Fatalf("failed to delete: %v", err)
 	}
 
 	// До удаления ключ существует
-	got, err := engine.GetWithTS(key, 15)
+	got, err := eng.GetWithTS(key, 15)
 	if err != nil {
 		t.Fatalf("failed to get before delete: %v", err)
 	}
@@ -106,7 +107,7 @@ func TestLSMEngineDelete(t *testing.T) {
 	}
 
 	// После удаления ключ не должен находиться
-	got, err = engine.GetWithTS(key, 25)
+	got, err = eng.GetWithTS(key, 25)
 	if err != nil {
 		t.Fatalf("failed to get after delete: %v", err)
 	}
@@ -119,7 +120,7 @@ func TestLSMEngineRecovery(t *testing.T) {
 	dir := t.TempDir()
 
 	// Создаем движок, пишем данные, закрываем
-	engine1, err := NewLSMEngine(dir)
+	engine1, err := engine.NewLSMEngine(dir)
 	if err != nil {
 		t.Fatalf("failed to create engine1: %v", err)
 	}
@@ -131,7 +132,7 @@ func TestLSMEngineRecovery(t *testing.T) {
 	engine1.Close()
 
 	// Создаем новый движок в той же директории (должен восстановить данные)
-	engine2, err := NewLSMEngine(dir)
+	engine2, err := engine.NewLSMEngine(dir)
 	if err != nil {
 		t.Fatalf("failed to create engine2: %v", err)
 	}
@@ -149,11 +150,11 @@ func TestLSMEngineRecovery(t *testing.T) {
 func TestLSMEngineVLogLargeValue(t *testing.T) {
 	dir := t.TempDir()
 
-	engine, err := NewLSMEngine(dir)
+	eng, err := engine.NewLSMEngine(dir)
 	if err != nil {
 		t.Fatalf("failed to create engine: %v", err)
 	}
-	defer engine.Close()
+	defer eng.Close()
 
 	// Значение больше MaxInlineSize (64 байта)
 	largeValue := make([]byte, 100)
@@ -162,11 +163,11 @@ func TestLSMEngineVLogLargeValue(t *testing.T) {
 	}
 	key := []byte("large_key")
 
-	if err := engine.PutWithTS(key, largeValue, 1); err != nil {
+	if err := eng.PutWithTS(key, largeValue, 1); err != nil {
 		t.Fatalf("failed to put large value: %v", err)
 	}
 
-	got, err := engine.GetWithTS(key, 1)
+	got, err := eng.GetWithTS(key, 1)
 	if err != nil {
 		t.Fatalf("failed to get large value: %v", err)
 	}
