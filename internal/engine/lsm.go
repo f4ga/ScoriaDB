@@ -218,6 +218,7 @@ func (e *LSMEngine) DeleteWithTS(key []byte, commitTS uint64) error {
 	return nil
 }
 
+
 // Close освобождает ресурсы движка.
 func (e *LSMEngine) Close() error {
 	e.mu.Lock()

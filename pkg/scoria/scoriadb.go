@@ -217,7 +217,6 @@ func (db *ScoriaDB) Scan(prefix []byte) Iterator {
 // ScanCF возвращает итератор по ключам с префиксом в указанном Column Family.
 // Временная реализация: возвращает пустой итератор (функционал будет добавлен позже).
 func (db *ScoriaDB) ScanCF(cfName string, prefix []byte) Iterator {
-	// TODO: реализовать сканирование с объединением MemTable и SSTable
 	return &emptyIterator{}
 }
 
@@ -230,7 +229,6 @@ func (db *ScoriaDB) NewTransaction() Transaction {
 		return &errorTransaction{err: err}
 	}
 	// Используем внутренний пакет txn для создания транзакции
-	// TODO: определить startTS (сейчас используем 0)
 	startTS := uint64(0) // временно
 	return txn.Begin(eng, startTS)
 }

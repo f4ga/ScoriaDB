@@ -1,6 +1,7 @@
 package scoria
 
 import (
+	"fmt"
 	"os"
 	"testing"
 )
@@ -39,22 +40,61 @@ func BenchmarkScoriaGet(b *testing.B) {
 	}
 }
 
-// TODO: Transaction not implemented yet
-// func BenchmarkScoriaTransaction(b *testing.B) {
-// 	db := openScoriaBench(b)
-// 	defer db.Close()
-//
-// 	b.ResetTimer()
-// 	for i := 0; i < b.N; i++ {
-// 		txn := db.NewTransaction()
-// 		if err := txn.Put([]byte("txn:key"), []byte("value")); err != nil {
-// 			b.Fatal(err)
-// 		}
-// 		if err := txn.Commit(); err != nil {
-// 			b.Fatal(err)
-// 		}
-// 	}
-// }
+func BenchmarkScan(b *testing.B) {
+	b.Skip("Scan not implemented – will be enabled after ScanCF is wired")
+	db := openScoriaCFBench(b)
+	defer db.Close()
+
+	// Подготовка: записываем 1000 ключей с префиксом "scan:"
+	for i := 0; i < 1000; i++ {
+		k := fmt.Sprintf("scan:%04d", i)
+		if err := db.Put([]byte(k), []byte("val")); err != nil {
+			b.Fatal(err)
+		}
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		it := db.Scan([]byte("scan:"))
+		count := 0
+		for it.Next() {
+			_ = it.Key()
+			_ = it.Value()
+			count++
+		}
+		if err := it.Err(); err != nil {
+			b.Fatal(err)
+		}
+		it.Close()
+		if count != 1000 {
+			b.Fatalf("expected 1000 keys, got %d", count)
+		}
+	}
+}
+
+func BenchmarkScoriaTransaction(b *testing.B) {
+	db := openScoriaCFBench(b)
+	defer db.Close()
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		txn := db.NewTransaction()
+		if err := txn.Put([]byte("txn:key"), []byte("value")); err != nil {
+			b.Fatal(err)
+		}
+		if err := txn.Commit(); err != nil {
+			b.Fatal(err)
+		}
+		// Дополнительно проверим откат
+		txn2 := db.NewTransaction()
+		if err := txn2.Put([]byte("txn:rollback"), []byte("val")); err != nil {
+			b.Fatal(err)
+		}
+		if err := txn2.Rollback(); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
 
 func openScoriaBench(b *testing.B) DB {
 	b.Helper()
@@ -69,4 +109,28 @@ func openScoriaBench(b *testing.B) DB {
 		b.Fatal(err)
 	}
 	return db
+}
+
+// openScoriaCFBench открывает БД и возвращает CFDB для бенчмарков,
+// которым нужны расширенные методы: Scan, NewTransaction, Batch и т.д.
+func openScoriaCFBench(b *testing.B) CFDB {
+	b.Helper()
+	dir, err := os.MkdirTemp("", "scoriadb-scoria-cfbench")
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.Cleanup(func() { os.RemoveAll(dir) })
+
+	opts := DefaultOptions(dir)
+	db, err := Open(opts)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	// Приведение к CFDB безопасно, так как *ScoriaDB реализует оба интерфейса
+	cfdb, ok := db.(CFDB)
+	if !ok {
+		b.Fatal("returned DB does not implement CFDB")
+	}
+	return cfdb
 }

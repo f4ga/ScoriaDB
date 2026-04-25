@@ -59,34 +59,6 @@ func BenchmarkGetExisting(b *testing.B) {
 	}
 }
 
-// TODO: Scan not implemented yet
-// func BenchmarkScan(b *testing.B) {
-// 	db := openBenchDB(b)
-// 	defer db.Close()
-//
-// 	// Заливаем 1000 ключей с префиксом "scan:"
-// 	for i := 0; i < 1000; i++ {
-// 		k := fmt.Sprintf("scan:%04d", i)
-// 		ts := db.NextTimestamp()
-// 		if err := db.PutWithTS([]byte(k), []byte("val"), ts); err != nil {
-// 			b.Fatal(err)
-// 		}
-// 	}
-//
-// 	b.ResetTimer()
-// 	for i := 0; i < b.N; i++ {
-// 		it := db.Scan([]byte("scan:"))
-// 		count := 0
-// 		for it.Next() {
-// 			_ = it.Key()
-// 			_ = it.Value()
-// 			count++
-// 		}
-// 		if count != 1000 {
-// 			b.Fatalf("expected 1000 keys, got %d", count)
-// 		}
-// 	}
-// }
 
 // openBenchDB — вспомогательная функция, создающая временную БД
 func openBenchDB(b *testing.B) *LSMEngine {

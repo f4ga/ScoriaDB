@@ -4,12 +4,12 @@ go 1.24.0
 
 require (
 	github.com/google/btree v1.1.3
+	github.com/gorilla/websocket v1.5.3
 	google.golang.org/grpc v1.80.0
 	google.golang.org/protobuf v1.36.11
 )
 
 require (
-	github.com/gorilla/websocket v1.5.3 // indirect
 	golang.org/x/net v0.49.0 // indirect
 	golang.org/x/sys v0.40.0 // indirect
 	golang.org/x/text v0.33.0 // indirect

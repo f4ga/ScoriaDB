@@ -1,6 +1,7 @@
 package rest
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -175,16 +176,28 @@ func (s *Server) handleScan(w http.ResponseWriter, r *http.Request) {
 // writeJSON записывает JSON‑ответ с указанным статус‑кодом.
 func writeJSON(w http.ResponseWriter, status int, data interface{}) {
 	w.Header().Set("Content-Type", "application/json")
+	// Encode to buffer to check error before writing headers
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(data); err != nil {
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(data)
+	_, _ = buf.WriteTo(w)
 }
 
 // writeError записывает JSON‑ответ с ошибкой в формате, описанном в Разделе 3.6.1 плана.
 func writeError(w http.ResponseWriter, status int, code, message string) {
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+	// Encode to buffer to check error before writing headers
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(map[string]interface{}{
 		"code":    code,
 		"message": message,
-	})
+	}); err != nil {
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(status)
+	_, _ = buf.WriteTo(w)
 }

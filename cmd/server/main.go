@@ -68,7 +68,9 @@ func main() {
 	mux.Handle("/ws", wsServer)
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("OK"))
+		if _, err := w.Write([]byte("OK")); err != nil {
+			log.Printf("failed to write health response: %v", err)
+		}
 	})
 	mux.HandleFunc("/ready", func(w http.ResponseWriter, r *http.Request) {
 		// Simple readiness check: try to read a system key
@@ -78,7 +80,9 @@ func main() {
 			return
 		}
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("READY"))
+		if _, err := w.Write([]byte("READY")); err != nil {
+			log.Printf("failed to write ready response: %v", err)
+		}
 	})
 
 	// Start gRPC server
