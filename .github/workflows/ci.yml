@@ -38,12 +38,6 @@ jobs:
       - name: Run tests with race detector
         run: go test ./... -race -coverprofile=coverage.out -covermode=atomic
 
-      - name: Upload coverage to Codecov (optional)
-        uses: codecov/codecov-action@v4
-        with:
-          files: ./coverage.out
-          flags: unittests
-
   integration:
     name: Integration Tests
     runs-on: ubuntu-latest
@@ -55,18 +49,8 @@ jobs:
         with:
           go-version: "1.23"
 
-      - name: Build server
-        run: go build ./cmd/server
-
-      - name: Run server in background
-        run: |
-          ./server &
-          sleep 2
-
-      - name: Run CLI smoke tests
-        run: |
-          # Здесь потом добавим команды CLI, когда будет готов
-          echo "CLI tests placeholder"
+      - name: Run integration tests
+        run: go test ./tests -v
 
   benchmark:
     name: Benchmark (baseline)
@@ -81,4 +65,3 @@ jobs:
 
       - name: Run benchmarks (no fail)
         run: go test -bench=. -benchtime=1s ./internal/engine ./pkg/scoria || true
-        # Пока не блокируем, просто смотрим результат
