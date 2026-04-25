@@ -29,7 +29,6 @@
     <tr><td>📈</td><td><a href="#-mvp-progress">MVP progress</a></td></tr>
     <tr><td>📁</td><td><a href="#-project-structure">Project structure</a></td></tr>
     <tr><td>🗺️</td><td><a href="#-roadmap">Roadmap</a></td></tr>
-    <tr><td>📄</td><td><a href="#-license">License</a></td></tr>
     <tr><td>❓</td><td><a href="#-faq">FAQ</a></td></tr>
     <tr><td>🤝</td><td><a href="#-support-the-project">Support the project</a></td></tr>
   </table>
@@ -372,20 +371,6 @@ scoriadb/
 
 ---
 
-## 📄 License
-
-ScoriaDB is distributed under the **Apache License 2.0**.  
-The full license text is in the [LICENSE](LICENSE) file.  
-
-Additional terms:  
-- Third-party library notices are in [NOTICE](NOTICE).  
-- Contributions are governed by the [Contributor License Agreement](CONTRIBUTING.md).  
-- All source files contain mandatory license headers; verification is performed automatically in CI.  
-
-Enterprise features (Raft replication, Time Travel, mTLS, Row-Level Security, Kubernetes operator) will be available under a separate commercial license.  
-For commercial licensing inquiries: [your email].
-
----
 
 ## ❓ FAQ
 
