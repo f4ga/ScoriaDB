@@ -1,7 +1,7 @@
 
 <div align="center">
   <img src="https://capsule-render.vercel.app/api?type=waving&color=gradient&customColorList=12&height=200&section=header&text=🪨%20ScoriaDB&fontSize=70&fontAlignY=40&animation=fadeIn" alt="Header">
-  <img src="https://capsule-render.vercel.app/api?type=rect&color=gradient&customColorList=1&height=60&section=header&text=🔥%20Встраиваемая%20LSM%20база%20данных%20на%20Go%20|%20Крепкая%20как%20камень%20и%20лёгкая%20как%20пепел&fontSize=20&fontAlignY=50&animation=twinkling" alt="Subtitle">
+  <img src="https://capsule-render.vercel.app/api?type=rect&color=gradient&customColorList=1&height=60&section=header&text=🔥%20Embedded%20LSM%20database%20in%20Go%20|%20Solid%20as%20stone,%20light%20as%20ash&fontSize=20&fontAlignY=50&animation=twinkling" alt="Subtitle">
   <br><br>
 
   [![CI](https://github.com/f4ga/ScoriaDB/.github/workflows/ci.yml/badge.svg)](https://github.com/f4ga/ScoriaDB/actions/workflows/ci.yml)
@@ -10,217 +10,217 @@
 
   <br>
   <table align="center" style="font-size: 1.4em; line-height: 2;">
-    <tr><td>📖</td><td><a href="#-что-это">Что такое ScoriaDB</a></td></tr>
-    <tr><td>👥</td><td><a href="#-для-кого">Для кого она создана</a></td></tr>
-    <tr><td>🎯</td><td><a href="#-когда-нужна-scoriadb">Когда стоит применять</a></td></tr>
-    <tr><td>✨</td><td><a href="#-почему-именно-scoriadb">Почему именно ScoriaDB</a></td></tr>
-    <tr><td>📊</td><td><a href="#-сравнение">Сравнение с аналогами</a></td></tr>
-    <tr><td>🚀</td><td><a href="#-чем-scoriadb-принципиально-отличается-от-других-embedded-бд">Принципиальные отличия</a></td></tr>
-    <tr><td>🧩</td><td><a href="#-функции-и-возможности">Функции и возможности</a></td></tr>
-    <tr><td>🛡️</td><td><a href="#-что-даёт-manifest-и-гарантирует-ли-он-сохранность-данных-при-внезапном-отключении-питания">Гарантии сохранности (Manifest)</a></td></tr>
-    <tr><td>⚡</td><td><a href="#-зачем-нужен-wisckey-value-log-и-когда-это-реально-ускоряет-работу">Ускорение с WiscKey</a></td></tr>
-    <tr><td>🕰️</td><td><a href="#-как-работает-mvcc-и-почему-это-важно-для-транзакций">Как работает MVCC</a></td></tr>
-    <tr><td>🌐</td><td><a href="#-использование-из-разных-языков">Поддержка языков</a></td></tr>
-    <tr><td>📈</td><td><a href="#-прогресс-mvp">Прогресс MVP</a></td></tr>
-    <tr><td>⚡</td><td><a href="#-бенчмарки">Бенчмарки</a></td></tr>
-    <tr><td>❓</td><td><a href="#-faq">Часто задаваемые вопросы</a></td></tr>
-    <tr><td>🤝</td><td><a href="#-поддержать-проект">Поддержать проект</a></td></tr>
+    <tr><td>📖</td><td><a href="#-what-is-it">What is ScoriaDB</a></td></tr>
+    <tr><td>👥</td><td><a href="#-who-is-it-for">Who is it for</a></td></tr>
+    <tr><td>🎯</td><td><a href="#-when-should-you-use-scoriadb">When to use ScoriaDB</a></td></tr>
+    <tr><td>✨</td><td><a href="#-why-scoriadb">Why ScoriaDB</a></td></tr>
+    <tr><td>📊</td><td><a href="#-comparison">Comparison with alternatives</a></td></tr>
+    <tr><td>🚀</td><td><a href="#-how-scoriadb-is-fundamentally-different-from-other-embedded-databases">Fundamental differences</a></td></tr>
+    <tr><td>🧩</td><td><a href="#-features--capabilities">Features & capabilities</a></td></tr>
+    <tr><td>🛡️</td><td><a href="#-what-does-the-manifest-guarantee-about-data-durability-during-a-sudden-power-loss">Manifest & durability guarantees</a></td></tr>
+    <tr><td>⚡</td><td><a href="#-why-wisckey-value-log-and-when-does-it-really-speed-things-up">WiscKey speed benefits</a></td></tr>
+    <tr><td>🕰️</td><td><a href="#-how-mvcc-works-and-why-it-matters-for-transactions">How MVCC works</a></td></tr>
+    <tr><td>🌐</td><td><a href="#-using-scoriadb-from-different-languages">Multi‑language support</a></td></tr>
+    <tr><td>📈</td><td><a href="#-mvp-progress">MVP progress</a></td></tr>
+    <tr><td>⚡</td><td><a href="#-benchmarks">Benchmarks</a></td></tr>
+    <tr><td>❓</td><td><a href="#-faq">FAQ</a></td></tr>
+    <tr><td>🤝</td><td><a href="#-support-the-project">Support the project</a></td></tr>
   </table>
 </div>
 
 ---
 
-## 📖 Что это?
+## 📖 What is it?
 
-**ScoriaDB** — это **гибридная** key‑value база данных, которая стирает грань между легковесной встраиваемой библиотекой и полноценной сетевой СУБД.
+**ScoriaDB** is a **hybrid** key‑value database that blurs the line between a lightweight embeddable library and a full‑fledged networked DBMS.
 
-- **Как embedded‑библиотека** — компилируется прямо в ваш Go‑процесс, давая максимальную скорость без внешних зависимостей.
-- **Как сервер «из коробки»** — предоставляет встроенные gRPC, CLI и Web UI, не требуя ни строчки дополнительного кода.
+- **As an embedded library** — compiles directly into your Go process, giving you maximum speed with no external dependencies.
+- **As a server out of the box** — provides built‑in gRPC, CLI, and Web UI without requiring a single line of extra code.
 
-Она создана, чтобы вы **не выбирали** между «быстрой, но тупой» embedded‑БД и «удобной, но громоздкой» сетевой СУБД.
-
----
-
-## 👥 Для кого?
-
-ScoriaDB будет полезна:
-
-- **Go‑разработчикам**, которые хотят добавить персистентное KV‑хранилище в свой микросервис, CLI‑утилиту или агент — без лишней инфраструктуры.
-- **IoT и Edge‑инженерам** — когда нужно локальное хранилище на устройстве, но при этом важен удалённый доступ и мониторинг.
-- **Разработчикам на Python, Java, C++** — доступ к данным из любого языка через gRPC без танцев с cgo и обёртками.
-- **Командам с микросервисной архитектурой** — один сервер, много клиентов на разных языках, единый API.
-- **Тем, кто строит прототипы** — встроенные интерфейсы (CLI, Web UI) позволяют сразу видеть данные.
-- **Всем, кто устал поднимать Redis для простого кэша** или дописывать HTTP‑обвязку к BoltDB.
+It’s built so you don’t have to choose between “fast but dumb” embedded databases and “convenient but heavy” networked DBMS.
 
 ---
 
-## 🎯 Когда нужна ScoriaDB?
+## 👥 Who is it for?
 
-### 1. Embedded‑приложение, доступное по сети
-Ваше Go‑приложение хранит данные локально, но к ним должен подключаться внешний клиент (gRPC/REST) или администратор через браузер.
-*Другие библиотеки (BoltDB, Badger) такой возможности не дают, а Redis требует отдельный процесс.*
+ScoriaDB is useful for:
 
-### 2. Хранение больших бинарных значений
-Вы храните много изображений, блобов или логов. Обычное LSM‑дерево раздувается при перезаписи.
-*ScoriaDB выносит большие значения в отдельный журнал (Value Log) и читает их напрямую из памяти (mmap), не засоряя дерево.*
-
-### 3. Микросервис без внешней БД
-Сервис должен быть автономным, не зависеть от отдельной СУБД, но при этом уметь отдавать данные наружу.
-*ScoriaDB компилируется внутрь сервиса и предоставляет gRPC API для других сервисов.*
-
-### 4. Консольная утилита с удобным просмотром данных
-Вы пишете CLI‑инструмент, который собирает данные. Хочется быстро заглянуть в хранилище, не придумывая формат экспорта.
-*Встроенные CLI и Web UI позволяют просматривать ключи и значения прямо из терминала или браузера.*
-
-### 5. Проект, который вырастет в распределённую систему
-Сегодня достаточно одного узла, но завтра потребуется кластер. Не хочется переписывать код при переходе.
-*ScoriaDB планирует добавить Raft‑репликацию — тот же API станет распределённым без изменения вашего кода.*
-
-### 6. Кросс‑языковая разработка
-Ваша команда пишет микросервисы на Go, Python и Java, и всем нужен доступ к одним данным.
-*ScoriaDB даёт готовых gRPC‑клиентов для 12+ языков без необходимости писать обёртки.*
+- **Go developers** who want to add persistent KV storage to their microservice, CLI tool, or agent — without extra infrastructure.
+- **IoT and Edge engineers** — when you need local storage on a device but also require remote access and monitoring.
+- **Developers using Python, Java, C++** — access data from any language via gRPC without dancing with cgo or writing wrappers.
+- **Teams with microservice architecture** — one server, many clients in different languages, a single unified API.
+- **Those who build prototypes** — built‑in interfaces (CLI, Web UI) let you see your data immediately.
+- **Anyone tired of spinning up Redis for a simple cache** or writing an HTTP wrapper around BoltDB.
 
 ---
 
-## ✨ Почему именно ScoriaDB?
+## 🎯 When should you use ScoriaDB?
 
-| Преимущество | Что это даёт |
+### 1. Embedded application that also needs network access
+Your Go app stores data locally, but external clients (gRPC/REST) or an admin via browser must be able to connect.
+*Other libraries (BoltDB, Badger) don’t offer this; Redis requires a separate process.*
+
+### 2. Storing large binary values
+You store many images, blobs, or logs. A classic LSM tree blows up on rewrites.
+*ScoriaDB offloads large values to a separate Value Log and reads them zero‑copy via mmap, keeping the tree lean.*
+
+### 3. Microservice without an external database
+The service must be self‑contained, not depend on a separate DBMS, yet still be able to serve data to the outside.
+*ScoriaDB compiles into your service and provides a gRPC API for other services.*
+
+### 4. Console tool with convenient data inspection
+You’re writing a CLI tool that collects data. You’d like to peek into the storage without inventing an export format.
+*Built‑in CLI and Web UI let you browse keys and values from the terminal or a browser.*
+
+### 5. A project that will grow into a distributed system
+A single node is enough today, but tomorrow you might need a cluster. You don’t want to rewrite the code when you scale.
+*ScoriaDB plans to add Raft replication — the same API will become distributed without changing your code.*
+
+### 6. Cross‑language development
+Your team writes microservices in Go, Python, and Java — all need access to the same data.
+*ScoriaDB gives you ready‑made gRPC clients for 12+ languages without writing wrappers.*
+
+---
+
+## ✨ Why ScoriaDB?
+
+| Advantage | What it gives you |
 | :--- | :--- |
-| **Гибридное хранение (WiscKey)** | Большие значения не засоряют LSM‑дерево, читаются zero‑copy через mmap. |
-| **ACID‑транзакции** | Snapshot Isolation, интерактивные транзакции и атомарный WriteBatch. |
-| **Встроенный сервер** | gRPC API, Web UI и CLI доступны сразу, без написания сетевого кода. |
-| **Кросс‑языковой доступ** | 12+ языков через gRPC — Python, Java, C++, Rust, Node.js, C# и другие. |
-| **Column Families** | Логически разделяйте данные с разными настройками компакшена. |
-| **Надёжность (Manifest + WAL)** | Восстановление после сбоев без потери метаданных и данных. |
-| **Чистый Go** | Без cgo, без внешних зависимостей — просто `go get`. |
+| **Hybrid storage (WiscKey)** | Large values don’t bloat the LSM tree; they’re read zero‑copy via mmap. |
+| **ACID transactions** | Snapshot Isolation, interactive transactions, atomic WriteBatch. |
+| **Built‑in server** | gRPC API, Web UI, and CLI are available immediately — no network code needed. |
+| **Cross‑language access** | 12+ languages via gRPC — Python, Java, C++, Rust, Node.js, C#, and more. |
+| **Column Families** | Logically separate data with different compaction settings. |
+| **Reliability (Manifest + WAL)** | Crash recovery without loss of metadata or data. |
+| **Pure Go** | No cgo, no external dependencies — just `go get`. |
 
 ---
 
-## 📊 Сравнение
+## 📊 Comparison
 
-| Возможность | ScoriaDB | BoltDB/bbolt | BadgerDB | LevelDB/GoLevelDB | RocksDB (cgo) | Redis/etcd | MongoDB | Cassandra |
+| Feature | ScoriaDB | BoltDB/bbolt | BadgerDB | LevelDB/GoLevelDB | RocksDB (cgo) | Redis/etcd | MongoDB | Cassandra |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| **Встраиваемость** | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ |
-| **Сетевой доступ** | ✅ | ❌ | ❌ | ❌ | ❌ | ✅ | ✅ | ✅ |
-| **Web UI** | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ / частично | ❌ | ❌ |
+| **Embeddable** | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ |
+| **Network access** | ✅ | ❌ | ❌ | ❌ | ❌ | ✅ | ✅ | ✅ |
+| **Web UI** | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ / partial | ❌ | ❌ |
 | **MVCC / Snapshot Isolation** | ✅ | ❌ | ❌ | ❌ | ✅ | ❌ / ✅ | ✅ | ❌ |
-| **Большие значения (zero‑copy)** | ✅ | ❌ | ✅ | ❌ | Частично | ❌ | ✅ | ❌ |
+| **Large values (zero‑copy)** | ✅ | ❌ | ✅ | ❌ | Partial | ❌ | ✅ | ❌ |
 | **Column Families** | ✅ | ❌ | ❌ | ❌ | ✅ | ❌ | ❌ | ✅ |
-| **Транзакции (интерактивные)** | ✅ | ❌ | ❌ | ❌ | ✅ | ❌ | ✅ | ❌ |
-| **Кросс‑языковой доступ** | ✅ 12+ языков | ❌ | ❌ | ❌ | ❌ | ✅ | ✅ | ✅ |
-| **Зависимости** | Чистый Go | Чистый Go | Чистый Go | cgo опц. | C++/cgo | Отдельный процесс | Отдельный процесс | Отдельный процесс |
+| **Interactive transactions** | ✅ | ❌ | ❌ | ❌ | ✅ | ❌ | ✅ | ❌ |
+| **Cross‑language access** | ✅ 12+ languages | ❌ | ❌ | ❌ | ❌ | ✅ | ✅ | ✅ |
+| **Dependencies** | Pure Go | Pure Go | Pure Go | optional cgo | C++/cgo | Separate process | Separate process | Separate process |
 
 ---
 
-## 🚀 Чем ScoriaDB принципиально отличается от других embedded-БД?
+## 🚀 How is ScoriaDB fundamentally different from other embedded databases?
 
-**1. Это не «просто библиотека», а готовый сервер.**  
-BoltDB, BadgerDB и LevelDB — это только код, который вы встраиваете в свой процесс. Чтобы сделать их доступными по сети, вам нужно написать HTTP/gRPC‑сервер, CLI и UI. ScoriaDB даёт всё это «из коробки».
+**1. It’s not “just a library” — it’s a ready‑to‑use server.**  
+BoltDB, BadgerDB, and LevelDB are only code you embed into your process. To make them accessible over the network, you’d have to write an HTTP/gRPC server, a CLI, and a UI. ScoriaDB gives you all of that out of the box.
 
-**2. Полноценные ACID‑транзакции с изоляцией снапшота.**  
-В отличие от BoltDB (один писатель) и BadgerDB (без интерактивных транзакций), ScoriaDB поддерживает интерактивные транзакции с Snapshot Isolation — как в «взрослых» СУБД вроде PostgreSQL и CockroachDB.
+**2. Full ACID transactions with Snapshot Isolation.**  
+Unlike BoltDB (single writer) and BadgerDB (no interactive transactions), ScoriaDB supports interactive transactions with Snapshot Isolation — just like “grown‑up” databases such as PostgreSQL and CockroachDB.
 
-**3. Гибридное хранение для больших значений (WiscKey).**  
-Большие JSON‑документы или бинарные файлы не раздувают LSM‑дерево, а хранятся отдельно и читаются напрямую из памяти (zero‑copy). Это даёт выигрыш в скорости и экономит RAM по сравнению с BoltDB и LevelDB.
+**3. Hybrid storage for large values (WiscKey).**  
+Big JSON documents or binary files don’t blow up the LSM tree — they’re stored separately and read directly from memory (zero‑copy). This gives you a speed boost and saves RAM compared to BoltDB and LevelDB.
 
-**4. Кросс‑языковой доступ из коробки.**  
-Ни одна другая embedded‑БД не даёт gRPC API. ScoriaDB доступна из Go, Python, Java, C++, Rust, Node.js и других языков без танцев с cgo.
+**4. Cross‑language access out of the box.**  
+No other embedded database provides a gRPC API. ScoriaDB is accessible from Go, Python, Java, C++, Rust, Node.js, and many other languages without cgo dancing.
 
-**5. Архитектура с прицелом на распределённость.**  
-Движок спроектирован так, чтобы позже добавить Raft‑репликацию, не меняя API. Вы сможете превратить одиночную ноду в отказоустойчивый кластер, не переписывая код.
+**5. Architecture designed for distribution.**  
+The engine is built so that Raft replication can be added later without changing the API. You’ll be able to turn a single node into a fault‑tolerant cluster without rewriting your code.
 
 ---
 
-## 🧩 Функции и возможности
+## 🧩 Features & capabilities
 
-### Движок хранения
-| Функция | Описание |
+### Storage engine
+| Feature | Description |
 | :--- | :--- |
-| **LSM‑дерево** | Отсортированная MemTable (B‑Tree) с периодическим сбросом в SSTable на диск. |
-| **WAL (Write‑Ahead Log)** | Все операции фиксируются в журнале с контрольной суммой CRC32 перед попаданием в MemTable. |
-| **Value Log (WiscKey)** | Значения > 64 байт выносятся в отдельный append‑only файл, mmap для zero‑copy чтения. |
-| **SSTable** | Блочный индекс, префиксное сжатие ключей, фильтр Блума, диапазонный фильтр (min/max). |
-| **Leveled Compaction** | Фоновое слияние SSTable с нескольких уровней для освобождения места и удаления tombstone. |
-| **Сжатие** | Поддержка Snappy и Zstd на уровне блоков SSTable. |
+| **LSM tree** | Sorted MemTable (B‑tree) with periodic flush to SSTable on disk. |
+| **WAL (Write‑Ahead Log)** | Every operation is written to a journal with a CRC32 checksum before entering the MemTable. |
+| **Value Log (WiscKey)** | Values > 64 bytes are offloaded to a separate append‑only file; mmap for zero‑copy reads. |
+| **SSTable** | Block index, key prefix compression, Bloom filter, range filter (min/max key). |
+| **Leveled Compaction** | Background merging of SSTables across levels to free space and remove tombstones. |
+| **Compression** | Snappy and Zstd support at the SSTable block level. |
 
-### Транзакции и версионность
-| Функция | Описание |
+### Transactions & versioning
+| Feature | Description |
 | :--- | :--- |
-| **MVCC** | Многоверсионность с инвертированными временными метками (TiKV‑подобный подход). |
-| **Snapshot Isolation** | Чтение видит консистентный снимок данных на момент `startTS`, писатели не блокируют читателей. |
-| **Интерактивные транзакции** | `Begin()` → `Get`/`Put`/`Delete` → `Commit()`/`Rollback()` с оптимистичной блокировкой. |
-| **WriteBatch** | Атомарное применение группы операций с одним `commitTS`. |
-| **Конфликт‑чек** | При коммите проверяется, не изменил ли кто‑то ключ после `startTS`. |
+| **MVCC** | Multi‑version concurrency control using inverted timestamps (TiKV‑like approach). |
+| **Snapshot Isolation** | Reads see a consistent snapshot of data at `startTS`; writers never block readers. |
+| **Interactive transactions** | `Begin()` → `Get`/`Put`/`Delete` → `Commit()`/`Rollback()` with optimistic locking. |
+| **WriteBatch** | Atomic application of a group of operations under a single `commitTS`. |
+| **Conflict detection** | At commit time, checks whether any key was changed after `startTS`. |
 
-### Данные и организация
-| Функция | Описание |
+### Data & organisation
+| Feature | Description |
 | :--- | :--- |
-| **Column Families** | Независимые LSM‑деревья с собственными настройками компакшена. Атомарные операции между CF. |
-| **Embedded Go API** | Чистый интерфейс `DB` в `pkg/scoria` для встраивания в Go‑приложения. |
+| **Column Families** | Independent LSM trees with their own compaction settings. Atomic operations across CFs. |
+| **Embedded Go API** | Clean `DB` interface in `pkg/scoria` for embedding in Go applications. |
 
-### Надёжность и восстановление
-| Функция | Описание |
+### Reliability & recovery
+| Feature | Description |
 | :--- | :--- |
-| **Manifest** | Журнал изменений метаданных (VersionEdit) с атомарным `fsync`. Восстановление после сбоя без сканирования директории. |
-| **VFS‑абстракция** | Подменяемый слой файловой системы для тестирования (имитация сбоев диска). |
+| **Manifest** | Journal of metadata changes (VersionEdit) with atomic `fsync`. Recovers after a crash without scanning the directory. |
+| **VFS abstraction** | Pluggable file system layer for testing (simulate disk failures). |
 
 ---
 
-### Что даёт Manifest и гарантирует ли он сохранность данных при внезапном отключении питания?
+### What does the Manifest guarantee about data durability during a sudden power loss?
 
-**Manifest** — это журнал метаданных, который записывает каждое изменение состава файлов (создание, удаление, слияние SSTable) в виде атомарной записи с `fsync`. При старте движок читает этот журнал и восстанавливает точное состояние всех уровней, не сканируя директорию.
+The **Manifest** is a metadata journal that records every change to the set of files (creation, deletion, compaction of SSTables) as an atomic entry with `fsync`. On startup, the engine reads this journal and reconstructs the exact state of all levels without scanning the directory.
 
-**Гарантирует ли сохранность при отключении питания?**  
-Да — но вместе с WAL. Manifest гарантирует, что метаданные (какие файлы и на каких уровнях) консистентны. WAL гарантирует, что сами данные, которые ещё не попали в SSTable, не потеряны. Вместе они обеспечивают полное восстановление после аварийного выключения.
-
----
-
-### Зачем нужен WiscKey (Value Log) и когда это реально ускоряет работу?
-
-**WiscKey** — это техника раздельного хранения: ключи и индексы живут в LSM‑дереве, а большие значения — в отдельном append‑only файле (Value Log). Почему это важно?
-
-- **Уменьшение write‑амплификации.** При перезаписи ключа в LSM‑дереве значение не копируется заново — просто пишется новый указатель в Value Log.
-- **Zero‑copy чтение.** Value Log отображается в память через `mmap`. Когда вы читаете значение, возвращается слайс, который указывает прямо в память, без лишних аллокаций.
-- **Экономия RAM.** LSM‑дерево остаётся компактным, потому что не хранит гигабайты значений в MemTable.
-
-**Когда это реально ускоряет работу?**
-- Когда вы храните **значения > 100 байт** (JSON, бинарные блобы).
-- Когда у вас **интенсивная запись** больших данных (логи, метрики).
-- Когда вам важно **экономить оперативную память**, не жертвуя скоростью чтения.
+**Does it guarantee durability after a power loss?**  
+Yes — but together with the WAL. The Manifest guarantees that the metadata (which files are on which levels) is consistent. The WAL guarantees that data not yet flushed to SSTables isn’t lost. Together they ensure full recovery after an unexpected shutdown.
 
 ---
 
-### Как работает MVCC и почему это важно для транзакций?
+### Why WiscKey (Value Log) and when does it really speed things up?
 
-**MVCC (Multi‑Version Concurrency Control)** — это механизм, при котором каждая запись (Put/Delete) создаёт новую версию ключа, а не перезаписывает старую. Каждая версия имеет временную метку (`commitTS`).
+**WiscKey** is the technique of storing keys and indexes in the LSM tree while large values live in a separate append‑only file (Value Log). Why does it matter?
 
-**Как это работает в ScoriaDB:**
-1. При `Put` создаётся новая версия ключа с `commitTS = <текущее время>`.
-2. При `Begin()` транзакция получает `startTS` — снимок состояния на данный момент.
-3. Все чтения внутри транзакции (`Get`) видят только версии с `commitTS ≤ startTS`.
-4. При `Commit()` проверяется, не изменил ли кто‑то ключ после `startTS` (конфликт‑чек).
+- **Reduces write amplification.** When a key is overwritten, the value is not copied again — a new pointer is written to the Value Log.
+- **Zero‑copy reads.** The Value Log is memory‑mapped (`mmap`). When you read a value, you get a slice that points directly into memory, with no extra allocations.
+- **Saves RAM.** The LSM tree stays compact because it doesn’t hold gigabytes of values in the MemTable.
 
-**Почему это важно:**
-- **Писатели не блокируют читателей.** Можно одновременно писать и читать, не ожидая друг друга.
-- **Изоляция снапшота.** Транзакция видит консистентный снимок данных, даже если параллельно что‑то меняется.
-- **Возможность Time Travel.** В будущем можно будет запросить «как выглядел ключ вчера в 10:00».
+**When does this really speed things up?**
+- When you store **values larger than ~100 bytes** (JSON, binary blobs).
+- When you have **intense write workloads** with large data (logs, metrics).
+- When you need to **conserve RAM** without sacrificing read performance.
 
 ---
 
-## 🌐 Использование из разных языков
+### How MVCC works and why it matters for transactions
 
-ScoriaDB предоставляет **gRPC API** на основе Protocol Buffers. Это значит, что любой язык, для которого существует gRPC, может работать с вашей БД. Достаточно один раз описать `.proto` файл — и клиентский код генерируется автоматически.
+**MVCC (Multi‑Version Concurrency Control)** means that each write (Put/Delete) creates a new version of the key instead of overwriting the old one. Each version carries a timestamp (`commitTS`).
 
-### Порядок действий для любого языка
+**How it works inside ScoriaDB:**
+1. On `Put`, a new version of the key is created with `commitTS = <current time>`.
+2. When a transaction calls `Begin()`, it gets a `startTS` — a snapshot of the state at that moment.
+3. All reads inside the transaction (`Get`) see only versions with `commitTS ≤ startTS`.
+4. On `Commit()`, the engine checks whether any key was changed after `startTS` (conflict detection).
 
-1. **Установите gRPC и protobuf** для вашего языка (инструкции ниже).
-2. **Скачайте `.proto` файл** из репозитория ScoriaDB.
-3. **Сгенерируйте клиентский код** командой `protoc`.
-4. **Используйте сгенерированный клиент** — вызывайте методы как обычные функции.
+**Why this matters:**
+- **Writers never block readers.** You can read and write concurrently without waiting.
+- **Snapshot Isolation.** A transaction sees a consistent snapshot even if other writes happen in parallel.
+- **Time Travel possible.** In the future you’ll be able to ask, “what did this key look like yesterday at 10:00?”
 
 ---
 
-### 🐹 Go (родной язык)
+## 🌐 Using ScoriaDB from different languages
+
+ScoriaDB provides a **gRPC API** based on Protocol Buffers. That means any language with gRPC support can work with your database. You describe the `.proto` file once — then generate client code automatically.
+
+### Steps for any language
+
+1. **Install gRPC and protobuf** for your language (instructions below).
+2. **Download the `.proto` file** from the ScoriaDB repository.
+3. **Generate client code** with `protoc`.
+4. **Use the generated client** — call methods like ordinary functions.
+
+---
+
+### 🐹 Go (native language)
 
 ```go
 import "github.com/f4ga/scoriadb/pkg/scoria"
@@ -228,8 +228,8 @@ import "github.com/f4ga/scoriadb/pkg/scoria"
 db, _ := scoria.Open(scoria.DefaultOptions("/tmp/mydb"))
 defer db.Close()
 
-db.Put([]byte("ключ"), []byte("значение"))
-val, _ := db.Get([]byte("ключ"))
+db.Put([]byte("key"), []byte("value"))
+val, _ := db.Get([]byte("key"))
 fmt.Println(string(val))
 ```
 
@@ -309,15 +309,15 @@ stub->Put(nullptr, &req, nullptr);
 
 ---
 
-### 🌍 Поддерживаемые языки
+### 🌍 Supported languages
 
-| Язык | Статус |
+| Language | Status |
 | :--- | :--- |
-| Go | ✅ Родной API + gRPC |
+| Go | ✅ Native API + gRPC |
 | Python | ✅ gRPC |
 | Java | ✅ gRPC |
 | C++ | ✅ gRPC |
-| Rust | ✅ Через `tonic` |
+| Rust | ✅ via `tonic` |
 | Node.js / TypeScript | ✅ gRPC |
 | C# (.NET) | ✅ gRPC |
 | Ruby | ✅ gRPC |
@@ -328,142 +328,146 @@ stub->Put(nullptr, &req, nullptr);
 
 ---
 
-## 📈 Прогресс MVP
+## 📈 MVP progress
 
-| Категория | Компонент | Статус |
+| Category | Component | Status |
 | :--- | :--- | :--- |
-| **Ядро** | LSM‑дерево (MemTable, WAL, Value Log) | ✅ Готово |
-| | SSTable (Bloom, диапазонный фильтр) | ✅ Готово |
-| | Manifest (журнал метаданных) | ✅ Готово |
-| | VFS‑абстракция | ✅ Готово |
-| | Leveled Compaction | ✅ Готово |
-| **Версионность** | MVCC (Snapshot Isolation) | ✅ Готово |
-| **Транзакции** | WriteBatch | ✅ Готово |
-| | Интерактивные транзакции | ✅ Готово |
-| **Организация данных** | Column Families | ✅ Готово |
-| **API** | Embedded Go API | ✅ Готово |
-| | gRPC API | ✅ Готово |
-| | REST API | 🔜 Далее |
-| **Интерфейсы** | CLI‑клиент (`scoria`) | 🔜 Далее |
-| | Web UI (React) | 🔜 Далее |
-| **Безопасность** | Аутентификация (JWT, роли) | 🔜 Далее |
-| | Rate Limiting | 🔜 Далее |
-| **Мониторинг** | Prometheus‑метрики | 🔜 Далее |
-| | Health‑check (`/health`, `/ready`) | 🔜 Далее |
-| **DevOps** | Docker и docker‑compose | 🔜 Далее |
-| **Качество** | CI/CD (GitHub Actions, линтинг) | ✅ Готово |
-| | Бенчмарки (движок + API) | ✅ Готово |
-| | Структура тестов (unit, integration) | ✅ Готово |
+| **Core** | LSM tree (MemTable, WAL, Value Log) | ✅ Done |
+| | SSTable (Bloom, range filter) | ✅ Done |
+| | Manifest (metadata journal) | ✅ Done |
+| | VFS abstraction | ✅ Done |
+| | Leveled Compaction | ✅ Done |
+| **Versioning** | MVCC (Snapshot Isolation) | ✅ Done |
+| **Transactions** | WriteBatch | ✅ Done |
+| | Interactive transactions | ✅ Done |
+| **Data organisation** | Column Families | ✅ Done |
+| **API** | Embedded Go API | ✅ Done |
+| | gRPC API | ✅ Done |
+| | REST API | 🔜 Next |
+| **Interfaces** | CLI client (`scoria`) | 🔜 Next |
+| | Web UI (React) | 🔜 Next |
+| **Security** | Authentication (JWT, roles) | 🔜 Next |
+| | Rate Limiting | 🔜 Next |
+| **Monitoring** | Prometheus metrics | 🔜 Next |
+| | Health checks (`/health`, `/ready`) | 🔜 Next |
+| **DevOps** | Docker & docker‑compose | 🔜 Next |
+| **Quality** | CI/CD (GitHub Actions, linting) | ✅ Done |
+| | Benchmarks (engine + API) | ✅ Done |
+| | Test structure (unit, integration) | ✅ Done |
 
 ---
 
-## ⚡ Бенчмарки
+## ⚡ Benchmarks
 
-Замеры на процессоре Intel Core i3-1215U (8 потоков), Go 1.23+, Linux amd64.  
-Запуск: `go test -bench=. ./internal/engine ./pkg/scoria`
+Measured on Intel Core i3-1215U (8 threads), Go 1.23+, Linux amd64.  
+Run with: `go test -bench=. ./internal/engine ./pkg/scoria`
 
-| Операция | Значения | Время (нс/op) | Пропускная способность |
+| Operation | Value size | Time (ns/op) | Throughput |
 |---|---|---|---|
-| `Put` (small) | < 64 байт | **1 070 нс** | ~ 935 000 ops/s |
-| `Put` (large) | 4 КБ (Value Log) | **4 785 нс** | ~ 209 000 ops/s |
-| `Get` (hit) | ключ в MemTable | **~150 нс** | ~ 6 600 000 ops/s |
-| `ScoriaPut` | через публичный API | **1 063 нс** | накладные расходы < 1% |
-| `ScoriaGet` | через публичный API | **144 нс** | накладные расходы ~ 5% |
+| `Put` (small) | < 64 bytes | **1,070 ns** | ~ 935,000 ops/s |
+| `Put` (large) | 4 KB (Value Log) | **4,785 ns** | ~ 209,000 ops/s |
+| `Get` (hit) | key in MemTable | **~150 ns** | ~ 6,600,000 ops/s |
+| `ScoriaPut` | via public API | **1,063 ns** | overhead < 1% |
+| `ScoriaGet` | via public API | **144 ns** | overhead ~ 5% |
 
-> Чтение на уровне BoltDB (~100–200 нс), но с MVCC, транзакциями и конкурентной записью.  
-> Запись — около 1 млн операций в секунду на одиночных `Put` без батчинга.  
-> Накладные расходы публичного API минимальны — интерфейс `DB` почти прозрачен.
----
-
-
-## 🗺️ Roadmap (следующий релиз)
-
-- Распределённый режим (Raft‑репликация, шардирование)
-- Распределённые ACID‑транзакции (Percolator‑подобный 2PC)
-- Time Travel Queries и исторический браузер
-- Git‑подобное ветвление данных
-- Расширенная безопасность (Row‑Level Security, mTLS)
-- Интеграция с Kubernetes
+> Reads are on par with BoltDB (~100–200 ns), but with MVCC, transactions, and concurrent writes.  
+> Writes are about 1 million ops/s for single `Put`s without batching.  
+> Public API overhead is minimal — the `DB` interface is almost transparent.
 
 ---
 
-## 🚀 Быстрый старт
+## 🗺️ Roadmap (next release)
+
+- Distributed mode (Raft replication, sharding)
+- Distributed ACID transactions (Percolator‑like 2PC)
+- Time Travel queries and historical browser
+- Git‑like data branching
+- Advanced security (Row‑Level Security, mTLS)
+- Kubernetes integration
+
+---
+
+## 🚀 Quick start
 
 ```bash
 git clone https://github.com/f4ga/scoriadb.git
 cd scoriadb
 go build ./...
 
-# Тесты и бенчмарки
+# Tests and benchmarks
 go test -race ./...
 go test -bench=. ./internal/engine ./pkg/scoria
 
-# Запуск сервера (порт gRPC 50051, HTTP 8080)
+# Run server (gRPC port 50051, HTTP 8080)
 go run cmd/server/main.go
 ```
 
-Docker‑образ появится вместе с первым релизом.
+A Docker image will be available with the first stable release.
 
 ---
 
 ## ❓ FAQ
 
-### 1. Что такое ScoriaDB — это библиотека или сервер?
+### 1. Is ScoriaDB a library or a server?
 
-**И то, и другое.** Вы можете встроить ScoriaDB как Go‑библиотеку (`import "github.com/f4ga/scoriadb/pkg/scoria"`) или запустить как сервер с доступом по gRPC и Web UI. Оба режима работают в одном бинарнике.
+**Both.** You can embed ScoriaDB as a Go library (`import "github.com/f4ga/scoriadb/pkg/scoria"`) or run it as a server with gRPC and Web UI access. Both modes run from the same binary.
 
-### 2. Чем ScoriaDB отличается от BoltDB?
+### 2. How does ScoriaDB differ from BoltDB?
 
-BoltDB использует B⁺‑дерево, допускает только одного писателя и не имеет встроенного сетевого доступа. ScoriaDB основана на LSM‑дереве, поддерживает конкурентную запись, MVCC с Snapshot Isolation, и предоставляет gRPC/CLI/Web UI «из коробки».
+BoltDB uses a B+ tree, allows only one writer at a time, and has no built‑in network access. ScoriaDB is LSM‑based, supports concurrent writes, MVCC with Snapshot Isolation, and provides gRPC/CLI/Web UI out of the box.
 
-### 3. Чем ScoriaDB отличается от BadgerDB?
+### 3. How does ScoriaDB differ from BadgerDB?
 
-Обе используют WiscKey (Value Log). Но BadgerDB — это только embedded‑библиотека без встроенного сервера и без интерактивных транзакций (только batch). ScoriaDB добавляет интерактивные транзакции, Column Families, Manifest и кросс‑языковой gRPC‑доступ.
+Both use WiscKey (Value Log). But BadgerDB is only an embedded library — no built‑in server and no interactive transactions (only batch). ScoriaDB adds interactive transactions, Column Families, the Manifest, and cross‑language gRPC access.
 
-### 4. Можно ли использовать ScoriaDB в production?
+### 4. Can I use ScoriaDB in production?
 
-Пока проект находится в стадии MVP. Мы активно работаем над стабилизацией, тестированием и бенчмарками. Для критичных систем рекомендуем дождаться первого стабильного релиза или тщательно тестировать под своей нагрузкой.
+The project is currently in MVP stage. We are actively working on stabilisation, testing, and benchmarks. For critical systems, we recommend waiting for the first stable release or thoroughly testing under your own workload.
 
-### 5. Какие гарантии сохранности данных?
+### 5. What durability guarantees does ScoriaDB provide?
 
-Каждая операция записывается в WAL с контрольной суммой (CRC32). Все изменения списка файлов пишутся в Manifest с `fsync`. После внезапного отключения питания движок восстанавливает консистентное состояние при следующем запуске.
+Every operation is written to the WAL with a CRC32 checksum. All changes to the file set are written to the Manifest with `fsync`. After a sudden power loss, the engine recovers to a consistent state on the next start.
 
-### 6. Как ScoriaDB обеспечивает конкурентный доступ?
+### 6. How does ScoriaDB handle concurrency?
 
-Через Snapshot Isolation с оптимистичной блокировкой. Читатели никогда не блокируются. Писатели проверяют конфликты при коммите и при необходимости повторяют транзакцию.
+Through Snapshot Isolation with optimistic locking. Readers never block. Writers check for conflicts at commit time and retry if necessary.
 
-### 7. Поддерживает ли ScoriaDB TTL (время жизни ключей)?
+### 7. Does ScoriaDB support TTL (time‑to‑live)?
 
-Пока нет. Это запланировано на один из ближайших релизов после стабилизации основного функционала.
+Not yet. TTL is planned for a future release after the core functionality is stable.
 
-### 8. Будет ли поддержка распределённого режима?
+### 8. Will there be support for distributed mode?
 
-Да. Raft‑репликация — главная цель следующего крупного релиза. Вы сможете запустить кластер из 3+ нод с автоматическими перевыборами лидера и консистентностью данных.
+Yes. Raft replication is the main goal of the next major release. You’ll be able to run a cluster of 3+ nodes with automatic leader elections and strong data consistency.
 
-### 9. Почему gRPC, а не REST?
+### 9. Why gRPC instead of REST?
 
-gRPC даёт строгую типизацию, высокую производительность (HTTP/2, бинарный protobuf) и стриминг для `Scan`. Но REST API также появится в одном из ближайших релизов для удобства интеграции с браузером и простоты отладки.
+gRPC provides strong typing, high performance (HTTP/2, binary protobuf), and streaming for `Scan`. However, a REST API will also appear in a future release for easier browser integration and debugging.
 
-### 10. Как помочь проекту?
+### 10. How can I help the project?
 
-Поставьте звезду на GitHub, попробуйте библиотеку в своих проектах, сообщайте о проблемах в Issues и присылайте Pull Requests. Мы открыты к сообществу и ценим любой вклад!
+Give the repository a star on GitHub, try the library in your own projects, report issues, and submit pull requests. We’re open to the community and value any contribution!
 
 ---
 
-## 🤝 Поддержать проект
+## 🤝 Support the project
 
-ScoriaDB — свободное ПО с лицензией MIT. Вы можете помочь:
+ScoriaDB is free software under the MIT license. You can help by:
 
-- **⭐️ Поставьте звезду** на GitHub — это мотивирует!
-- **🐛 Сообщайте об ошибках** через [Issues](https://github.com/f4ga/scoriadb/issues).
-- **💻 Присылайте PR** — любое улучшение приветствуется.
-- **📣 Расскажите о проекте** в соцсетях или чатах.
+- **⭐️ Starring** the GitHub repo — it’s great motivation!
+- **🐛 Reporting bugs** via [Issues](https://github.com/f4ga/scoriadb/issues).
+- **💻 Sending pull requests** — any improvement is welcome.
+- **📣 Spreading the word** about the project on social media or in chats.
 
-Спасибо, что вы с нами!
+Thank you for being here!
 
 ---
 
 <div align="center">
-  <i>Крепкий, как камень. Лёгкий, как пепел.</i><br><br>
+  <i>Solid as stone. Light as ash.</i><br><br>
   <img src="https://capsule-render.vercel.app/api?type=waving&color=gradient&customColorList=12&height=120&section=footer">
 </div>
+
+---
+
+You can copy this entire Markdown block directly into your `README.md` (or any other documentation file). All links, badges, and formatting will work as expected. Let me know if you’d like any adjustments — for example, changing the tagline or tweaking any technical term.
