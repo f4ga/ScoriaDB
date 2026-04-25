@@ -6,9 +6,30 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	"scoriadb/scoriadb/proto"
 )
+
+// Ensure jwtCredentials implements credentials.PerRPCCredentials.
+var _ credentials.PerRPCCredentials = jwtCredentials{}
+
+// jwtCredentials implements credentials.PerRPCCredentials for JWT authentication.
+type jwtCredentials struct {
+	token string
+}
+
+// GetRequestMetadata returns the authorization header.
+func (c jwtCredentials) GetRequestMetadata(ctx context.Context, uri ...string) (map[string]string, error) {
+	return map[string]string{
+		"authorization": "Bearer " + c.token,
+	}, nil
+}
+
+// RequireTransportSecurity returns false because we're using insecure transport for simplicity.
+func (c jwtCredentials) RequireTransportSecurity() bool {
+	return false
+}
 
 // Client wraps the gRPC connection and provides convenient methods.
 type Client struct {
@@ -21,8 +42,7 @@ type Client struct {
 func NewClient(addr, token string) (*Client, error) {
 	conn, err := grpc.NewClient(addr,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
-		grpc.WithUnaryInterceptor(authUnaryInterceptor(token)),
-		grpc.WithStreamInterceptor(authStreamInterceptor(token)),
+		grpc.WithPerRPCCredentials(jwtCredentials{token}),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect: %w", err)
@@ -130,26 +150,6 @@ func (c *Client) Authenticate(ctx context.Context, username, password string) (*
 		Password: password,
 	}
 	return c.client.Authenticate(ctx, req)
-}
-
-// authUnaryInterceptor adds Authorization header to unary RPCs.
-func authUnaryInterceptor(token string) grpc.UnaryClientInterceptor {
-	return func(ctx context.Context, method string, req, reply interface{}, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
-		if token != "" {
-			ctx = context.WithValue(ctx, "authorization", "Bearer "+token)
-		}
-		return invoker(ctx, method, req, reply, cc, opts...)
-	}
-}
-
-// authStreamInterceptor adds Authorization header to streaming RPCs.
-func authStreamInterceptor(token string) grpc.StreamClientInterceptor {
-	return func(ctx context.Context, desc *grpc.StreamDesc, cc *grpc.ClientConn, method string, streamer grpc.Streamer, opts ...grpc.CallOption) (grpc.ClientStream, error) {
-		if token != "" {
-			ctx = context.WithValue(ctx, "authorization", "Bearer "+token)
-		}
-		return streamer(ctx, desc, cc, method, opts...)
-	}
 }
 
 // defaultContext returns a context with timeout.
