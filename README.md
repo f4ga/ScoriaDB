@@ -6,12 +6,13 @@
 
   [![Go Version](https://img.shields.io/badge/Go-1.23+-00ADD8?logo=go)](https://go.dev/)
   [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
-<div align="center">
 
-[![EN](https://img.shields.io/badge/EN-English-blue)](README.md)
-[![RU](https://img.shields.io/badge/RU-Русский-red)](README_RU.md)
+  <div align="center">
 
-</div>
+  [🇬🇧 English](README.md) &nbsp;&nbsp;|&nbsp;&nbsp; [🇷🇺 Русский](README_RU.md)
+
+  </div>
+
   <br>
   <table align="center" style="font-size: 1.4em; line-height: 2;">
     <tr><td>📖</td><td><a href="#-what-is-scoriadb">What is ScoriaDB</a></td></tr>
@@ -24,6 +25,7 @@
     <tr><td>🕰️</td><td><a href="#-how-mvcc-works">How MVCC works</a></td></tr>
     <tr><td>🌐</td><td><a href="#-multi-language-support">Multi‑language support</a></td></tr>
     <tr><td>📈</td><td><a href="#-mvp-progress">MVP progress</a></td></tr>
+    <tr><td>📁</td><td><a href="#-project-structure">Project structure</a></td></tr>
     <tr><td>🗺️</td><td><a href="#-roadmap">Roadmap</a></td></tr>
     <tr><td>❓</td><td><a href="#-faq">FAQ</a></td></tr>
     <tr><td>🤝</td><td><a href="#-support-the-project">Support the project</a></td></tr>
@@ -282,6 +284,33 @@ System.out.println(resp.getValue().toStringUtf8());
 | **Quality** | CI/CD (GitHub Actions, linting) | ✅ Done |
 | | Benchmarks (engine + API) | ✅ Done |
 | | Test structure (unit, integration) | ✅ Done |
+
+---
+
+## 📁 Project structure
+
+```
+scoriadb/
+├── cmd/
+│   └── server/              # gRPC server entry point
+├── internal/
+│   ├── engine/              # LSM core: MemTable, SSTable, VLog, WAL, Manifest, compaction
+│   │   ├── sstable/         # SSTable read/write, Bloom filter, encoding
+│   │   ├── vfs/             # file system abstraction (testable FS layer)
+│   │   └── tests/           # engine-level integration tests
+│   ├── mvcc/                # MVCC key encoding with inverted timestamps
+│   ├── txn/                 # transactions (WriteBatch, interactive)
+│   ├── cf/                  # Column Families registry + batch
+│   └── api/
+│       └── grpc/            # gRPC server implementation
+├── pkg/scoria/              # public Embedded Go API (DB interface)
+│   └── tests/               # API-level integration tests
+├── proto/                   # protobuf service definition
+├── scoriadb/                # generated protobuf Go code
+├── tests/                   # end-to-end & integration tests
+├── web/                     # React frontend (planned)
+└── deployments/             # Docker & docker-compose (planned)
+```
 
 ---
 

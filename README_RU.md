@@ -7,12 +7,13 @@
   [![CI](https://github.com/f4ga/ScoriaDB/actions/workflows/ci.yml/badge.svg)](https://github.com/f4ga/ScoriaDB/actions/workflows/ci.yml)
   [![Go Version](https://img.shields.io/badge/Go-1.23+-00ADD8?logo=go)](https://go.dev/)
   [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
-<div align="center">
 
-[![EN](https://img.shields.io/badge/EN-English-blue)](README.md)
-[![RU](https://img.shields.io/badge/RU-Русский-red)](README_RU.md)
+  <div align="center">
 
-</div>
+  [🇬🇧 English](README.md) &nbsp;&nbsp;|&nbsp;&nbsp; [🇷🇺 Русский](README_RU.md)
+
+  </div>
+
   <br>
   <table align="center" style="font-size: 1.4em; line-height: 2;">
     <tr><td>📖</td><td><a href="#-что-такое-scoriadb">Что такое ScoriaDB</a></td></tr>
@@ -25,6 +26,7 @@
     <tr><td>🕰️</td><td><a href="#-как-работает-mvcc">Как работает MVCC</a></td></tr>
     <tr><td>🌐</td><td><a href="#-поддержка-языков">Поддержка языков</a></td></tr>
     <tr><td>📈</td><td><a href="#-прогресс-mvp">Прогресс MVP</a></td></tr>
+    <tr><td>📁</td><td><a href="#-структура-проекта">Структура проекта</a></td></tr>
     <tr><td>🗺️</td><td><a href="#-дорожная-карта">Дорожная карта</a></td></tr>
     <tr><td>❓</td><td><a href="#-faq">FAQ</a></td></tr>
     <tr><td>🤝</td><td><a href="#-поддержать-проект">Поддержать проект</a></td></tr>
@@ -283,6 +285,33 @@ System.out.println(resp.getValue().toStringUtf8());
 | **Качество** | CI/CD (GitHub Actions, линтинг) | ✅ Готово |
 | | Бенчмарки (движок + API) | ✅ Готово |
 | | Структура тестов (unit, integration) | ✅ Готово |
+
+---
+
+## 📁 Структура проекта
+
+```
+scoriadb/
+├── cmd/
+│   └── server/              # точка входа gRPC-сервера
+├── internal/
+│   ├── engine/              # ядро LSM: MemTable, SSTable, VLog, WAL, Manifest, компакшен
+│   │   ├── sstable/         # чтение/запись SSTable, фильтр Блума, кодирование
+│   │   ├── vfs/             # абстракция файловой системы (тестируемый слой)
+│   │   └── tests/           # интеграционные тесты движка
+│   ├── mvcc/                # кодирование MVCC-ключей с инвертированными метками времени
+│   ├── txn/                 # транзакции (WriteBatch, интерактивные)
+│   ├── cf/                  # реестр Column Families + batch
+│   └── api/
+│       └── grpc/            # реализация gRPC-сервера
+├── pkg/scoria/              # публичный Embedded Go API (интерфейс DB)
+│   └── tests/               # интеграционные тесты API
+├── proto/                   # описание protobuf-сервиса
+├── scoriadb/                # сгенерированный код protobuf для Go
+├── tests/                   # end-to-end и интеграционные тесты
+├── web/                     # React фронтенд (запланирован)
+└── deployments/             # Docker и docker-compose (запланированы)
+```
 
 ---
 
