@@ -7,17 +7,19 @@ import (
 	"net/http"
 	"strings"
 
+	"scoriadb/internal/auth"
 	"scoriadb/pkg/scoria"
 )
 
 // Server представляет HTTP‑сервер REST API для ScoriaDB.
 type Server struct {
-	db scoria.CFDB
+	db        scoria.CFDB
+	jwtSecret []byte
 }
 
 // NewServer создаёт новый REST‑сервер, использующий указанную базу данных.
-func NewServer(db scoria.CFDB) *Server {
-	return &Server{db: db}
+func NewServer(db scoria.CFDB, jwtSecret []byte) *Server {
+	return &Server{db: db, jwtSecret: jwtSecret}
 }
 
 // ServeHTTP реализует интерфейс http.Handler, маршрутизируя запросы.
@@ -53,6 +55,26 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		}
 		return
+	}
+
+	// Аутентификация
+	if r.URL.Path == "/api/v1/auth/login" && r.Method == http.MethodPost {
+		s.handleLogin(w, r)
+		return
+	}
+
+	// Админские эндпоинты (требуют JWT)
+	if strings.HasPrefix(r.URL.Path, "/api/v1/admin/") {
+		// Проверка JWT будет выполнена в middleware (добавляется в main.go)
+		// Здесь просто маршрутизируем
+		if r.URL.Path == "/api/v1/admin/users" && r.Method == http.MethodGet {
+			s.handleListUsers(w, r)
+			return
+		}
+		if r.URL.Path == "/api/v1/admin/users" && r.Method == http.MethodPost {
+			s.handleCreateUser(w, r)
+			return
+		}
 	}
 
 	// Если маршрут не найден
@@ -200,4 +222,75 @@ func writeError(w http.ResponseWriter, status int, code, message string) {
 	}
 	w.WriteHeader(status)
 	_, _ = buf.WriteTo(w)
+}
+
+// handleLogin обрабатывает POST /api/v1/auth/login
+func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "BAD_REQUEST", "invalid JSON body")
+		return
+	}
+
+	token, err := auth.Authenticate(s.db, req.Username, req.Password, s.jwtSecret)
+	if err != nil {
+		switch err {
+		case auth.ErrUserNotFound, auth.ErrInvalidCredentials:
+			writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "invalid username or password")
+		default:
+			writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
+		}
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{
+		"token": token,
+	})
+}
+
+// handleListUsers обрабатывает GET /api/v1/admin/users (требует роль admin)
+func (s *Server) handleListUsers(w http.ResponseWriter, r *http.Request) {
+	// Проверка роли уже выполнена в middleware
+	users, err := auth.ListUsers(s.db)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"users": users,
+	})
+}
+
+// handleCreateUser обрабатывает POST /api/v1/admin/users (требует роль admin)
+func (s *Server) handleCreateUser(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Username string   `json:"username"`
+		Password string   `json:"password"`
+		Roles    []string `json:"roles"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "BAD_REQUEST", "invalid JSON body")
+		return
+	}
+
+	err := auth.CreateUser(s.db, req.Username, req.Password, req.Roles)
+	if err != nil {
+		switch err {
+		case auth.ErrUserAlreadyExists:
+			writeError(w, http.StatusConflict, "CONFLICT", "user already exists")
+		case auth.ErrInvalidCredentials:
+			writeError(w, http.StatusBadRequest, "BAD_REQUEST", "invalid credentials")
+		default:
+			writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
+		}
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, map[string]string{
+		"status": "created",
+	})
 }

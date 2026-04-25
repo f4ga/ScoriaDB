@@ -272,12 +272,12 @@ System.out.println(resp.getValue().toStringUtf8());
 | **Транзакции** | WriteBatch | ✅ Готово |
 | | Интерактивные транзакции | ✅ Готово |
 | **Организация данных** | Column Families | ✅ Готово |
-| **API** | Embedded Go API | ✅ Готово |
+| **API** | Embedded Go API (вкл. Scan) | ✅ Готово |
 | | gRPC API | ✅ Готово |
-| | REST API | ✅ Готово |
+| | REST API + WebSocket | ✅ Готово |
 | **Интерфейсы** | CLI-клиент (`scoria`) | 🔜 Далее |
 | | Web UI (React) | 🔜 Далее |
-| **Безопасность** | Аутентификация (JWT, роли) | 🔜 Далее |
+| **Безопасность** | Аутентификация (JWT, роли) | ✅ Готово |
 | | Rate Limiting | 🔜 Далее |
 | **Мониторинг** | Prometheus-метрики | 🔜 Далее |
 | | Health checks (`/health`, `/ready`) | 🔜 Далее |
@@ -285,7 +285,6 @@ System.out.println(resp.getValue().toStringUtf8());
 | **Качество** | CI/CD (GitHub Actions, линтинг) | ✅ Готово |
 | | Бенчмарки (движок + API) | ✅ Готово |
 | | Структура тестов (unit, integration) | ✅ Готово |
-
 ---
 
 ## 📁 Структура проекта

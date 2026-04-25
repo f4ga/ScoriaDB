@@ -257,7 +257,6 @@ System.out.println(resp.getValue().toStringUtf8());
 | Dart | ✅ gRPC |
 
 ---
-
 ## 📈 MVP progress
 
 | Category | Component | Status |
@@ -271,12 +270,12 @@ System.out.println(resp.getValue().toStringUtf8());
 | **Transactions** | WriteBatch | ✅ Done |
 | | Interactive transactions | ✅ Done |
 | **Data organisation** | Column Families | ✅ Done |
-| **API** | Embedded Go API | ✅ Done |
+| **API** | Embedded Go API (incl. Scan) | ✅ Done |
 | | gRPC API | ✅ Done |
-| | REST API | ✅ Done |
+| | REST API + WebSocket | ✅ Done |
 | **Interfaces** | CLI client (`scoria`) | 🔜 Next |
 | | Web UI (React) | 🔜 Next |
-| **Security** | Authentication (JWT, roles) | 🔜 Next |
+| **Security** | Authentication (JWT, roles) | ✅ Done |
 | | Rate Limiting | 🔜 Next |
 | **Monitoring** | Prometheus metrics | 🔜 Next |
 | | Health checks (`/health`, `/ready`) | 🔜 Next |
@@ -284,7 +283,6 @@ System.out.println(resp.getValue().toStringUtf8());
 | **Quality** | CI/CD (GitHub Actions, linting) | ✅ Done |
 | | Benchmarks (engine + API) | ✅ Done |
 | | Test structure (unit, integration) | ✅ Done |
-
 ---
 
 ## 📁 Project structure

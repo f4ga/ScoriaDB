@@ -20,7 +20,7 @@ func TestServer_GetPut(t *testing.T) {
 	defer db.Close()
 
 	// Create server
-	srv := NewServer(db)
+	srv := NewServer(db, []byte("test-secret"))
 
 	// Test Put
 	ctx := context.Background()
@@ -75,7 +75,7 @@ func TestServer_Delete(t *testing.T) {
 	}
 	defer db.Close()
 
-	srv := NewServer(db)
+	srv := NewServer(db, []byte("test-secret"))
 	ctx := context.Background()
 
 	// First put a key
@@ -118,7 +118,7 @@ func TestServer_BeginCommitTxn(t *testing.T) {
 	}
 	defer db.Close()
 
-	srv := NewServer(db)
+	srv := NewServer(db, []byte("test-secret"))
 	ctx := context.Background()
 
 	// Begin transaction
@@ -145,29 +145,5 @@ func TestServer_BeginCommitTxn(t *testing.T) {
 	})
 	if status.Code(err) != codes.NotFound {
 		t.Errorf("Expected NotFound error, got %v", err)
-	}
-}
-
-func TestServer_UnimplementedMethods(t *testing.T) {
-	tmpDir := t.TempDir()
-	db, err := scoria.NewScoriaDB(tmpDir)
-	if err != nil {
-		t.Fatalf("Failed to create database: %v", err)
-	}
-	defer db.Close()
-
-	srv := NewServer(db)
-	ctx := context.Background()
-
-	// CreateUser should return Unimplemented
-	_, err = srv.CreateUser(ctx, &proto.CreateUserRequest{})
-	if status.Code(err) != codes.Unimplemented {
-		t.Errorf("Expected Unimplemented error, got %v", err)
-	}
-
-	// Authenticate should return Unimplemented
-	_, err = srv.Authenticate(ctx, &proto.AuthRequest{})
-	if status.Code(err) != codes.Unimplemented {
-		t.Errorf("Expected Unimplemented error, got %v", err)
 	}
 }

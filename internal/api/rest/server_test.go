@@ -19,7 +19,7 @@ func TestRestServer_GetPutDelete(t *testing.T) {
 	}
 	defer db.Close()
 
-	srv := NewServer(db)
+	srv := NewServer(db, []byte("test-secret"))
 
 	// Test PUT
 	putBody := `{"value": "hello world"}`
@@ -78,7 +78,7 @@ func TestRestServer_Scan(t *testing.T) {
 	}
 	defer db.Close()
 
-	srv := NewServer(db)
+	srv := NewServer(db, []byte("test-secret"))
 
 	// Insert a few keys with prefix "user:"
 	keys := []string{"user:alice", "user:bob", "other:charlie"}
@@ -131,7 +131,7 @@ func TestRestServer_CFOperations(t *testing.T) {
 		t.Fatalf("Failed to create CF: %v", err)
 	}
 
-	srv := NewServer(db)
+	srv := NewServer(db, []byte("test-secret"))
 
 	// Put into testcf
 	putBody := `{"value": "cf value", "cf": "testcf"}`
@@ -167,7 +167,7 @@ func TestRestServer_ErrorHandling(t *testing.T) {
 	}
 	defer db.Close()
 
-	srv := NewServer(db)
+	srv := NewServer(db, []byte("test-secret"))
 
 	// GET non-existent key
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/kv/nonexistent", nil)
@@ -210,7 +210,7 @@ func TestRestServer_CORS(t *testing.T) {
 	}
 	defer db.Close()
 
-	srv := NewServer(db)
+	srv := NewServer(db, []byte("test-secret"))
 
 	// OPTIONS request
 	req := httptest.NewRequest(http.MethodOptions, "/api/v1/kv/key", nil)

@@ -18,14 +18,16 @@ import (
 	scoriagrpc "scoriadb/internal/api/grpc"
 	"scoriadb/internal/api/rest"
 	"scoriadb/internal/api/ws"
+	"scoriadb/internal/auth"
 	"scoriadb/pkg/scoria"
 	"scoriadb/scoriadb/proto"
 )
 
 var (
-	dataDir   = flag.String("data-dir", "./data", "Directory for database files")
-	grpcPort  = flag.Int("grpc-port", 50051, "Port for gRPC server")
-	httpPort  = flag.Int("http-port", 8080, "Port for HTTP/REST server")
+	dataDir    = flag.String("data-dir", "./data", "Directory for database files")
+	grpcPort   = flag.Int("grpc-port", 50051, "Port for gRPC server")
+	httpPort   = flag.Int("http-port", 8080, "Port for HTTP/REST server")
+	jwtSecret  = flag.String("jwt-secret", "default-secret-change-in-production", "JWT signing secret")
 )
 
 func main() {
@@ -44,6 +46,11 @@ func main() {
 	}
 	defer db.Close()
 
+	// Ensure __auth__ column family exists and seed default admin user
+	if err := ensureAuthCFAndSeedUser(db, *jwtSecret); err != nil {
+		log.Fatalf("Failed to setup authentication: %v", err)
+	}
+
 	// Create WebSocket hub
 	hub := ws.NewHub()
 	defer hub.Close()
@@ -51,13 +58,21 @@ func main() {
 	// Wrap DB with notifier
 	notifyingDB := api.NewNotifyingDB(db, hub)
 
-	// Create gRPC server (using notifying DB to capture writes from gRPC as well)
-	grpcServer := grpc.NewServer()
-	proto.RegisterScoriaDBServer(grpcServer, scoriagrpc.NewServer(notifyingDB))
+	// Create gRPC server with authentication interceptor
+	skipMethods := map[string]bool{
+		"/scoriadb.ScoriaDB/Authenticate": true,
+		"/scoriadb.ScoriaDB/Get":          false, // requires auth
+		// Health checks could be added later
+	}
+	grpcServer := grpc.NewServer(
+		grpc.UnaryInterceptor(auth.AuthInterceptor([]byte(*jwtSecret), skipMethods)),
+		grpc.StreamInterceptor(auth.StreamAuthInterceptor([]byte(*jwtSecret), skipMethods)),
+	)
+	proto.RegisterScoriaDBServer(grpcServer, scoriagrpc.NewServer(notifyingDB, []byte(*jwtSecret)))
 	reflection.Register(grpcServer) // Enable reflection for debugging
 
-	// Create REST API server
-	restServer := rest.NewServer(notifyingDB)
+	// Create REST API server with authentication middleware
+	restServer := rest.NewServer(notifyingDB, []byte(*jwtSecret))
 
 	// Create WebSocket server
 	wsServer := ws.NewServer(hub)
@@ -132,4 +147,41 @@ func main() {
 	grpcServer.GracefulStop()
 
 	log.Println("Servers stopped.")
+}
+
+// ensureAuthCFAndSeedUser создаёт Column Family __auth__ если её нет и добавляет
+// пользователя admin с паролем admin, если в системе ещё нет пользователей.
+func ensureAuthCFAndSeedUser(db scoria.CFDB, jwtSecret string) error {
+	// Создаём CF __auth__ если её нет
+	cfs := db.ListCFs()
+	authCFExists := false
+	for _, cf := range cfs {
+		if cf == auth.AuthCF {
+			authCFExists = true
+			break
+		}
+	}
+	if !authCFExists {
+		if err := db.CreateCF(auth.AuthCF); err != nil {
+			return fmt.Errorf("failed to create auth CF: %w", err)
+		}
+		log.Printf("Created column family %s", auth.AuthCF)
+	}
+
+	// Проверяем, есть ли уже пользователи
+	users, err := auth.ListUsers(db)
+	if err != nil {
+		return fmt.Errorf("failed to list users: %w", err)
+	}
+
+	if len(users) == 0 {
+		// Создаём пользователя admin с паролем admin
+		err = auth.CreateUser(db, "admin", "admin", []string{auth.RoleAdmin})
+		if err != nil {
+			return fmt.Errorf("failed to create admin user: %w", err)
+		}
+		log.Printf("Created default admin user (username: admin, password: admin)")
+	}
+
+	return nil
 }

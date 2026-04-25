@@ -8,6 +8,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"scoriadb/internal/auth"
 	"scoriadb/pkg/scoria"
 	"scoriadb/scoriadb/proto"
 )
@@ -15,7 +16,8 @@ import (
 // server implements the ScoriaDB gRPC service.
 type server struct {
 	proto.UnimplementedScoriaDBServer
-	db scoria.CFDB
+	db        scoria.CFDB
+	jwtSecret []byte
 
 	// In-memory transaction store (for demo purposes; in production would be more robust)
 	txns   map[string]scoria.Transaction
@@ -23,10 +25,11 @@ type server struct {
 }
 
 // NewServer creates a new gRPC server that delegates to the given CFDB.
-func NewServer(db scoria.CFDB) *server {
+func NewServer(db scoria.CFDB, jwtSecret []byte) *server {
 	return &server{
-		db:   db,
-		txns: make(map[string]scoria.Transaction),
+		db:        db,
+		jwtSecret: jwtSecret,
+		txns:      make(map[string]scoria.Transaction),
 	}
 }
 
@@ -175,14 +178,47 @@ func (s *server) RollbackTxn(ctx context.Context, req *proto.RollbackTxnRequest)
 	return &proto.RollbackTxnResponse{}, nil
 }
 
-// CreateUser handles CreateUser RPC (stub for now).
+// CreateUser handles CreateUser RPC.
 func (s *server) CreateUser(ctx context.Context, req *proto.CreateUserRequest) (*proto.CreateUserResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "user management not implemented yet")
+	// Проверяем, что вызывающий пользователь имеет роль admin
+	claims, ok := auth.GetClaimsFromContext(ctx)
+	if !ok {
+		return nil, status.Error(codes.Unauthenticated, "authentication required")
+	}
+	if !auth.HasAnyRole(&auth.User{Roles: claims.Roles}, []string{auth.RoleAdmin}) {
+		return nil, status.Error(codes.PermissionDenied, "admin role required")
+	}
+
+	// Создаём пользователя
+	err := auth.CreateUser(s.db, req.GetUsername(), req.GetPassword(), req.GetRoles())
+	if err != nil {
+		switch err {
+		case auth.ErrUserAlreadyExists:
+			return nil, status.Error(codes.AlreadyExists, "user already exists")
+		case auth.ErrInvalidCredentials:
+			return nil, status.Error(codes.InvalidArgument, "invalid credentials")
+		default:
+			return nil, status.Error(codes.Internal, err.Error())
+		}
+	}
+
+	return &proto.CreateUserResponse{}, nil
 }
 
-// Authenticate handles Authenticate RPC (stub for now).
+// Authenticate handles Authenticate RPC.
 func (s *server) Authenticate(ctx context.Context, req *proto.AuthRequest) (*proto.AuthResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "authentication not implemented yet")
+	// Аутентификация не требует токена
+	token, err := auth.Authenticate(s.db, req.GetUsername(), req.GetPassword(), s.jwtSecret)
+	if err != nil {
+		switch err {
+		case auth.ErrUserNotFound, auth.ErrInvalidCredentials:
+			return nil, status.Error(codes.Unauthenticated, "invalid username or password")
+		default:
+			return nil, status.Error(codes.Internal, err.Error())
+		}
+	}
+
+	return &proto.AuthResponse{JwtToken: token}, nil
 }
 
 // generateTxnID generates a simple transaction ID (for demo purposes).
