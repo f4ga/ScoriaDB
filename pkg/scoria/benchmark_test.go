@@ -41,7 +41,6 @@ func BenchmarkScoriaGet(b *testing.B) {
 }
 
 func BenchmarkScan(b *testing.B) {
-	b.Skip("Scan not implemented – will be enabled after ScanCF is wired")
 	db := openScoriaCFBench(b)
 	defer db.Close()
 

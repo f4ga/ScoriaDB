@@ -13,17 +13,18 @@ import (
 
 // LSMEngine представляет LSM-движок с VLog и MVCC.
 type LSMEngine struct {
-	mu        sync.RWMutex
-	dataDir   string
-	memTable  *MemTable
-	vlog      *VLog
-	wal       *WAL
-	manifest  *Manifest           // журнал метаданных SSTable
-	vfs       vfs.VFS             // абстракция файловой системы
-	levels    [][]*sstable.Reader // уровни SSTable (Level0, Level1, ...)
-	LastTS    uint64              // атомарный счетчик timestamp
-	closed    bool
-	memSize   int64               // приблизительный размер MemTable в байтах
+	mu             sync.RWMutex
+	dataDir        string
+	memTable       *MemTable
+	frozenMemTable *MemTable
+	vlog           *VLog
+	wal            *WAL
+	manifest       *Manifest           // журнал метаданных SSTable
+	vfs            vfs.VFS             // абстракция файловой системы
+	levels         [][]*sstable.Reader // уровни SSTable (Level0, Level1, ...)
+	LastTS         uint64              // атомарный счетчик timestamp
+	closed         bool
+	memSize        int64               // приблизительный размер MemTable в байтах
 }
 
 // NewLSMEngine создает новый LSM-движок.
@@ -218,6 +219,16 @@ func (e *LSMEngine) DeleteWithTS(key []byte, commitTS uint64) error {
 	return nil
 }
 
+
+// ActiveMemTable возвращает активную (текущую) MemTable.
+func (e *LSMEngine) ActiveMemTable() *MemTable {
+	return e.memTable
+}
+
+// FrozenMemTable возвращает замороженную MemTable (если есть).
+func (e *LSMEngine) FrozenMemTable() *MemTable {
+	return e.frozenMemTable
+}
 
 // Close освобождает ресурсы движка.
 func (e *LSMEngine) Close() error {

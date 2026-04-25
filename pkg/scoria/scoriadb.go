@@ -1,10 +1,14 @@
 package scoria
 
 import (
+	"bytes"
 	"math"
+	"sort"
 	"sync/atomic"
 
 	"scoriadb/internal/cf"
+	"scoriadb/internal/engine"
+	"scoriadb/internal/mvcc"
 	"scoriadb/internal/txn"
 )
 
@@ -93,6 +97,110 @@ func (it *emptyIterator) Key() []byte { return nil }
 func (it *emptyIterator) Value() []byte { return nil }
 func (it *emptyIterator) Err() error { return nil }
 func (it *emptyIterator) Close() {}
+
+// mergeIterator — итератор, объединяющий данные из активной MemTable, frozen MemTable и SSTable.
+type mergeIterator struct {
+	// собранные ключи (userKey -> latest MVCCKey)
+	keys []mvcc.MVCCKey
+	// значения, соответствующие ключам
+	values [][]byte
+	// текущий индекс
+	index int
+	// ошибка, возникшая при итерации
+	err error
+}
+
+func (it *mergeIterator) Next() bool {
+	it.index++
+	return it.index < len(it.keys)
+}
+
+func (it *mergeIterator) Key() []byte {
+	if it.index < 0 || it.index >= len(it.keys) {
+		return nil
+	}
+	return it.keys[it.index].Key
+}
+
+func (it *mergeIterator) Value() []byte {
+	if it.index < 0 || it.index >= len(it.values) {
+		return nil
+	}
+	return it.values[it.index]
+}
+
+func (it *mergeIterator) Err() error {
+	return it.err
+}
+
+func (it *mergeIterator) Close() {
+	it.keys = nil
+	it.values = nil
+}
+
+// newMergeIterator создаёт mergeIterator для указанного движка и префикса.
+func newMergeIterator(eng *engine.LSMEngine, prefix []byte) *mergeIterator {
+	// Собираем ключи из активной MemTable
+	active := eng.ActiveMemTable()
+	frozen := eng.FrozenMemTable()
+
+	// map userKey -> latest MVCCKey (с максимальным timestamp)
+	latestKeys := make(map[string]mvcc.MVCCKey)
+	latestValues := make(map[string][]byte)
+
+	// Функция для обработки итератора MemTable
+	processMemTable := func(mt *engine.MemTable) {
+		if mt == nil {
+			return
+		}
+		iter := mt.NewIterator()
+		defer iter.Close()
+		for iter.Next() {
+			key := iter.Key()
+			userKey := key.Key
+			if !bytes.HasPrefix(userKey, prefix) {
+				continue
+			}
+			// Пропускаем tombstone (значение nil)
+			value := iter.Value()
+			if value == nil {
+				continue
+			}
+			// Проверяем, есть ли уже более новая версия
+			existing, ok := latestKeys[string(userKey)]
+			if !ok || key.Timestamp > existing.Timestamp {
+				latestKeys[string(userKey)] = key
+				latestValues[string(userKey)] = value
+			}
+		}
+	}
+
+	processMemTable(active)
+	processMemTable(frozen)
+
+	// TODO: добавить SSTable
+
+	// Сортируем ключи по userKey
+	userKeys := make([]string, 0, len(latestKeys))
+	for uk := range latestKeys {
+		userKeys = append(userKeys, uk)
+	}
+	sort.Strings(userKeys)
+
+	// Строим slices для итератора
+	keys := make([]mvcc.MVCCKey, len(userKeys))
+	values := make([][]byte, len(userKeys))
+	for i, uk := range userKeys {
+		keys[i] = latestKeys[uk]
+		values[i] = latestValues[uk]
+	}
+
+	return &mergeIterator{
+		keys:   keys,
+		values: values,
+		index:  -1,
+	}
+}
 
 // errorTransaction — транзакция, которая всегда возвращает ошибку.
 type errorTransaction struct {
@@ -215,9 +323,14 @@ func (db *ScoriaDB) Scan(prefix []byte) Iterator {
 }
 
 // ScanCF возвращает итератор по ключам с префиксом в указанном Column Family.
-// Временная реализация: возвращает пустой итератор (функционал будет добавлен позже).
 func (db *ScoriaDB) ScanCF(cfName string, prefix []byte) Iterator {
-	return &emptyIterator{}
+	eng, err := db.registry.GetCF(cfName)
+	if err != nil {
+		// В случае ошибки возвращаем пустой итератор (можно было бы вернуть errorIterator,
+		// но интерфейс Iterator не поддерживает ошибку при создании).
+		return &emptyIterator{}
+	}
+	return newMergeIterator(eng, prefix)
 }
 
 // NewTransaction создаёт новую транзакцию.
