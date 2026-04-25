@@ -274,7 +274,7 @@ System.out.println(resp.getValue().toStringUtf8());
 | **Организация данных** | Column Families | ✅ Готово |
 | **API** | Embedded Go API | ✅ Готово |
 | | gRPC API | ✅ Готово |
-| | REST API | 🔜 Далее |
+| | REST API | ✅ Готово |
 | **Интерфейсы** | CLI-клиент (`scoria`) | 🔜 Далее |
 | | Web UI (React) | 🔜 Далее |
 | **Безопасность** | Аутентификация (JWT, роли) | 🔜 Далее |

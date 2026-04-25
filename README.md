@@ -271,9 +271,9 @@ System.out.println(resp.getValue().toStringUtf8());
 | **Transactions** | WriteBatch | ✅ Done |
 | | Interactive transactions | ✅ Done |
 | **Data organisation** | Column Families | ✅ Done |
-| **API** | Embedded Go API | ✅ Done |
-| | gRPC API | ✅ Done |
-| | REST API | 🔜 Next |
+| **API** | Embedded Go API | ✅ Готово |
+| | gRPC API | ✅ Готово |
+| | REST API | ✅ Готово |
 | **Interfaces** | CLI client (`scoria`) | 🔜 Next |
 | | Web UI (React) | 🔜 Next |
 | **Security** | Authentication (JWT, roles) | 🔜 Next |
