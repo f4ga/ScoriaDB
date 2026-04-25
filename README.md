@@ -1,9 +1,13 @@
 
+### README.md (English)
+
+```markdown
 <div align="center">
   <img src="https://capsule-render.vercel.app/api?type=waving&color=gradient&customColorList=12&height=200&section=header&text=🪨%20ScoriaDB&fontSize=70&fontAlignY=40&animation=fadeIn" alt="Header">
   <img src="https://capsule-render.vercel.app/api?type=rect&color=gradient&customColorList=1&height=60&section=header&text=🔥%20Embedded%20LSM%20Database%20for%20Go%20|%20Solid%20as%20Stone%2C%20Light%20as%20Ash&fontSize=20&fontAlignY=50&animation=twinkling" alt="Subtitle">
   <br><br>
 
+  [![CI](https://github.com/f4ga/ScoriaDB/actions/workflows/ci.yml/badge.svg)](https://github.com/f4ga/ScoriaDB/actions/workflows/ci.yml)
   [![Go Version](https://img.shields.io/badge/Go-1.23+-00ADD8?logo=go)](https://go.dev/)
   [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
 
@@ -27,6 +31,7 @@
     <tr><td>📈</td><td><a href="#-mvp-progress">MVP progress</a></td></tr>
     <tr><td>📁</td><td><a href="#-project-structure">Project structure</a></td></tr>
     <tr><td>🗺️</td><td><a href="#-roadmap">Roadmap</a></td></tr>
+    <tr><td>📄</td><td><a href="#-license">License</a></td></tr>
     <tr><td>❓</td><td><a href="#-faq">FAQ</a></td></tr>
     <tr><td>🤝</td><td><a href="#-support-the-project">Support the project</a></td></tr>
   </table>
@@ -54,7 +59,7 @@ ScoriaDB is useful for:
 - **Developers using Python, Java, C++** — access data from any language via gRPC without dancing with cgo or writing wrappers.
 - **Teams with microservice architecture** — one server, many clients in different languages, a single unified API.
 - **Those who build prototypes** — built‑in interfaces (CLI, Web UI) let you see your data immediately.
-- **Anyone tired of spinning up Redis for a simple cache** or writing an HTTP wrapper around BoltDB.
+- **Anyone who needs a simple persistent KV engine without deploying a separate server.**
 
 ---
 
@@ -75,7 +80,7 @@ ScoriaDB is useful for:
 
 ## 📊 Benchmarks
 
-Measured on Intel Core i3-1215U (8 threads), Go 1.23+, Linux amd64.
+Measured on Intel Core i3-1215U (8 threads), Go 1.23+, Linux amd64.  
 Run with: `go test -bench=. ./internal/engine ./pkg/scoria`
 
 | Operation | Value size | Time (ns/op) | Throughput |
@@ -94,38 +99,20 @@ Run with: `go test -bench=. ./internal/engine ./pkg/scoria`
 
 ## 📊 How we compare to Redis
 
-ScoriaDB is **not** a drop-in replacement for Redis. Redis is a remote, in-memory data platform; ScoriaDB is an embedded, disk-backed database. However, in single-node throughput and read latency, ScoriaDB competes directly with Redis Community Edition.
+ScoriaDB is **not** a drop-in replacement for Redis. Redis is a remote, in-memory data platform; ScoriaDB is an embedded, disk-backed database.  
+The table below shows **local benchmarks** (no network overhead) and **network benchmarks** for Redis to illustrate the architectural difference.
 
-**Trusted benchmarks for Redis CE** (Alibaba Cloud, 2025) :
-- `GET`: ~204,690 ops/sec (avg ~0.31 ms)
-- `SET`: ~142,376 ops/sec (avg ~0.45 ms)
-
-**ScoriaDB benchmarks** (local, embedded, no network overhead):
-- `Get`: ~6,600,000 ops/sec (~150 ns/op)
-- `Put`: ~935,000 ops/sec (~1,070 ns/op)
-
-**Why the massive difference?**
-1. **No network stack.** ScoriaDB runs inside your process. Redis adds TCP overhead (~0.1–0.2 ms per request).
-2. **Single-machine, single-client.** Our benchmark measures raw engine throughput; Redis benchmarks measure server throughput under load.
-
-**When ScoriaDB is faster:**
-- Local, embedded use cases where network latency is unacceptable.
-- Microservices that need microsecond reads without an external cache.
-
-**When Redis wins:**
-- Distributed caching across many servers.
-- Advanced data structures (streams, pub/sub, sorted sets, etc.) .
-- Horizontal scaling via Redis Cluster.
-
-| Feature | ScoriaDB | Redis CE |
+| Feature | ScoriaDB (local) | Redis CE (network) |
 | :--- | :--- | :--- |
 | **Deployment** | Embedded library or standalone server | Separate server process |
 | **Network overhead** | None (embedded mode) | TCP (0.1–0.2 ms+) |
-| **Read latency** | ~150 ns | ~0.24–0.31 ms  |
-| **Write latency** | ~1,070 ns | ~0.45 ms  |
+| **Read latency (Get)** | ~150 ns | ~0.24–0.31 ms  |
+| **Write latency (Set)** | ~1,070 ns | ~0.45 ms  |
 | **Data persistence** | Full (WAL, Manifest, fsync) | Optional (RDB, AOF) |
 | **Transactions** | ACID, Snapshot Isolation | None (pipelining) |
 | **Multi-language** | gRPC (12+ languages) | Native protocol (client libraries) |
+
+Network benchmarks for ScoriaDB will be published after the gRPC API is fully stabilised (see Roadmap).
 
 ---
 
@@ -149,6 +136,8 @@ ScoriaDB is **not** a drop-in replacement for Redis. Redis is a remote, in-memor
 | **Interactive transactions** | `Begin()` → `Get`/`Put`/`Delete` → `Commit()`/`Rollback()` with optimistic locking. |
 | **WriteBatch** | Atomic group of operations under a single `commitTS`. |
 | **Conflict detection** | At commit time, checks whether any key was changed after `startTS`. |
+
+*Note: interactive transactions are fully functional in embedded mode; gRPC‑based transactions are being stabilised.*
 
 ### Data & organisation
 | Feature | Description |
@@ -185,12 +174,6 @@ Together, they guarantee **full recovery after a sudden power loss** — no meta
 ## 🌐 Multi-language support
 
 ScoriaDB provides a **gRPC API** based on Protocol Buffers. Any language with gRPC support can work with your database.
-
-### Steps for any language
-1. Install gRPC and protobuf for your language.
-2. Download the `.proto` file from the repository.
-3. Generate client code with `protoc`.
-4. Use the generated client — call methods like ordinary functions.
 
 ### 🐹 Go (native)
 ```go
@@ -257,6 +240,7 @@ System.out.println(resp.getValue().toStringUtf8());
 | Dart | ✅ gRPC |
 
 ---
+
 ## 📈 MVP progress
 
 | Category | Component | Status |
@@ -268,12 +252,12 @@ System.out.println(resp.getValue().toStringUtf8());
 | | Leveled Compaction | ✅ Done |
 | **Versioning** | MVCC (Snapshot Isolation) | ✅ Done |
 | **Transactions** | WriteBatch | ✅ Done |
-| | Interactive transactions | ✅ Done |
+| | Interactive transactions | ✅ Done (embedded) |
 | **Data organisation** | Column Families | ✅ Done |
-| **API** | Embedded Go API (incl. Scan) | ✅ Done |
+| **API** | Embedded Go API | ✅ Done |
 | | gRPC API | ✅ Done |
 | | REST API + WebSocket | ✅ Done |
-| **Interfaces** | CLI client (`scoria`) | 🔜 Next |
+| **Interfaces** | CLI client (`scoria`) | ✅ Done |
 | | Web UI (React) | 🔜 Next |
 | **Security** | Authentication (JWT, roles) | ✅ Done |
 | | Rate Limiting | 🔜 Next |
@@ -283,6 +267,7 @@ System.out.println(resp.getValue().toStringUtf8());
 | **Quality** | CI/CD (GitHub Actions, linting) | ✅ Done |
 | | Benchmarks (engine + API) | ✅ Done |
 | | Test structure (unit, integration) | ✅ Done |
+
 ---
 
 ## 📁 Project structure
@@ -290,7 +275,8 @@ System.out.println(resp.getValue().toStringUtf8());
 ```
 scoriadb/
 ├── cmd/
-│   └── server/              # gRPC server entry point
+│   ├── server/              # gRPC server entry point
+│   └── cli/                 # CLI client (scoria)
 ├── internal/
 │   ├── engine/              # LSM core: MemTable, SSTable, VLog, WAL, Manifest, compaction
 │   │   ├── sstable/         # SSTable read/write, Bloom filter, encoding
@@ -300,7 +286,9 @@ scoriadb/
 │   ├── txn/                 # transactions (WriteBatch, interactive)
 │   ├── cf/                  # Column Families registry + batch
 │   └── api/
-│       └── grpc/            # gRPC server implementation
+│       ├── grpc/            # gRPC server implementation
+│       ├── rest/            # REST API server
+│       └── ws/              # WebSocket hub
 ├── pkg/scoria/              # public Embedded Go API (DB interface)
 │   └── tests/               # API-level integration tests
 ├── proto/                   # protobuf service definition
@@ -320,15 +308,37 @@ scoriadb/
 - [x] Column Families
 - [x] Embedded Go API
 - [x] gRPC API
+- [x] CLI client
 - [x] CI/CD with benchmarks
 
 ### Release 2
-- [ ] **GC Value Log** — garbage collector for dead entries in the Value Log, using a bit-array and hash-table approach.
+- [ ] **GC Value Log** — garbage collector for dead entries in the Value Log.
+- [ ] **YCSB benchmarks** — comparison with BadgerDB, PebbleDB, etcd, and Redis (network measurements).
 - [ ] **Raft replication** — distributed mode with sharding.
 - [ ] **Time Travel queries** — read keys as of any past timestamp.
-- [ ] **Row-Level Security (RLS)** — prefix-based access policies within a Column Family.
-- [ ] **Chaos Monkey** — fault injection tests.
-- [ ] **YCSB benchmarks** — throughput, latency, write amplification vs BadgerDB and PebbleDB.
+- [ ] **Chaos Monkey** — fault injection tests for Raft.
+- [ ] **GitHub Pages documentation** — concise developer guide.
+
+### Release 3
+- [ ] **Enterprise security:** Row-Level Security (RLS), mTLS, auditing.
+- [ ] **Kubernetes:** Operator and Helm chart.
+- [ ] **Advanced features:** Git‑like branching, AI assistant.
+- [ ] **Business model:** Dual licensing (Apache 2.0 / BSL).
+
+---
+
+## 📄 License
+
+ScoriaDB is distributed under the **Apache License 2.0**.  
+The full license text is in the [LICENSE](LICENSE) file.  
+
+Additional terms:  
+- Third-party library notices are in [NOTICE](NOTICE).  
+- Contributions are governed by the [Contributor License Agreement](CONTRIBUTING.md).  
+- All source files contain mandatory license headers; verification is performed automatically in CI.  
+
+Enterprise features (Raft replication, Time Travel, mTLS, Row-Level Security, Kubernetes operator) will be available under a separate commercial license.  
+For commercial licensing inquiries: [your email].
 
 ---
 
@@ -343,11 +353,14 @@ BoltDB uses a B+ tree, allows only one writer at a time, and has no built‑in n
 ### 3. How does ScoriaDB differ from BadgerDB?
 Both use WiscKey (Value Log). BadgerDB is only an embedded library — no server, no interactive transactions (only batch). ScoriaDB adds interactive transactions, Column Families, Manifest, and cross‑language gRPC access.
 
-### 4. Why is ScoriaDB faster than Redis in single-node benchmarks?
-Redis is a remote server. Every `GET` goes through TCP, epoll, and the network stack . ScoriaDB runs inside your process — a `Get` is a direct function call to a B-tree. The tradeoff: Redis scales to clusters and offers far more data structures .
+### 4. Why is ScoriaDB faster than Redis in local benchmarks but slower over the network?
+Redis is a remote server. Every request traverses TCP and the network stack, adding ~0.1–0.2 ms of latency. ScoriaDB in embedded mode runs inside your process — a `Get` is a direct function call. Network benchmarks for ScoriaDB will be published once the gRPC API is fully stable, enabling a fair comparison.
 
 ### 5. Can I use ScoriaDB in production?
-The project is in MVP stage. We are actively working on stabilisation, testing, and benchmarks. For critical systems, we recommend waiting for the first stable release or thoroughly testing under your own workload.
+The project is in MVP stage. The core passes CI with the race detector, and critical structures (Manifest, WAL) are covered by tests. It can already be tried for non‑critical projects; for heavy workloads we recommend waiting for the first stable release.
+
+### 6. How do interactive transactions work over gRPC?
+In embedded mode interactive transactions are fully functional. gRPC‑based transactions are being stabilised: `BeginTxn`, `CommitTxn`, `RollbackTxn` are available but still require additional testing under concurrent load.
 
 ---
 
