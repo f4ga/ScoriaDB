@@ -36,7 +36,10 @@ jobs:
           go-version: "1.23"
 
       - name: Run tests with race detector
-        run: go test ./... -race -coverprofile=coverage.out -covermode=atomic
+        run: go test -race ./...
+
+      - name: Generate coverage profile (only for testable packages)
+        run: go test -coverprofile=coverage.out -covermode=atomic ./internal/... ./pkg/... ./cmd/...
 
   integration:
     name: Integration Tests
