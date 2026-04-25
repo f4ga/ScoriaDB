@@ -80,8 +80,14 @@ func TestWALCRCError(t *testing.T) {
 		t.Fatalf("failed to open file for corruption: %v", err)
 	}
 	// Смещаемся на позицию после заголовка (например, 20 байт)
-	file.Seek(20, 0)
-	file.Write([]byte{0xFF})
+	if _, err := file.Seek(20, 0); err != nil {
+		file.Close()
+		t.Fatalf("failed to seek: %v", err)
+	}
+	if _, err := file.Write([]byte{0xFF}); err != nil {
+		file.Close()
+		t.Fatalf("failed to write corruption: %v", err)
+	}
 	file.Close()
 
 	// Восстановление должно вернуть ошибку CRC

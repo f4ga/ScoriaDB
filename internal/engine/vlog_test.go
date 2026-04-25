@@ -78,8 +78,14 @@ func TestVLogCRCError(t *testing.T) {
 	}
 	// Смещаемся за заголовок и CRC (8 байт) + offset
 	corruptPos := vp.Offset + 8 + 5 // 5-й байт значения
-	file.Seek(corruptPos, 0)
-	file.Write([]byte{0xFF})
+	if _, err := file.Seek(corruptPos, 0); err != nil {
+		file.Close()
+		t.Fatalf("failed to seek: %v", err)
+	}
+	if _, err := file.Write([]byte{0xFF}); err != nil {
+		file.Close()
+		t.Fatalf("failed to write corruption: %v", err)
+	}
 	file.Close()
 
 	// Попытка чтения должна вернуть ошибку CRC

@@ -120,18 +120,30 @@ func TestCompactionSimple(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create writer1: %v", err)
 	}
-	writer1.Append(mvcc.NewMVCCKey([]byte("a"), 100), []byte("val1"))
-	writer1.Append(mvcc.NewMVCCKey([]byte("b"), 100), []byte("val2"))
-	writer1.Finish()
+	if err := writer1.Append(mvcc.NewMVCCKey([]byte("a"), 100), []byte("val1")); err != nil {
+		t.Fatalf("failed to append to writer1: %v", err)
+	}
+	if err := writer1.Append(mvcc.NewMVCCKey([]byte("b"), 100), []byte("val2")); err != nil {
+		t.Fatalf("failed to append to writer1: %v", err)
+	}
+	if err := writer1.Finish(); err != nil {
+		t.Fatalf("failed to finish writer1: %v", err)
+	}
 
 	// Записываем второй SSTable
 	writer2, err := NewWriter(path2)
 	if err != nil {
 		t.Fatalf("failed to create writer2: %v", err)
 	}
-	writer2.Append(mvcc.NewMVCCKey([]byte("b"), 200), []byte("val2_new")) // обновление ключа b
-	writer2.Append(mvcc.NewMVCCKey([]byte("c"), 100), []byte("val3"))
-	writer2.Finish()
+	if err := writer2.Append(mvcc.NewMVCCKey([]byte("b"), 200), []byte("val2_new")); err != nil { // обновление ключа b
+		t.Fatalf("failed to append to writer2: %v", err)
+	}
+	if err := writer2.Append(mvcc.NewMVCCKey([]byte("c"), 100), []byte("val3")); err != nil {
+		t.Fatalf("failed to append to writer2: %v", err)
+	}
+	if err := writer2.Finish(); err != nil {
+		t.Fatalf("failed to finish writer2: %v", err)
+	}
 
 	// Открываем оба SSTable
 	reader1, _ := Open(path1)
@@ -150,10 +162,18 @@ func TestCompactionSimple(t *testing.T) {
 	// Для простоты просто добавим все ключи из reader2, затем из reader1 (поздние версии перезапишут ранние).
 	// Пропускаем из-за отсутствия итератора.
 	// Вместо этого просто создадим новый SSTable с ожидаемыми ключами.
-	writerMerged.Append(mvcc.NewMVCCKey([]byte("a"), 100), []byte("val1"))
-	writerMerged.Append(mvcc.NewMVCCKey([]byte("b"), 200), []byte("val2_new"))
-	writerMerged.Append(mvcc.NewMVCCKey([]byte("c"), 100), []byte("val3"))
-	writerMerged.Finish()
+	if err := writerMerged.Append(mvcc.NewMVCCKey([]byte("a"), 100), []byte("val1")); err != nil {
+		t.Fatalf("failed to append to writerMerged: %v", err)
+	}
+	if err := writerMerged.Append(mvcc.NewMVCCKey([]byte("b"), 200), []byte("val2_new")); err != nil {
+		t.Fatalf("failed to append to writerMerged: %v", err)
+	}
+	if err := writerMerged.Append(mvcc.NewMVCCKey([]byte("c"), 100), []byte("val3")); err != nil {
+		t.Fatalf("failed to append to writerMerged: %v", err)
+	}
+	if err := writerMerged.Finish(); err != nil {
+		t.Fatalf("failed to finish writerMerged: %v", err)
+	}
 
 	// Проверяем объединенный SSTable
 	readerMerged, err := Open(mergedPath)

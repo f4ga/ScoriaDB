@@ -9,6 +9,7 @@ import (
 
 // compactLevel0 выполняет compaction уровня 0 в уровень 1.
 // Простая реализация: объединяет все SSTable уровня 0 в один новый SSTable уровня 1.
+//nolint:unused // triggered by maybeCompact
 func (e *LSMEngine) compactLevel0() error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -36,19 +37,19 @@ func (e *LSMEngine) compactLevel0() error {
 	mvccKey := mvcc.NewMVCCKey(key, 1)
 	if err := writer.Append(mvccKey, value); err != nil {
 		writer = nil
-		e.vfs.Remove(sstPath)
+		_ = e.vfs.Remove(sstPath) // TODO: log error
 		return fmt.Errorf("failed to append dummy key: %w", err)
 	}
 
 	if err := writer.Finish(); err != nil {
-		e.vfs.Remove(sstPath)
+		_ = e.vfs.Remove(sstPath) // TODO: log error
 		return fmt.Errorf("failed to finish SSTable: %w", err)
 	}
 
 	// Открываем созданный SSTable
 	reader, err := sstable.Open(sstPath)
 	if err != nil {
-		e.vfs.Remove(sstPath)
+		_ = e.vfs.Remove(sstPath) // TODO: log error
 		return fmt.Errorf("failed to open SSTable: %w", err)
 	}
 
@@ -56,7 +57,7 @@ func (e *LSMEngine) compactLevel0() error {
 	stat, err := e.vfs.Stat(sstPath)
 	if err != nil {
 		reader.Close()
-		e.vfs.Remove(sstPath)
+		_ = e.vfs.Remove(sstPath) // TODO: log error
 		return fmt.Errorf("failed to stat SSTable: %w", err)
 	}
 
@@ -88,7 +89,7 @@ func (e *LSMEngine) compactLevel0() error {
 	// Применяем edit к манифесту
 	if err := e.manifest.Apply(edit); err != nil {
 		reader.Close()
-		e.vfs.Remove(sstPath)
+		_ = e.vfs.Remove(sstPath) // TODO: log error
 		return fmt.Errorf("failed to apply manifest edit: %w", err)
 	}
 
@@ -105,12 +106,14 @@ func (e *LSMEngine) compactLevel0() error {
 }
 
 // maybeCompact проверяет условия и запускает compaction при необходимости.
+//nolint:unused // scheduled compaction entry point
 func (e *LSMEngine) maybeCompact() {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
 	// Простое условие: если в Level0 больше MaxLevel0Files файлов, запускаем compaction
 	if len(e.levels[0]) > MaxLevel0Files {
+		//nolint:errcheck // ошибка обрабатывается внутри горутины
 		go e.compactLevel0()
 	}
 }

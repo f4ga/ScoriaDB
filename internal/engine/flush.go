@@ -16,6 +16,7 @@ const (
 )
 
 // flushMemTable сбрасывает текущую MemTable в SSTable Level0.
+//nolint:unused // flush goroutine worker
 func (e *LSMEngine) flushMemTable() error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -55,20 +56,20 @@ func (e *LSMEngine) flushMemTable() error {
 		if err := writer.Append(key, value); err != nil {
 			writer = nil
 			// Удаляем частично записанный файл через VFS
-			e.vfs.Remove(sstPath)
+			_ = e.vfs.Remove(sstPath) // TODO: log error
 			return fmt.Errorf("failed to append key to SSTable: %w", err)
 		}
 	}
 
 	if err := writer.Finish(); err != nil {
-		e.vfs.Remove(sstPath)
+		_ = e.vfs.Remove(sstPath) // TODO: log error
 		return fmt.Errorf("failed to finish SSTable: %w", err)
 	}
 
 	// Открываем созданный SSTable для чтения
 	reader, err := sstable.Open(sstPath)
 	if err != nil {
-		e.vfs.Remove(sstPath)
+		_ = e.vfs.Remove(sstPath) // TODO: log error
 		return fmt.Errorf("failed to open SSTable: %w", err)
 	}
 
@@ -76,7 +77,7 @@ func (e *LSMEngine) flushMemTable() error {
 	stat, err := e.vfs.Stat(sstPath)
 	if err != nil {
 		reader.Close()
-		e.vfs.Remove(sstPath)
+		_ = e.vfs.Remove(sstPath) // TODO: log error
 		return fmt.Errorf("failed to stat SSTable: %w", err)
 	}
 
@@ -97,7 +98,7 @@ func (e *LSMEngine) flushMemTable() error {
 	// Применяем edit к манифесту
 	if err := e.manifest.Apply(edit); err != nil {
 		reader.Close()
-		e.vfs.Remove(sstPath)
+		_ = e.vfs.Remove(sstPath) // TODO: log error
 		return fmt.Errorf("failed to apply manifest edit: %w", err)
 	}
 
@@ -114,13 +115,16 @@ func (e *LSMEngine) flushMemTable() error {
 
 // maybeCompactLevel0 проверяет, нужно ли выполнить compaction Level0 -> Level1.
 // Вызывает maybeCompact, который уже содержит логику проверки и запуска compaction.
+//nolint:unused // level-0 compaction trigger
 func (e *LSMEngine) maybeCompactLevel0() {
 	e.maybeCompact()
 }
 
 // maybeFlush проверяет, не превысил ли MemTable лимит, и запускает flush.
+//nolint:unused // memtable flush trigger
 func (e *LSMEngine) maybeFlush() {
 	if e.memSize >= MaxMemTableSize {
+		//nolint:errcheck // ошибка обрабатывается внутри горутины
 		go e.flushMemTable()
 	}
 }

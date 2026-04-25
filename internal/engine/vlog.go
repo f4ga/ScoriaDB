@@ -130,7 +130,9 @@ func (v *VLog) Write(value []byte) (ValuePointer, error) {
 
 	// Обновляем размер и перемаппируем mmap
 	v.size += int64(8 + len(value))
-	v.remap()
+	if err := v.remap(); err != nil {
+		return ValuePointer{}, fmt.Errorf("failed to remap vlog: %w", err)
+	}
 
 	return ValuePointer{Offset: offset, Size: int32(len(value))}, nil
 }

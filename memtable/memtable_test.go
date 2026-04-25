@@ -184,19 +184,27 @@ func TestMemTable_Size(t *testing.T) {
 	}
 
 	// Добавляем элементы
-	mt.Set("a", "1")
+	if err := mt.Set("a", "1"); err != nil {
+		t.Fatalf("Set failed: %v", err)
+	}
 	if size := mt.Size(); size != 1 {
 		t.Errorf("Size after one insert should be 1, got %d", size)
 	}
 
-	mt.Set("b", "2")
-	mt.Set("c", "3")
+	if err := mt.Set("b", "2"); err != nil {
+		t.Fatalf("Set failed: %v", err)
+	}
+	if err := mt.Set("c", "3"); err != nil {
+		t.Fatalf("Set failed: %v", err)
+	}
 	if size := mt.Size(); size != 3 {
 		t.Errorf("Size after three inserts should be 3, got %d", size)
 	}
 
 	// Удаляем элемент
-	mt.Delete("b")
+	if err := mt.Delete("b"); err != nil {
+		t.Fatalf("Delete failed: %v", err)
+	}
 	if size := mt.Size(); size != 2 {
 		t.Errorf("Size after deletion should be 2, got %d", size)
 	}

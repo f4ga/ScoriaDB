@@ -104,6 +104,7 @@ func bloomHash(key []byte) (uint32, uint32) {
 }
 
 // optimalBitsPerKey вычисляет оптимальное количество бит на ключ для заданной вероятности ошибки.
+//nolint:unused // will be used for dynamic Bloom sizing
 func optimalBitsPerKey(falsePositiveRate float64) int {
 	// Формула: m = -n * ln(p) / (ln(2)^2)
 	// Для p=0.01 получаем примерно 9.6 бит на ключ
