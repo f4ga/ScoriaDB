@@ -24,6 +24,7 @@
     <tr><td>🧩</td><td><a href="#-features--capabilities">Features & capabilities</a></td></tr>
     <tr><td>🛡️</td><td><a href="#-durability-and-crash-recovery">Durability & crash recovery</a></td></tr>
     <tr><td>🕰️</td><td><a href="#-how-mvcc-works">How MVCC works</a></td></tr>
+    <tr><td>🚀</td><td><a href="#-quick-start">Quick start</a></td></tr>
     <tr><td>🌐</td><td><a href="#-multi-language-support">Multi‑language support</a></td></tr>
     <tr><td>📈</td><td><a href="#-mvp-progress">MVP progress</a></td></tr>
     <tr><td>📁</td><td><a href="#-project-structure">Project structure</a></td></tr>
@@ -168,6 +169,52 @@ Together, they guarantee **full recovery after a sudden power loss** — no meta
 
 ---
 
+## 🚀 Quick start
+
+### Run with Docker (recommended)
+
+```bash
+git clone https://github.com/f4ga/scoriadb.git
+cd scoriadb
+
+# Start server and run CLI integration test
+docker compose -f deployments/docker-compose.yml up --build
+
+# Stop
+docker compose -f deployments/docker-compose.yml down
+```
+
+### Build and run locally
+
+```bash
+git clone https://github.com/f4ga/scoriadb.git
+cd scoriadb
+
+# Build server and CLI
+go build -o scoria-server ./cmd/server
+go build -o scoria-cli ./cmd/cli
+
+# Start server (gRPC :50051, HTTP :8080)
+./scoria-server &
+
+# Get token (seed admin/admin on first run)
+TOKEN=$(./scoria-cli --addr localhost:50051 admin auth admin admin)
+
+# CRUD operations
+./scoria-cli --addr localhost:50051 --token "$TOKEN" set hello world
+./scoria-cli --addr localhost:50051 --token "$TOKEN" get hello
+./scoria-cli --addr localhost:50051 --token "$TOKEN" del hello
+
+# Health check
+curl http://localhost:8080/health
+
+# Run tests and benchmarks
+go test -race ./...
+go test -bench=. ./internal/engine ./pkg/scoria
+```
+
+---
+
 ## 🌐 Multi-language support
 
 ScoriaDB provides a **gRPC API** based on Protocol Buffers. Any language with gRPC support can work with your database.
@@ -260,7 +307,7 @@ System.out.println(resp.getValue().toStringUtf8());
 | | Rate Limiting | 🔜 Next |
 | **Monitoring** | Prometheus metrics | 🔜 Next |
 | | Health checks (`/health`, `/ready`) | 🔜 Next |
-| **DevOps** | Docker & docker‑compose | 🔜 Next |
+| **DevOps** | Docker & docker‑compose | ✅ Done |
 | **Quality** | CI/CD (GitHub Actions, linting) | ✅ Done |
 | | Benchmarks (engine + API) | ✅ Done |
 | | Test structure (unit, integration) | ✅ Done |
@@ -292,7 +339,7 @@ scoriadb/
 ├── scoriadb/                # generated protobuf Go code
 ├── tests/                   # end-to-end & integration tests
 ├── web/                     # React frontend (planned)
-└── deployments/             # Docker & docker-compose (planned)
+└── deployments/             # Docker & docker-compose
 ```
 
 ---
@@ -307,6 +354,7 @@ scoriadb/
 - [x] gRPC API
 - [x] CLI client
 - [x] CI/CD with benchmarks
+- [x] Docker & docker-compose
 
 ### Release 2
 - [ ] **GC Value Log** — garbage collector for dead entries in the Value Log.

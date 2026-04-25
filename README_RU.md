@@ -24,6 +24,7 @@
     <tr><td>🧩</td><td><a href="#-возможности-и-функции">Возможности и функции</a></td></tr>
     <tr><td>🛡️</td><td><a href="#-надёжность-и-восстановление-после-сбоев">Надёжность и восстановление после сбоев</a></td></tr>
     <tr><td>🕰️</td><td><a href="#-как-работает-mvcc">Как работает MVCC</a></td></tr>
+    <tr><td>🚀</td><td><a href="#-быстрый-старт">Быстрый старт</a></td></tr>
     <tr><td>🌐</td><td><a href="#-поддержка-языков">Поддержка языков</a></td></tr>
     <tr><td>📈</td><td><a href="#-прогресс-mvp">Прогресс MVP</a></td></tr>
     <tr><td>📁</td><td><a href="#-структура-проекта">Структура проекта</a></td></tr>
@@ -168,6 +169,52 @@ ScoriaDB **не является** заменой Redis. Redis — это уда
 
 ---
 
+## 🚀 Быстрый старт
+
+### Запуск через Docker (рекомендуется)
+
+```bash
+git clone https://github.com/f4ga/scoriadb.git
+cd scoriadb
+
+# Запустить сервер и пройти интеграционный тест CLI
+docker compose -f deployments/docker-compose.yml up --build
+
+# Остановить
+docker compose -f deployments/docker-compose.yml down
+```
+
+### Сборка и запуск локально
+
+```bash
+git clone https://github.com/f4ga/scoriadb.git
+cd scoriadb
+
+# Собрать сервер и CLI
+go build -o scoria-server ./cmd/server
+go build -o scoria-cli ./cmd/cli
+
+# Запустить сервер (gRPC :50051, HTTP :8080)
+./scoria-server &
+
+# Получить токен (при первом старте создаётся admin/admin)
+TOKEN=$(./scoria-cli --addr localhost:50051 admin auth admin admin)
+
+# CRUD операции
+./scoria-cli --addr localhost:50051 --token "$TOKEN" set hello world
+./scoria-cli --addr localhost:50051 --token "$TOKEN" get hello
+./scoria-cli --addr localhost:50051 --token "$TOKEN" del hello
+
+# Проверка здоровья
+curl http://localhost:8080/health
+
+# Запуск тестов и бенчмарков
+go test -race ./...
+go test -bench=. ./internal/engine ./pkg/scoria
+```
+
+---
+
 ## 🌐 Поддержка языков
 
 ScoriaDB предоставляет **gRPC API** на основе Protocol Buffers. Любой язык с поддержкой gRPC может работать с вашей базой данных.
@@ -260,7 +307,7 @@ System.out.println(resp.getValue().toStringUtf8());
 | | Rate Limiting | 🔜 Далее |
 | **Мониторинг** | Prometheus-метрики | 🔜 Далее |
 | | Health checks (`/health`, `/ready`) | 🔜 Далее |
-| **DevOps** | Docker и docker‑compose | 🔜 Далее |
+| **DevOps** | Docker и docker‑compose | ✅ Готово |
 | **Качество** | CI/CD (GitHub Actions, линтинг) | ✅ Готово |
 | | Бенчмарки (движок + API) | ✅ Готово |
 | | Структура тестов (unit, integration) | ✅ Готово |
@@ -292,7 +339,7 @@ scoriadb/
 ├── scoriadb/                # сгенерированный код protobuf для Go
 ├── tests/                   # end-to-end и интеграционные тесты
 ├── web/                     # React фронтенд (запланирован)
-└── deployments/             # Docker и docker-compose (запланированы)
+└── deployments/             # Docker и docker-compose
 ```
 
 ---
@@ -307,6 +354,7 @@ scoriadb/
 - [x] gRPC API
 - [x] CLI-клиент
 - [x] CI/CD с бенчмарками
+- [x] Docker и docker-compose
 
 ### Релиз 2: Стабильность и распределённость
 - [ ] **GC Value Log** — сборщик мусора для мёртвых записей в Value Log.
