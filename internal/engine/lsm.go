@@ -297,6 +297,18 @@ func decodeValuePointer(data []byte) (ValuePointer, bool) {
 	return ValuePointer{Offset: int64(offset), Size: int32(size)}, true
 }
 
+// ReadVLogValue читает значение из Value Log по указателю.
+// Указатель имеет формат [fileID: 8 байт][offset: 4 байта].
+// В текущей реализации fileID игнорируется (всегда 0), а offset интерпретируется как размер.
+func (e *LSMEngine) ReadVLogValue(fileID uint64, offset uint32) ([]byte, error) {
+	if e.vlog == nil {
+		return nil, fmt.Errorf("vlog not initialized")
+	}
+	// Создаем ValuePointer: fileID становится смещением, offset становится размером
+	vp := ValuePointer{Offset: int64(fileID), Size: int32(offset)}
+	return e.vlog.Read(vp)
+}
+
 // recoverFromWAL восстанавливает MemTable из WAL.
 func recoverFromWAL(wal *WAL, memTable *MemTable, vlog *VLog) error {
 	return wal.Recover(func(entry *WalEntry) error {

@@ -128,7 +128,6 @@ func TestGetUser(t *testing.T) {
 }
 
 func TestListUsers(t *testing.T) {
-	t.Skip("known issue: ScanCF returns VLog pointers, fix pending")
 	dir := t.TempDir()
 	db, err := scoria.NewScoriaDB(dir)
 	if err != nil {

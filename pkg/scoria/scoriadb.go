@@ -2,6 +2,7 @@ package scoria
 
 import (
 	"bytes"
+	"encoding/binary"
 	"math"
 	"sort"
 	"sync/atomic"
@@ -102,8 +103,12 @@ func (it *emptyIterator) Close() {}
 type mergeIterator struct {
 	// собранные ключи (userKey -> latest MVCCKey)
 	keys []mvcc.MVCCKey
-	// значения, соответствующие ключам
-	values [][]byte
+	// сырые значения (inline или указатели на VLog)
+	rawValues [][]byte
+	// разрешённые значения (кеш)
+	resolvedValues [][]byte
+	// движок для чтения из VLog
+	engine *engine.LSMEngine
 	// текущий индекс
 	index int
 	// ошибка, возникшая при итерации
@@ -123,10 +128,39 @@ func (it *mergeIterator) Key() []byte {
 }
 
 func (it *mergeIterator) Value() []byte {
-	if it.index < 0 || it.index >= len(it.values) {
+	if it.index < 0 || it.index >= len(it.rawValues) {
 		return nil
 	}
-	return it.values[it.index]
+	
+	// Если значение уже разрешено, возвращаем его
+	if it.resolvedValues != nil && it.resolvedValues[it.index] != nil {
+		return it.resolvedValues[it.index]
+	}
+	
+	raw := it.rawValues[it.index]
+	// Если длина 12 байт — это указатель на VLog
+	if len(raw) == 12 {
+		// Декодируем указатель: [fileID: 8 байт][offset: 4 байта]
+		fileID := binary.BigEndian.Uint64(raw[0:8])
+		offset := binary.BigEndian.Uint32(raw[8:12])
+		
+		// Читаем значение из VLog
+		val, err := it.engine.ReadVLogValue(fileID, offset)
+		if err != nil {
+			it.err = err
+			return nil
+		}
+		
+		// Инициализируем кеш, если нужно
+		if it.resolvedValues == nil {
+			it.resolvedValues = make([][]byte, len(it.rawValues))
+		}
+		it.resolvedValues[it.index] = val
+		return val
+	}
+	
+	// Иначе это inline значение
+	return raw
 }
 
 func (it *mergeIterator) Err() error {
@@ -135,7 +169,8 @@ func (it *mergeIterator) Err() error {
 
 func (it *mergeIterator) Close() {
 	it.keys = nil
-	it.values = nil
+	it.rawValues = nil
+	it.resolvedValues = nil
 }
 
 // newMergeIterator создаёт mergeIterator для указанного движка и префикса.
@@ -189,16 +224,17 @@ func newMergeIterator(eng *engine.LSMEngine, prefix []byte) *mergeIterator {
 
 	// Строим slices для итератора
 	keys := make([]mvcc.MVCCKey, len(userKeys))
-	values := make([][]byte, len(userKeys))
+	rawValues := make([][]byte, len(userKeys))
 	for i, uk := range userKeys {
 		keys[i] = latestKeys[uk]
-		values[i] = latestValues[uk]
+		rawValues[i] = latestValues[uk]
 	}
 
 	return &mergeIterator{
-		keys:   keys,
-		values: values,
-		index:  -1,
+		keys:      keys,
+		rawValues: rawValues,
+		engine:    eng,
+		index:     -1,
 	}
 }
 
