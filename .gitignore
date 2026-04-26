@@ -11,6 +11,15 @@ wal.log
 *.md.tmp
 functz.md
 plan.md   # если не хочешь коммитить план
+wal.log
+*.log
+data/ 
+scoria
+scoria-server
+scoria-cli
+server
+plan1.md
+functz.md
 # C extensions
 *.so
 

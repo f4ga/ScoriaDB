@@ -11,7 +11,7 @@ import (
 	"scoriadb/internal/mvcc"
 )
 
-// LSMEngine представляет LSM-движок с VLog и MVCC.
+// LSMEngine represents an LSM engine with VLog and MVCC.
 type LSMEngine struct {
 	mu             sync.RWMutex
 	dataDir        string
@@ -19,32 +19,32 @@ type LSMEngine struct {
 	frozenMemTable *MemTable
 	vlog           *VLog
 	wal            *WAL
-	manifest       *Manifest           // журнал метаданных SSTable
-	vfs            vfs.VFS             // абстракция файловой системы
-	levels         [][]*sstable.Reader // уровни SSTable (Level0, Level1, ...)
-	LastTS         uint64              // атомарный счетчик timestamp
+	manifest       *Manifest           // SSTable metadata journal
+	vfs            vfs.VFS             // filesystem abstraction
+	levels         [][]*sstable.Reader // SSTable levels (Level0, Level1, ...)
+	LastTS         uint64              // atomic timestamp counter
 	closed         bool
-	memSize        int64               // приблизительный размер MemTable в байтах
+	memSize        int64               // approximate MemTable size in bytes
 }
 
-// NewLSMEngine создает новый LSM-движок.
+// NewLSMEngine creates a new LSM engine.
 func NewLSMEngine(dataDir string) (*LSMEngine, error) {
-	// Создаём VFS (стандартная реализация, использующая os)
+	// Create VFS (standard implementation using os)
 	vfs := vfs.NewDefaultVFS()
 	
-	// Создаём директорию через VFS
+	// Create directory via VFS
 	if err := vfs.MkdirAll(dataDir, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create data directory: %w", err)
 	}
 
-	// Открываем манифест
+	// Open manifest
 	manifestPath := filepath.Join(dataDir, "MANIFEST")
 	manifest, err := NewManifest(vfs, manifestPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open manifest: %w", err)
 	}
 
-	// Открываем VLog (пока используем старый API, позже обновим)
+	// Open VLog (currently using old API, will be updated later)
 	vlogPath := filepath.Join(dataDir, "vlog.db")
 	vlog, err := OpenVLog(vlogPath)
 	if err != nil {
@@ -52,7 +52,7 @@ func NewLSMEngine(dataDir string) (*LSMEngine, error) {
 		return nil, fmt.Errorf("failed to open vlog: %w", err)
 	}
 
-	// Открываем WAL (пока используем старый API)
+	// Open WAL (currently using old API)
 	walPath := filepath.Join(dataDir, "wal.log")
 	wal, err := OpenWAL(walPath)
 	if err != nil {
@@ -61,7 +61,7 @@ func NewLSMEngine(dataDir string) (*LSMEngine, error) {
 		return nil, fmt.Errorf("failed to open wal: %w", err)
 	}
 
-	// Восстанавливаем данные из WAL
+	// Recover data from WAL
 	memTable := NewMemTable()
 	if err := recoverFromWAL(wal, memTable, vlog); err != nil {
 		vlog.Close()
@@ -70,22 +70,22 @@ func NewLSMEngine(dataDir string) (*LSMEngine, error) {
 		return nil, fmt.Errorf("failed to recover from wal: %w", err)
 	}
 
-	// Определяем последний timestamp (пока простой счетчик)
-	lastTS := uint64(1) // TODO: восстановить из данных
+	// Determine last timestamp (simple counter for now)
+	lastTS := uint64(1) // TODO: restore from persisted data
 
-	// Загружаем существующие SSTable из манифеста
-	levels := make([][]*sstable.Reader, 10) // предполагаем максимум 10 уровней
+	// Load existing SSTables from manifest
+	levels := make([][]*sstable.Reader, 10) // assume at most 10 levels
 	manifestLevels := manifest.GetLevels()
 	for level, infos := range manifestLevels {
 		if level >= len(levels) {
 			continue
 		}
 		for _, info := range infos {
-			// Формируем путь к SSTable файлу
+			// Build SSTable file path
 			sstPath := filepath.Join(dataDir, fmt.Sprintf("%06d.sst", info.FileNum))
 			reader, err := sstable.Open(sstPath)
 			if err != nil {
-				// Если файл отсутствует, игнорируем (возможно, был удалён)
+				// If file missing, ignore (maybe deleted)
 				continue
 			}
 			levels[level] = append(levels[level], reader)
@@ -106,13 +106,13 @@ func NewLSMEngine(dataDir string) (*LSMEngine, error) {
 	return engine, nil
 }
 
-// NextTimestamp возвращает следующий уникальный timestamp (атомарно увеличивает LastTS).
+// NextTimestamp returns the next unique timestamp (atomically increments LastTS).
 func (e *LSMEngine) NextTimestamp() uint64 {
-	// Используем атомарную операцию для увеличения LastTS
+	// Use atomic operation to increment LastTS
 	return atomic.AddUint64(&e.LastTS, 1)
 }
 
-// PutWithTS записывает ключ-значение с указанным timestamp.
+// PutWithTS writes a key‑value pair with the given timestamp.
 func (e *LSMEngine) PutWithTS(key, value []byte, commitTS uint64) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -121,7 +121,7 @@ func (e *LSMEngine) PutWithTS(key, value []byte, commitTS uint64) error {
 		return fmt.Errorf("engine closed")
 	}
 
-	// Определяем, нужно ли писать в VLog
+	// Decide whether to write to VLog
 	var vp ValuePointer
 	var inlineValue []byte
 	if len(value) <= MaxInlineSize {
@@ -134,37 +134,37 @@ func (e *LSMEngine) PutWithTS(key, value []byte, commitTS uint64) error {
 		}
 	}
 
-	// Создаем MVCCKey
+	// Create MVCCKey
 	mvccKey := mvcc.NewMVCCKey(key, commitTS)
 
-	// Подготавливаем значение для MemTable
+	// Prepare value for MemTable
 	var storedValue []byte
 	if vp.Size > 0 {
-		// Сериализуем ValuePointer
+		// Serialize ValuePointer
 		storedValue = encodeValuePointer(vp)
 	} else {
 		storedValue = inlineValue
 	}
 
-	// Записываем в WAL
+	// Write to WAL
 	walEntry := &WalEntry{
 		Op:        OpPut,
 		Key:       key,
-		Value:     storedValue, // храним либо inline значение, либо указатель
+		Value:     storedValue, // either inline value or pointer
 		Timestamp: commitTS,
 	}
 	if err := e.wal.Write(walEntry); err != nil {
 		return fmt.Errorf("failed to write to wal: %w", err)
 	}
 
-	// Обновляем MemTable
+	// Update MemTable
 	e.memTable.Put(mvccKey, storedValue)
 
-	// TODO: проверка необходимости flush
+	// TODO: check if flush is needed
 	return nil
 }
 
-// GetWithTS возвращает значение для ключа на момент snapshotTS.
+// GetWithTS returns the value for a key as of snapshotTS.
 func (e *LSMEngine) GetWithTS(key []byte, snapshotTS uint64) ([]byte, error) {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
@@ -173,14 +173,14 @@ func (e *LSMEngine) GetWithTS(key []byte, snapshotTS uint64) ([]byte, error) {
 		return nil, fmt.Errorf("engine closed")
 	}
 
-	// Ищем в MemTable
+	// Search in MemTable
 	mvccKey := mvcc.NewMVCCKey(key, snapshotTS)
 	val, found := e.memTable.Get(mvccKey)
 	if found {
 		return e.decodeStoredValue(val)
 	}
 
-	// Ищем в SSTable (по уровням)
+	// Search in SSTables (by levels)
 	for _, level := range e.levels {
 		for _, sst := range level {
 			if val, found := sst.Lookup(mvccKey); found {
@@ -189,10 +189,10 @@ func (e *LSMEngine) GetWithTS(key []byte, snapshotTS uint64) ([]byte, error) {
 		}
 	}
 
-	return nil, nil // ключ не найден
+	return nil, nil // key not found
 }
 
-// DeleteWithTS помечает ключ как удаленный (tombstone).
+// DeleteWithTS marks a key as deleted (tombstone).
 func (e *LSMEngine) DeleteWithTS(key []byte, commitTS uint64) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -201,7 +201,7 @@ func (e *LSMEngine) DeleteWithTS(key []byte, commitTS uint64) error {
 		return fmt.Errorf("engine closed")
 	}
 
-	// Записываем в WAL
+	// Write to WAL
 	walEntry := &WalEntry{
 		Op:        OpDelete,
 		Key:       key,
@@ -212,7 +212,7 @@ func (e *LSMEngine) DeleteWithTS(key []byte, commitTS uint64) error {
 		return fmt.Errorf("failed to write to wal: %w", err)
 	}
 
-	// Вставляем tombstone (значение nil) в MemTable
+	// Insert tombstone (nil value) into MemTable
 	mvccKey := mvcc.NewMVCCKey(key, commitTS)
 	e.memTable.DeleteWithTS(mvccKey)
 
@@ -220,17 +220,17 @@ func (e *LSMEngine) DeleteWithTS(key []byte, commitTS uint64) error {
 }
 
 
-// ActiveMemTable возвращает активную (текущую) MemTable.
+// ActiveMemTable returns the active (current) MemTable.
 func (e *LSMEngine) ActiveMemTable() *MemTable {
 	return e.memTable
 }
 
-// FrozenMemTable возвращает замороженную MemTable (если есть).
+// FrozenMemTable returns the frozen MemTable (if any).
 func (e *LSMEngine) FrozenMemTable() *MemTable {
 	return e.frozenMemTable
 }
 
-// Close освобождает ресурсы движка.
+// Close releases engine resources.
 func (e *LSMEngine) Close() error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -241,7 +241,7 @@ func (e *LSMEngine) Close() error {
 	e.closed = true
 
 	var errs []error
-	// Закрываем SSTable readers
+	// Close SSTable readers
 	for _, level := range e.levels {
 		for _, reader := range level {
 			if err := reader.Close(); err != nil {
@@ -264,22 +264,22 @@ func (e *LSMEngine) Close() error {
 	return nil
 }
 
-// decodeStoredValue преобразует хранимое значение (inline или ValuePointer) в исходное значение.
+// decodeStoredValue converts stored value (inline or ValuePointer) back to original value.
 func (e *LSMEngine) decodeStoredValue(stored []byte) ([]byte, error) {
 	if len(stored) == 0 {
 		// tombstone
 		return nil, nil
 	}
-	// Пытаемся декодировать как ValuePointer
+	// Try to decode as ValuePointer
 	if vp, ok := decodeValuePointer(stored); ok {
-		// Читаем из VLog
+		// Read from VLog
 		return e.vlog.Read(vp)
 	}
-	// Иначе это inline значение
+	// Otherwise it's an inline value
 	return stored, nil
 }
 
-// encodeValuePointer сериализует ValuePointer в байты.
+// encodeValuePointer serializes a ValuePointer to bytes.
 func encodeValuePointer(vp ValuePointer) []byte {
 	buf := make([]byte, 12)
 	binary.BigEndian.PutUint64(buf[0:8], uint64(vp.Offset))
@@ -287,7 +287,7 @@ func encodeValuePointer(vp ValuePointer) []byte {
 	return buf
 }
 
-// decodeValuePointer десериализует ValuePointer из байтов.
+// decodeValuePointer deserializes a ValuePointer from bytes.
 func decodeValuePointer(data []byte) (ValuePointer, bool) {
 	if len(data) != 12 {
 		return ValuePointer{}, false
@@ -297,19 +297,19 @@ func decodeValuePointer(data []byte) (ValuePointer, bool) {
 	return ValuePointer{Offset: int64(offset), Size: int32(size)}, true
 }
 
-// ReadVLogValue читает значение из Value Log по указателю.
-// Указатель имеет формат [fileID: 8 байт][offset: 4 байта].
-// В текущей реализации fileID игнорируется (всегда 0), а offset интерпретируется как размер.
+// ReadVLogValue reads a value from the Value Log by pointer.
+// Pointer format: [fileID: 8 bytes][offset: 4 bytes].
+// In the current implementation fileID is ignored (always 0) and offset is interpreted as size.
 func (e *LSMEngine) ReadVLogValue(fileID uint64, offset uint32) ([]byte, error) {
 	if e.vlog == nil {
 		return nil, fmt.Errorf("vlog not initialized")
 	}
-	// Создаем ValuePointer: fileID становится смещением, offset становится размером
+	// Create ValuePointer: fileID becomes offset, offset becomes size
 	vp := ValuePointer{Offset: int64(fileID), Size: int32(offset)}
 	return e.vlog.Read(vp)
 }
 
-// recoverFromWAL восстанавливает MemTable из WAL.
+// recoverFromWAL recovers MemTable from WAL.
 func recoverFromWAL(wal *WAL, memTable *MemTable, vlog *VLog) error {
 	return wal.Recover(func(entry *WalEntry) error {
 		mvccKey := mvcc.NewMVCCKey(entry.Key, entry.Timestamp)

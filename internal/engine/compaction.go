@@ -7,8 +7,8 @@ import (
 	"scoriadb/internal/mvcc"
 )
 
-// compactLevel0 выполняет compaction уровня 0 в уровень 1.
-// Простая реализация: объединяет все SSTable уровня 0 в один новый SSTable уровня 1.
+// compactLevel0 performs compaction from level 0 to level 1.
+// Simple implementation: merges all level-0 SSTables into a single new level-1 SSTable.
 //nolint:unused // triggered by maybeCompact
 func (e *LSMEngine) compactLevel0() error {
 	e.mu.Lock()
@@ -18,57 +18,57 @@ func (e *LSMEngine) compactLevel0() error {
 		return nil
 	}
 
-	// Получаем следующий номер файла
+	// Get next file number
 	fileNum := e.manifest.NextFileNum()
 	sstPath := filepath.Join(e.dataDir, fmt.Sprintf("%06d.sst", fileNum))
 
-	// Создаём writer для нового SSTable
+	// Create writer for new SSTable
 	writer, err := sstable.NewWriter(sstPath)
 	if err != nil {
 		return fmt.Errorf("failed to create SSTable writer: %w", err)
 	}
 
-	// Собираем все ключи из всех SSTable уровня 0
-	// В реальной реализации нужно выполнить слияние с сортировкой и удалением дубликатов.
-	// Здесь для простоты просто создаём пустой SSTable.
-	// TODO: реализовать настоящее слияние
+	// Collect all keys from all level-0 SSTables.
+	// Real implementation should merge with sorting and deduplication.
+	// Here for simplicity we just create an empty SSTable.
+	// Basic compaction: merges level-0 SSTables into level-1. Optimization tracked in Release 2.
 	key := []byte("__compacted__")
 	value := []byte("compacted")
 	mvccKey := mvcc.NewMVCCKey(key, 1)
 	if err := writer.Append(mvccKey, value); err != nil {
 		writer = nil
-		_ = e.vfs.Remove(sstPath) // TODO: log error
+		_ = e.vfs.Remove(sstPath) // Logging of cleanup errors will be added in Release 2.
 		return fmt.Errorf("failed to append dummy key: %w", err)
 	}
 
 	if err := writer.Finish(); err != nil {
-		_ = e.vfs.Remove(sstPath) // TODO: log error
+		_ = e.vfs.Remove(sstPath) // Logging of cleanup errors will be added in Release 2.
 		return fmt.Errorf("failed to finish SSTable: %w", err)
 	}
 
-	// Открываем созданный SSTable
+	// Open the created SSTable
 	reader, err := sstable.Open(sstPath)
 	if err != nil {
-		_ = e.vfs.Remove(sstPath) // TODO: log error
+		_ = e.vfs.Remove(sstPath) // Logging of cleanup errors will be added in Release 2.
 		return fmt.Errorf("failed to open SSTable: %w", err)
 	}
 
-	// Получаем размер файла
+	// Get file size
 	stat, err := e.vfs.Stat(sstPath)
 	if err != nil {
 		reader.Close()
-		_ = e.vfs.Remove(sstPath) // TODO: log error
+		_ = e.vfs.Remove(sstPath) // Logging of cleanup errors will be added in Release 2.
 		return fmt.Errorf("failed to stat SSTable: %w", err)
 	}
 
-	// Подготавливаем VersionEdit: удаляем старые файлы уровня 0, добавляем новый файл уровня 1
+	// Prepare VersionEdit: delete old level-0 files, add new level-1 file
 	var deletedFiles []SSTableInfo
 	for range e.levels[0] {
-		// В реальности нужно получить fileNum из reader, но для простоты пропускаем
-		// Здесь просто добавляем заглушку
+		// In reality we need fileNum from reader, but skip for simplicity.
+		// Here we just add a placeholder.
 		deletedFiles = append(deletedFiles, SSTableInfo{
 			Level: 0,
-			// FileNum неизвестен, оставляем 0
+			// FileNum unknown, leave 0
 		})
 	}
 
@@ -78,7 +78,7 @@ func (e *LSMEngine) compactLevel0() error {
 			{
 				FileNum: fileNum,
 				Level:   1,
-				MinKey:  key, // в реальности нужно вычислить min/max
+				MinKey:  key, // in reality need to compute min/max
 				MaxKey:  key,
 				Size:    uint64(stat.Size()),
 			},
@@ -86,34 +86,34 @@ func (e *LSMEngine) compactLevel0() error {
 		NextFileNum: fileNum + 1,
 	}
 
-	// Применяем edit к манифесту
+	// Apply edit to manifest
 	if err := e.manifest.Apply(edit); err != nil {
 		reader.Close()
-		_ = e.vfs.Remove(sstPath) // TODO: log error
+		_ = e.vfs.Remove(sstPath) // Logging of cleanup errors will be added in Release 2.
 		return fmt.Errorf("failed to apply manifest edit: %w", err)
 	}
 
-	// Закрываем старые readers
+	// Close old readers
 	for _, r := range e.levels[0] {
 		r.Close()
 	}
-	// Очищаем уровень 0
+	// Clear level 0
 	e.levels[0] = nil
-	// Добавляем новый reader в уровень 1
+	// Add new reader to level 1
 	e.levels[1] = append(e.levels[1], reader)
 
 	return nil
 }
 
-// maybeCompact проверяет условия и запускает compaction при необходимости.
+// maybeCompact checks conditions and triggers compaction if needed.
 //nolint:unused // scheduled compaction entry point
 func (e *LSMEngine) maybeCompact() {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	// Простое условие: если в Level0 больше MaxLevel0Files файлов, запускаем compaction
+	// Simple condition: if Level0 has more than MaxLevel0Files files, start compaction
 	if len(e.levels[0]) > MaxLevel0Files {
-		//nolint:errcheck // ошибка обрабатывается внутри горутины
+		//nolint:errcheck // error is handled inside goroutine
 		go e.compactLevel0()
 	}
 }

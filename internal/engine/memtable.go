@@ -8,55 +8,42 @@ import (
 	"scoriadb/internal/mvcc"
 )
 
-// MemTable реализован на основе B-Tree (google/btree) в качестве учебного компромисса.
-// В промышленных LSM-движках (LevelDB, RocksDB, Badger) MemTable обычно реализуется
-// на основе Skiplist по следующим причинам:
-//  1. Простота конкурентного доступа (lock-free или тонкие блокировки)
-//  2. Отсутствие дорогой балансировки при вставке
-//  3. Эффективный flush на диск (естественно отсортированный порядок)
-//  4. Гибкость по памяти (узлы переменного размера)
-//
-// B-Tree выбран для ScoriaDB потому что:
-//  - Готовый, надёжный пакет (github.com/google/btree)
-//  - Copy-on-write семантика (дешёвые клоны через btree.Clone())
-//  - Удобство для учебного/демонстрационного проекта
-//  - Более знаком разработчикам из SQL-мира
-//
-// Для production-рекомендации следует рассмотреть замену на Skiplist.
+// MemTable is implemented using B-tree (google/btree) as a learning compromise.
+// B-tree is used for simplicity; a Skiplist can be evaluated in the future.
 
-// mvccEntry представляет запись в MemTable.
+// mvccEntry represents an entry in MemTable.
 type mvccEntry struct {
 	Key     mvcc.MVCCKey
 	Value   []byte
-	Deleted bool // true для tombstone (удаление)
+	Deleted bool // true for tombstone (deletion)
 }
 
-// Less для btree.Item.
+// Less for btree.Item.
 func (e mvccEntry) Less(than btree.Item) bool {
 	return e.Key.Less(than.(mvccEntry).Key)
 }
 
-// MemTable потокобезопасная in-memory структура на основе btree.
+// MemTable is a thread‑safe in‑memory structure based on btree.
 type MemTable struct {
 	mu   sync.RWMutex
 	tree *btree.BTree
-	size int // количество элементов
+	size int // number of elements
 }
 
-// NewMemTable создает новую MemTable.
+// NewMemTable creates a new MemTable.
 func NewMemTable() *MemTable {
 	return &MemTable{
-		tree: btree.New(32), // степень ветвления
+		tree: btree.New(32), // branching factor
 	}
 }
 
-// Put добавляет или обновляет ключ с указанным timestamp.
+// Put adds or updates a key with the given timestamp.
 func (mt *MemTable) Put(key mvcc.MVCCKey, value []byte) {
 	mt.mu.Lock()
 	defer mt.mu.Unlock()
 
 	entry := mvccEntry{Key: key, Value: value, Deleted: false}
-	// Если ключ с таким же timestamp уже существует, заменяем
+	// If a key with the same timestamp already exists, replace it
 	if mt.tree.Has(entry) {
 		mt.tree.Delete(entry)
 	} else {
@@ -65,14 +52,14 @@ func (mt *MemTable) Put(key mvcc.MVCCKey, value []byte) {
 	mt.tree.ReplaceOrInsert(entry)
 }
 
-// DeleteWithTS помечает ключ как удалённый (tombstone) на указанный commit timestamp.
-// Внутренне создаётся запись с Deleted = true и пустым значением.
+// DeleteWithTS marks a key as deleted (tombstone) at the given commit timestamp.
+// Internally creates an entry with Deleted = true and empty value.
 func (mt *MemTable) DeleteWithTS(key mvcc.MVCCKey) {
 	mt.mu.Lock()
 	defer mt.mu.Unlock()
 
 	entry := mvccEntry{Key: key, Value: nil, Deleted: true}
-	// Если ключ с таким же timestamp уже существует, заменяем
+	// If a key with the same timestamp already exists, replace it
 	if mt.tree.Has(entry) {
 		mt.tree.Delete(entry)
 	} else {
@@ -81,71 +68,71 @@ func (mt *MemTable) DeleteWithTS(key mvcc.MVCCKey) {
 	mt.tree.ReplaceOrInsert(entry)
 }
 
-// Get возвращает значение для ключа с максимальным commit timestamp <= snapshotTS.
-// Если ключ не найден, возвращает nil.
+// Get returns the value for the key with the maximum commit timestamp <= snapshotTS.
+// If the key is not found, returns nil.
 //
-// # Логика MVCC и инвертирование timestamp
+// # MVCC logic and timestamp inversion
 //
-// В ScoriaDB используется подход, аналогичный TiKV и BadgerDB:
-//   - Каждая версия ключа кодируется как MVCCKey, состоящий из UserKey и инвертированного timestamp.
-//   - Инвертированный timestamp = math.MaxUint64 - commitTS. Это гарантирует, что в отсортированном
-//     порядке более новые версии (с большим commitTS) располагаются перед старыми (поскольку у них
-//     меньший инвертированный timestamp). Подробнее:
-//     * TiKV: «Keys and timestamps are encoded so that timestamped keys are sorted first by key
-//       (ascending), then by timestamp (descending)» (https://pkg.go.dev/github.com/pingcap-incubator/tinykv/kv/transaction/mvcc)
-//     * BadgerDB: «Badger uses Multi-Version Concurrency Control (MVCC)» (https://godocs.io/github.com/dgraph-io/badger)
+// ScoriaDB uses an approach similar to TiKV and BadgerDB:
+//   - Each key version is encoded as an MVCCKey, consisting of UserKey and inverted timestamp.
+//   - Inverted timestamp = math.MaxUint64 - commitTS. This guarantees that in sorted order
+//     newer versions (with larger commitTS) appear before older ones (since they have a smaller
+//     inverted timestamp). For details:
+//     * TiKV: “Keys and timestamps are encoded so that timestamped keys are sorted first by key
+//       (ascending), then by timestamp (descending)” (https://pkg.go.dev/github.com/pingcap-incubator/tinykv/kv/transaction/mvcc)
+//     * BadgerDB: “Badger uses Multi-Version Concurrency Control (MVCC)” (https://godocs.io/github.com/dgraph-io/badger)
 //
-// # Формула видимости
+// # Visibility formula
 //
-// Транзакция с snapshotTS видит версию, если commitTS <= snapshotTS.
-// Пусть T(x) = MaxUint64 - x — инвертированный timestamp.
-// Тогда условие commitTS <= snapshotTS эквивалентно T(commitTS) >= T(snapshotTS).
+// A transaction with snapshotTS sees a version if commitTS <= snapshotTS.
+// Let T(x) = MaxUint64 - x be the inverted timestamp.
+// Then condition commitTS <= snapshotTS is equivalent to T(commitTS) >= T(snapshotTS).
 //
-// # Алгоритм поиска (исправленный)
+// # Search algorithm (corrected)
 //
-// Из-за порядка сортировки (новые версии идут перед старыми) использование AscendGreaterOrEqual
-// приводит к тому, что итерация начинается с самой старой видимой версии, а не с самой новой.
-// Для корректного поиска самой новой видимой версии необходимо использовать DescendLessOrEqual,
-// который начинает обход с версии, наиболее близкой к searchKey, и движется в сторону убывания
-// (от новых к старым). Это соответствует промышленным реализациям (TiKV, BadgerDB), где поиск
-// выполняется в обратном порядке по timestamp.
+// Due to sorting order (newer versions come before older) using AscendGreaterOrEqual
+// would start iteration from the oldest visible version, not the newest.
+// To correctly find the newest visible version we must use DescendLessOrEqual,
+// which starts traversal from the entry closest to searchKey and moves downwards
+// (from newer to older). This matches industrial implementations (TiKV, BadgerDB) where
+// search is performed in reverse timestamp order.
 //
-// Алгоритм:
-// 1. Ключ поиска (key) содержит инвертированный snapshotTS: Timestamp = T(snapshotTS).
-// 2. В B‑Tree записи отсортированы сначала по UserKey (возрастание), затем по инвертированному
-//    timestamp (убывание), что означает: для одного UserKey более новые версии (с большим commitTS)
-//    идут раньше старых, потому что у них меньший инвертированный timestamp.
-// 3. Используем DescendLessOrEqual, который проходит записи в обратном порядке сортировки
-//    (от новых к старым), начиная с версии, которая <= searchKey.
-// 4. Условие видимости: commitTS <= snapshotTS  <=>  инвертированный timestamp >= key.Timestamp.
-// 5. Ищем самую новую версию, удовлетворяющую условию, т.е. первую запись с тем же UserKey,
-//    у которой entry.Key.Timestamp >= key.Timestamp.
+// Algorithm:
+// 1. Search key (key) contains inverted snapshotTS: Timestamp = T(snapshotTS).
+// 2. In B‑Tree entries are sorted first by UserKey (ascending), then by inverted
+//    timestamp (descending), meaning: for the same UserKey newer versions (with larger commitTS)
+//    appear before older ones, because they have a smaller inverted timestamp.
+// 3. Use DescendLessOrEqual, which walks entries in reverse sort order
+//    (from newer to older), starting from a version that is <= searchKey.
+// 4. Visibility condition: commitTS <= snapshotTS  <=>  inverted timestamp >= key.Timestamp.
+// 5. Look for the newest version satisfying the condition, i.e. the first entry with the same UserKey
+//    where entry.Key.Timestamp >= key.Timestamp.
 //
-// # Обработка tombstone (удаление)
+// # Tombstone handling (deletion)
 //
-// В ScoriaDB удаление моделируется записью с флагом Deleted = true (tombstone).
-// Семантика соответствует промышленным MVCC-системам (TiKV, BadgerDB):
-//   - Если для данного snapshotTS видимая версия является tombstone (commitTS <= snapshotTS),
-//     ключ считается удалённым и не должен быть найден (возвращается found = false).
-//   - Tombstone скрывает все более старые версии для snapshotTS >= commitTS удаления.
-//   - Если tombstone не видна (commitTS > snapshotTS), она игнорируется, и поиск продолжается
-//     для более старых версий.
+// In ScoriaDB deletion is modeled by an entry with Deleted = true (tombstone).
+// Semantics match industrial MVCC systems (TiKV, BadgerDB):
+//   - If for a given snapshotTS the visible version is a tombstone (commitTS <= snapshotTS),
+//     the key is considered deleted and must not be found (returns found = false).
+//   - Tombstone hides all older versions for snapshotTS >= deletion commitTS.
+//   - If tombstone is not visible (commitTS > snapshotTS), it is ignored and search continues
+//     for older versions.
 //
-// Реализация:
-//   - При обнаружении видимой версии с Deleted = true итерация останавливается, возвращается
+// Implementation:
+//   - When a visible version with Deleted = true is encountered, iteration stops, returns
 //     found = false.
-//   - При обнаружении видимой живой версии возвращается её значение и found = true.
-//   - Если видимая версия слишком новая (commitTS > snapshotTS), итерация продолжается.
+//   - When a visible live version is encountered, returns its value and found = true.
+//   - If a version is too new (commitTS > snapshotTS), iteration continues.
 //
-// Подробное объяснение:
-// - DescendLessOrEqual гарантирует, что мы начинаем с версии, которая <= searchKey по порядку сортировки.
-// - Поскольку новые версии имеют меньший инвертированный timestamp, они будут "меньше" в смысле сортировки,
-//   и DescendLessOrEqual начнёт с самой новой версии, которая не превышает searchKey.
-// - Если эта версия слишком новая (commitTS > snapshotTS), мы продолжаем итерацию (двигаемся к более старым).
-// - Если версия видима (commitTS <= snapshotTS), мы останавливаемся, потому что это самая новая видимая версия.
+// Detailed explanation:
+// - DescendLessOrEqual guarantees we start from a version that is <= searchKey in sort order.
+// - Because newer versions have smaller inverted timestamp, they will be “less” in sort order,
+//   and DescendLessOrEqual will start from the newest version that does not exceed searchKey.
+// - If that version is too new (commitTS > snapshotTS), we continue iteration (move to older ones).
+// - If the version is visible (commitTS <= snapshotTS), we stop because it is the newest visible version.
 //
-// Ссылки:
-// - TiKV: https://cloud.tencent.com/developer/article/1549435 (строки 29-31)
+// References:
+// - TiKV: https://cloud.tencent.com/developer/article/1549435 (lines 29-31)
 // - BadgerDB: https://godocs.io/github.com/dgraph-io/badger
 func (mt *MemTable) Get(key mvcc.MVCCKey) ([]byte, bool) {
 	mt.mu.RLock()
@@ -155,36 +142,36 @@ func (mt *MemTable) Get(key mvcc.MVCCKey) ([]byte, bool) {
 	found := false
 	mt.tree.DescendLessOrEqual(mvccEntry{Key: key}, func(item btree.Item) bool {
 		entry := item.(mvccEntry)
-		// Если ключ отличается, значит мы вышли за пределы интересующего нас UserKey.
-		// Поскольку записи отсортированы сначала по UserKey, все последующие записи будут иметь другой UserKey.
-		// Останавливаем итерацию.
+		// If the key differs, we have moved beyond the UserKey of interest.
+		// Since entries are sorted first by UserKey, all subsequent entries will have a different UserKey.
+		// Stop iteration.
 		if !bytes.Equal(entry.Key.Key, key.Key) {
 			return false
 		}
-		// Проверяем условие видимости: commitTS <= snapshotTS
-		// что эквивалентно entry.Key.Timestamp >= key.Timestamp
+		// Check visibility condition: commitTS <= snapshotTS
+		// which is equivalent to entry.Key.Timestamp >= key.Timestamp
 		if entry.Key.Timestamp >= key.Timestamp {
-			// Версия видима.
+			// Version is visible.
 			if entry.Deleted {
-				// Tombstone: ключ удалён для этого snapshot.
-				// Останавливаем поиск, так как tombstone скрывает более старые версии.
-				// found остаётся false.
+				// Tombstone: key is deleted for this snapshot.
+				// Stop search because tombstone hides older versions.
+				// found remains false.
 				return false
 			}
-			// Живая версия.
+			// Live version.
 			candidate = entry.Value
 			found = true
 			return false
 		}
-		// entry.Key.Timestamp < key.Timestamp => commitTS > snapshotTS, версия слишком новая.
-		// Продолжаем итерацию, чтобы перейти к более старым версиям (которые могут быть видимы).
+		// entry.Key.Timestamp < key.Timestamp => commitTS > snapshotTS, version too new.
+		// Continue iteration to move to older versions (which may be visible).
 		return true
 	})
 
 	return candidate, found
 }
 
-// NewIterator возвращает итератор по всем записям в MemTable.
+// NewIterator returns an iterator over all entries in MemTable.
 func (mt *MemTable) NewIterator() *MemTableIterator {
 	mt.mu.RLock()
 	defer mt.mu.RUnlock()
@@ -200,36 +187,36 @@ func (mt *MemTable) NewIterator() *MemTableIterator {
 	}
 }
 
-// Size возвращает количество элементов в MemTable.
+// Size returns the number of elements in MemTable.
 func (mt *MemTable) Size() int {
 	mt.mu.RLock()
 	defer mt.mu.RUnlock()
 	return mt.size
 }
 
-// MemTableIterator итератор по записям MemTable.
+// MemTableIterator iterates over MemTable entries.
 type MemTableIterator struct {
 	entries []mvccEntry
 	index   int
 }
 
-// Next перемещает итератор к следующей записи.
+// Next moves the iterator to the next entry.
 func (it *MemTableIterator) Next() bool {
 	it.index++
 	return it.index < len(it.entries)
 }
 
-// Key возвращает текущий ключ.
+// Key returns the current key.
 func (it *MemTableIterator) Key() mvcc.MVCCKey {
 	return it.entries[it.index].Key
 }
 
-// Value возвращает текущее значение.
+// Value returns the current value.
 func (it *MemTableIterator) Value() []byte {
 	return it.entries[it.index].Value
 }
 
-// Close освобождает ресурсы итератора.
+// Close releases iterator resources.
 func (it *MemTableIterator) Close() {
 	it.entries = nil
 }

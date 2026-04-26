@@ -6,27 +6,27 @@ import (
 	"scoriadb/internal/txn"
 )
 
-// CFBatchOp представляет операцию в батче с указанием Column Family.
+// CFBatchOp represents a batch operation with a Column Family specification.
 type CFBatchOp struct {
 	CF    string
 	Type  txn.OpType
 	Key   []byte
-	Value []byte // для Delete может быть nil
+	Value []byte // may be nil for Delete
 }
 
-// CFWriteBatch представляет атомарный батч операций, которые могут затрагивать несколько CF.
+// CFWriteBatch represents an atomic batch of operations that may span multiple CFs.
 type CFWriteBatch struct {
 	ops []CFBatchOp
 }
 
-// NewCFWriteBatch создает новый пустой CFWriteBatch.
+// NewCFWriteBatch creates a new empty CFWriteBatch.
 func NewCFWriteBatch() *CFWriteBatch {
 	return &CFWriteBatch{
 		ops: make([]CFBatchOp, 0),
 	}
 }
 
-// AddPut добавляет операцию записи в указанное CF.
+// AddPut adds a put operation to the specified CF.
 func (b *CFWriteBatch) AddPut(cf string, key, value []byte) {
 	b.ops = append(b.ops, CFBatchOp{
 		CF:    cf,
@@ -36,7 +36,7 @@ func (b *CFWriteBatch) AddPut(cf string, key, value []byte) {
 	})
 }
 
-// AddDelete добавляет операцию удаления в указанное CF.
+// AddDelete adds a delete operation to the specified CF.
 func (b *CFWriteBatch) AddDelete(cf string, key []byte) {
 	b.ops = append(b.ops, CFBatchOp{
 		CF:    cf,
@@ -46,35 +46,33 @@ func (b *CFWriteBatch) AddDelete(cf string, key []byte) {
 	})
 }
 
-// Size возвращает количество операций в батче.
+// Size returns the number of operations in the batch.
 func (b *CFWriteBatch) Size() int {
 	return len(b.ops)
 }
 
-// Clear очищает батч.
+// Clear clears the batch.
 func (b *CFWriteBatch) Clear() {
 	b.ops = b.ops[:0]
 }
 
-// ApplyCFBatch применяет все операции батча атомарно к реестру CF.
-// Возвращает commit timestamp, который был использован для всех операций.
-// Если происходит ошибка, ни одна операция не применяется.
-// Алгоритм:
-// 1. Группируем операции по CF.
-// 2. Для каждого CF получаем движок через реестр.
-// 3. Для каждого движка создаём отдельный WriteBatch (без CF) и применяем его.
-// 4. Важно обеспечить атомарность на уровне всех CF: если хотя бы одна операция
-//    не может быть выполнена, весь батч откатывается.
-// Для простоты MVP применяем операции последовательно и откатываем при ошибке
-// путём отмены предыдущих операций (что сложно). Вместо этого можно использовать
-// двухфазный коммит с WAL, но пока просто возвращаем ошибку после частичного применения.
-// TODO: улучшить атомарность.
+// ApplyCFBatch applies all batch operations atomically to the CF registry.
+// Returns the commit timestamp used for all operations.
+// If an error occurs, no operation should be applied.
+// Algorithm:
+// 1. Group operations by CF.
+// 2. For each CF, obtain the engine via the registry.
+// 3. For each engine, create a plain WriteBatch (without CF) and apply it.
+// 4. Atomicity across all CFs is important: if any operation fails, the whole batch must roll back.
+// For MVP simplicity we apply operations sequentially and roll back on error by undoing previous operations (which is complex).
+// Alternatively, a two‑phase commit with WAL could be used, but for now we just return an error after partial application.
+// Tracked for Release 2: improve atomicity.
 func ApplyCFBatch(reg *Registry, batch *CFWriteBatch) (uint64, error) {
 	if batch.Size() == 0 {
 		return 0, nil
 	}
 
-	// Группируем операции по CF
+	// Group operations by CF
 	cfOps := make(map[string][]txn.BatchOp)
 	for _, op := range batch.ops {
 		cf := op.CF
@@ -88,9 +86,9 @@ func ApplyCFBatch(reg *Registry, batch *CFWriteBatch) (uint64, error) {
 		})
 	}
 
-	// Для каждого CF создаём обычный WriteBatch и применяем
-	// Нужно гарантировать, что все CF используют один и тот же commit timestamp.
-	// Получаем движок для первого CF (любого) и генерируем timestamp от него.
+	// For each CF create a plain WriteBatch and apply
+	// Ensure all CFs use the same commit timestamp.
+	// Get the engine of the first CF (any) and generate a timestamp from it.
 	var firstEngine *engine.LSMEngine
 	for cf := range cfOps {
 		eng, err := reg.GetCF(cf)
@@ -104,17 +102,17 @@ func ApplyCFBatch(reg *Registry, batch *CFWriteBatch) (uint64, error) {
 		return 0, fmt.Errorf("no operations")
 	}
 
-	// Генерируем единый commit timestamp
+	// Generate a unified commit timestamp
 	commitTS := firstEngine.NextTimestamp()
 
-	// Применяем операции для каждого CF
+	// Apply operations for each CF
 	for cf, ops := range cfOps {
 		eng, err := reg.GetCF(cf)
 		if err != nil {
 			return 0, fmt.Errorf("failed to get CF %q: %w", cf, err)
 		}
 
-		// Создаём обычный WriteBatch для этого CF
+		// Create a plain WriteBatch for this CF
 		cfBatch := txn.NewWriteBatch()
 		for _, op := range ops {
 			switch op.Type {
@@ -125,11 +123,11 @@ func ApplyCFBatch(reg *Registry, batch *CFWriteBatch) (uint64, error) {
 			}
 		}
 
-		// Применяем с общим commitTS
+		// Apply with the shared commitTS
 		if err := txn.ApplyBatchWithTS(eng, cfBatch, commitTS); err != nil {
-			// Частичное применение: предыдущие CF уже записали данные.
-			// В MVP не откатываем, просто возвращаем ошибку.
-			// TODO: реализовать откат.
+			// Partial application: previous CFs have already written data.
+			// In MVP we do not roll back, just return an error.
+			// Tracked for Release 2: implement rollback.
 			return 0, fmt.Errorf("failed to apply batch for CF %q: %w", cf, err)
 		}
 	}

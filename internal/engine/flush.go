@@ -5,39 +5,39 @@ import (
 	"fmt"
 	"path/filepath"
 	"scoriadb/internal/engine/sstable"
-	// "scoriadb/internal/mvcc"  реализовать обязательно либо подумать над тем где сделать 
+	// "scoriadb/internal/mvcc"  implement or decide where to do it
 )
 
 const (
-	// MaxMemTableSize максимальный размер MemTable в байтах перед flush
-	MaxMemTableSize = 4 * 1024 * 1024 // 4 МБ
-	// MaxLevel0Files максимальное количество файлов в Level0 перед compaction
+	// MaxMemTableSize maximum MemTable size in bytes before flush
+	MaxMemTableSize = 4 * 1024 * 1024 // 4 MB
+	// MaxLevel0Files maximum number of files in Level0 before compaction
 	MaxLevel0Files = 4
 )
 
-// flushMemTable сбрасывает текущую MemTable в SSTable Level0.
+// flushMemTable flushes current MemTable into a Level0 SSTable.
 //nolint:unused // flush goroutine worker
 func (e *LSMEngine) flushMemTable() error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	// Получаем следующий номер файла из манифеста
+	// Get next file number from manifest
 	fileNum := e.manifest.NextFileNum()
 	sstPath := filepath.Join(e.dataDir, fmt.Sprintf("%06d.sst", fileNum))
 
-	// Создаём writer (пока используем старый API, который работает с os)
+	// Create writer (currently using old API that works with os)
 	writer, err := sstable.NewWriter(sstPath)
 	if err != nil {
 		return fmt.Errorf("failed to create SSTable writer: %w", err)
 	}
 
-	// Итерируем по всем записям MemTable
+	// Iterate over all MemTable entries
 	iter := e.memTable.NewIterator()
 	var minKey, maxKey []byte
 	var first = true
 	for iter.Next() {
 		key, value := iter.Key(), iter.Value()
-		// Для range filter нам нужны user keys (без timestamp)
+		// For range filter we need user keys (without timestamp)
 		userKey := key.Key
 		if first {
 			minKey = make([]byte, len(userKey))
@@ -55,33 +55,33 @@ func (e *LSMEngine) flushMemTable() error {
 		}
 		if err := writer.Append(key, value); err != nil {
 			writer = nil
-			// Удаляем частично записанный файл через VFS
-			_ = e.vfs.Remove(sstPath) // TODO: log error
+			// Delete partially written file via VFS
+			_ = e.vfs.Remove(sstPath) // Logging of cleanup errors will be added in Release 2.
 			return fmt.Errorf("failed to append key to SSTable: %w", err)
 		}
 	}
 
 	if err := writer.Finish(); err != nil {
-		_ = e.vfs.Remove(sstPath) // TODO: log error
+		_ = e.vfs.Remove(sstPath) // Logging of cleanup errors will be added in Release 2.
 		return fmt.Errorf("failed to finish SSTable: %w", err)
 	}
 
-	// Открываем созданный SSTable для чтения
+	// Open the created SSTable for reading
 	reader, err := sstable.Open(sstPath)
 	if err != nil {
-		_ = e.vfs.Remove(sstPath) // TODO: log error
+		_ = e.vfs.Remove(sstPath) // Logging of cleanup errors will be added in Release 2.
 		return fmt.Errorf("failed to open SSTable: %w", err)
 	}
 
-	// Получаем размер файла
+	// Get file size
 	stat, err := e.vfs.Stat(sstPath)
 	if err != nil {
 		reader.Close()
-		_ = e.vfs.Remove(sstPath) // TODO: log error
+		_ = e.vfs.Remove(sstPath) // Logging of cleanup errors will be added in Release 2.
 		return fmt.Errorf("failed to stat SSTable: %w", err)
 	}
 
-	// Создаём VersionEdit для добавления нового файла
+	// Create VersionEdit to add new file
 	edit := &VersionEdit{
 		NewFiles: []SSTableInfo{
 			{
@@ -95,36 +95,36 @@ func (e *LSMEngine) flushMemTable() error {
 		NextFileNum: fileNum + 1,
 	}
 
-	// Применяем edit к манифесту
+	// Apply edit to manifest
 	if err := e.manifest.Apply(edit); err != nil {
 		reader.Close()
-		_ = e.vfs.Remove(sstPath) // TODO: log error
+		_ = e.vfs.Remove(sstPath) // Logging of cleanup errors will be added in Release 2.
 		return fmt.Errorf("failed to apply manifest edit: %w", err)
 	}
 
-	// Добавляем reader в уровень 0
+	// Add reader to level 0
 	e.levels[0] = append(e.levels[0], reader)
 
-	// Сбрасываем MemTable (в реальности нужно создать новую пустую MemTable)
-	// Пока оставим как есть - очистка MemTable будет выполнена после успешного flush
+	// Reset MemTable (in reality we should create a new empty MemTable)
+	// For now leave as is - MemTable clearing will happen after successful flush
 	// e.memTable = NewMemTable()
 	// e.memSize = 0
 
 	return nil
 }
 
-// maybeCompactLevel0 проверяет, нужно ли выполнить compaction Level0 -> Level1.
-// Вызывает maybeCompact, который уже содержит логику проверки и запуска compaction.
+// maybeCompactLevel0 checks whether Level0 -> Level1 compaction is needed.
+// Calls maybeCompact, which already contains the check and compaction logic.
 //nolint:unused // level-0 compaction trigger
 func (e *LSMEngine) maybeCompactLevel0() {
 	e.maybeCompact()
 }
 
-// maybeFlush проверяет, не превысил ли MemTable лимит, и запускает flush.
+// maybeFlush checks if MemTable exceeds limit and triggers flush.
 //nolint:unused // memtable flush trigger
 func (e *LSMEngine) maybeFlush() {
 	if e.memSize >= MaxMemTableSize {
-		//nolint:errcheck // ошибка обрабатывается внутри горутины
+		//nolint:errcheck // error is handled inside goroutine
 		go e.flushMemTable()
 	}
 }

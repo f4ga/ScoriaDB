@@ -9,20 +9,20 @@ import (
 	"scoriadb/internal/engine"
 )
 
-// Registry управляет множеством Column Families.
-// Каждое CF — отдельный экземпляр LSMEngine со своей директорией.
+// Registry manages multiple Column Families.
+// Each CF is a separate LSMEngine instance with its own directory.
 type Registry struct {
 	mu      sync.RWMutex
 	rootDir string
-	cfs     map[string]*engine.LSMEngine // имя CF → движок
+	cfs     map[string]*engine.LSMEngine // CF name → engine
 }
 
-// NewRegistry создаёт новый реестр CF.
-// rootDir — корневая директория, где будут создаваться поддиректории для каждого CF.
+// NewRegistry creates a new CF registry.
+// rootDir is the root directory where subdirectories for each CF will be created.
 func NewRegistry(rootDir string) (*Registry, error) {
-	// Создаём корневую директорию (если не существует)
-	// Используем стандартную файловую систему, так как VFS пока не внедрён в конструктор движка.
-	// TODO: передавать VFS в опциях
+	// Create root directory (if it doesn't exist)
+	// Using standard filesystem because VFS is not yet integrated into engine constructor.
+	// Tracked for Release 2: pass VFS via options.
 	if err := os.MkdirAll(rootDir, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create root directory: %w", err)
 	}
@@ -32,7 +32,7 @@ func NewRegistry(rootDir string) (*Registry, error) {
 		cfs:     make(map[string]*engine.LSMEngine),
 	}
 
-	// Создаём CF "default" по умолчанию
+	// Create default CF "default"
 	if err := reg.CreateCF("default"); err != nil {
 		return nil, fmt.Errorf("failed to create default CF: %w", err)
 	}
@@ -40,8 +40,8 @@ func NewRegistry(rootDir string) (*Registry, error) {
 	return reg, nil
 }
 
-// CreateCF создаёт новое Column Family с указанным именем.
-// Если CF уже существует, возвращает ошибку.
+// CreateCF creates a new Column Family with the given name.
+// If the CF already exists, returns an error.
 func (r *Registry) CreateCF(name string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -50,10 +50,10 @@ func (r *Registry) CreateCF(name string) error {
 		return fmt.Errorf("CF %q already exists", name)
 	}
 
-	// Директория для CF: <rootDir>/<name>/
+	// Directory for CF: <rootDir>/<name>/
 	cfDir := filepath.Join(r.rootDir, name)
 
-	// Создаём движок LSMEngine
+	// Create LSMEngine
 	eng, err := engine.NewLSMEngine(cfDir)
 	if err != nil {
 		return fmt.Errorf("failed to create LSMEngine for CF %q: %w", name, err)
@@ -63,8 +63,8 @@ func (r *Registry) CreateCF(name string) error {
 	return nil
 }
 
-// GetCF возвращает движок для указанного CF.
-// Если CF не существует, возвращает ошибку.
+// GetCF returns the engine for the specified CF.
+// If the CF does not exist, returns an error.
 func (r *Registry) GetCF(name string) (*engine.LSMEngine, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -76,8 +76,8 @@ func (r *Registry) GetCF(name string) (*engine.LSMEngine, error) {
 	return eng, nil
 }
 
-// DropCF удаляет CF и освобождает связанные ресурсы.
-// Запрещено удалять системные CF (__auth__, __meta__).
+// DropCF deletes a CF and releases its associated resources.
+// Dropping system CFs (__auth__, __meta__) is prohibited.
 func (r *Registry) DropCF(name string) error {
 	if isSystemCF(name) {
 		return fmt.Errorf("cannot drop system CF %q", name)
@@ -91,7 +91,7 @@ func (r *Registry) DropCF(name string) error {
 		return fmt.Errorf("CF %q not found", name)
 	}
 
-	// Закрываем движок
+	// Close the engine
 	if err := eng.Close(); err != nil {
 		return fmt.Errorf("failed to close engine for CF %q: %w", name, err)
 	}
@@ -100,7 +100,7 @@ func (r *Registry) DropCF(name string) error {
 	return nil
 }
 
-// ListCFs возвращает список имён всех CF.
+// ListCFs returns a list of all CF names.
 func (r *Registry) ListCFs() []string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -112,7 +112,7 @@ func (r *Registry) ListCFs() []string {
 	return names
 }
 
-// Close закрывает все CF и освобождает ресурсы реестра.
+// Close closes all CFs and releases registry resources.
 func (r *Registry) Close() error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -120,7 +120,7 @@ func (r *Registry) Close() error {
 	var firstErr error
 	for name, eng := range r.cfs {
 		if err := eng.Close(); err != nil {
-			// Запоминаем первую ошибку, но продолжаем закрывать остальные
+			// Remember the first error but continue closing others
 			if firstErr == nil {
 				firstErr = fmt.Errorf("failed to close CF %q: %w", name, err)
 			}
@@ -130,7 +130,7 @@ func (r *Registry) Close() error {
 	return firstErr
 }
 
-// isSystemCF возвращает true, если имя CF является системным.
+// isSystemCF returns true if the CF name is a system CF.
 func isSystemCF(name string) bool {
 	return name == "__auth__" || name == "__meta__" || name == "__keyspace__"
 }
