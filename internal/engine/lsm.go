@@ -18,11 +18,11 @@ import (
 	"encoding/binary"
 	"fmt"
 	"path/filepath"
-	"sync"
-	"sync/atomic"
 	"scoriadb/internal/engine/sstable"
 	"scoriadb/internal/engine/vfs"
 	"scoriadb/internal/mvcc"
+	"sync"
+	"sync/atomic"
 )
 
 // LSMEngine represents an LSM engine with VLog and MVCC.
@@ -38,14 +38,14 @@ type LSMEngine struct {
 	levels         [][]*sstable.Reader // SSTable levels (Level0, Level1, ...)
 	LastTS         uint64              // atomic timestamp counter
 	closed         bool
-	memSize        int64               // approximate MemTable size in bytes
+	memSize        int64 // approximate MemTable size in bytes
 }
 
 // NewLSMEngine creates a new LSM engine.
 func NewLSMEngine(dataDir string) (*LSMEngine, error) {
 	// Create VFS (standard implementation using os)
 	vfs := vfs.NewDefaultVFS()
-	
+
 	// Create directory via VFS
 	if err := vfs.MkdirAll(dataDir, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create data directory: %w", err)
@@ -58,9 +58,9 @@ func NewLSMEngine(dataDir string) (*LSMEngine, error) {
 		return nil, fmt.Errorf("failed to open manifest: %w", err)
 	}
 
-	// Open VLog (currently using old API, will be updated later)
+	// Open VLog
 	vlogPath := filepath.Join(dataDir, "vlog.db")
-	vlog, err := OpenVLog(vlogPath)
+	vlog, err := OpenVLog(vfs, vlogPath)
 	if err != nil {
 		manifest.Close()
 		return nil, fmt.Errorf("failed to open vlog: %w", err)
@@ -232,7 +232,6 @@ func (e *LSMEngine) DeleteWithTS(key []byte, commitTS uint64) error {
 
 	return nil
 }
-
 
 // ActiveMemTable returns the active (current) MemTable.
 func (e *LSMEngine) ActiveMemTable() *MemTable {

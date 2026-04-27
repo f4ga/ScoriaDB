@@ -92,9 +92,9 @@ func (mt *MemTable) DeleteWithTS(key mvcc.MVCCKey) {
 //   - Inverted timestamp = math.MaxUint64 - commitTS. This guarantees that in sorted order
 //     newer versions (with larger commitTS) appear before older ones (since they have a smaller
 //     inverted timestamp). For details:
-//     * TiKV: “Keys and timestamps are encoded so that timestamped keys are sorted first by key
-//       (ascending), then by timestamp (descending)” (https://pkg.go.dev/github.com/pingcap-incubator/tinykv/kv/transaction/mvcc)
-//     * BadgerDB: “Badger uses Multi-Version Concurrency Control (MVCC)” (https://godocs.io/github.com/dgraph-io/badger)
+//   - TiKV: “Keys and timestamps are encoded so that timestamped keys are sorted first by key
+//     (ascending), then by timestamp (descending)” (https://pkg.go.dev/github.com/pingcap-incubator/tinykv/kv/transaction/mvcc)
+//   - BadgerDB: “Badger uses Multi-Version Concurrency Control (MVCC)” (https://godocs.io/github.com/dgraph-io/badger)
 //
 // # Visibility formula
 //
@@ -112,15 +112,15 @@ func (mt *MemTable) DeleteWithTS(key mvcc.MVCCKey) {
 // search is performed in reverse timestamp order.
 //
 // Algorithm:
-// 1. Search key (key) contains inverted snapshotTS: Timestamp = T(snapshotTS).
-// 2. In B‑Tree entries are sorted first by UserKey (ascending), then by inverted
-//    timestamp (descending), meaning: for the same UserKey newer versions (with larger commitTS)
-//    appear before older ones, because they have a smaller inverted timestamp.
-// 3. Use DescendLessOrEqual, which walks entries in reverse sort order
-//    (from newer to older), starting from a version that is <= searchKey.
-// 4. Visibility condition: commitTS <= snapshotTS  <=>  inverted timestamp >= key.Timestamp.
-// 5. Look for the newest version satisfying the condition, i.e. the first entry with the same UserKey
-//    where entry.Key.Timestamp >= key.Timestamp.
+//  1. Search key (key) contains inverted snapshotTS: Timestamp = T(snapshotTS).
+//  2. In B‑Tree entries are sorted first by UserKey (ascending), then by inverted
+//     timestamp (descending), meaning: for the same UserKey newer versions (with larger commitTS)
+//     appear before older ones, because they have a smaller inverted timestamp.
+//  3. Use DescendLessOrEqual, which walks entries in reverse sort order
+//     (from newer to older), starting from a version that is <= searchKey.
+//  4. Visibility condition: commitTS <= snapshotTS  <=>  inverted timestamp >= key.Timestamp.
+//  5. Look for the newest version satisfying the condition, i.e. the first entry with the same UserKey
+//     where entry.Key.Timestamp >= key.Timestamp.
 //
 // # Tombstone handling (deletion)
 //
@@ -139,11 +139,11 @@ func (mt *MemTable) DeleteWithTS(key mvcc.MVCCKey) {
 //   - If a version is too new (commitTS > snapshotTS), iteration continues.
 //
 // Detailed explanation:
-// - DescendLessOrEqual guarantees we start from a version that is <= searchKey in sort order.
-// - Because newer versions have smaller inverted timestamp, they will be “less” in sort order,
-//   and DescendLessOrEqual will start from the newest version that does not exceed searchKey.
-// - If that version is too new (commitTS > snapshotTS), we continue iteration (move to older ones).
-// - If the version is visible (commitTS <= snapshotTS), we stop because it is the newest visible version.
+//   - DescendLessOrEqual guarantees we start from a version that is <= searchKey in sort order.
+//   - Because newer versions have smaller inverted timestamp, they will be “less” in sort order,
+//     and DescendLessOrEqual will start from the newest version that does not exceed searchKey.
+//   - If that version is too new (commitTS > snapshotTS), we continue iteration (move to older ones).
+//   - If the version is visible (commitTS <= snapshotTS), we stop because it is the newest visible version.
 //
 // References:
 // - TiKV: https://cloud.tencent.com/developer/article/1549435 (lines 29-31)

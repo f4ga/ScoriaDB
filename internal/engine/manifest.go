@@ -37,9 +37,9 @@ type SSTableInfo struct {
 
 // VersionEdit представляет одно атомарное изменение в составе файлов.
 type VersionEdit struct {
-	NewFiles    []SSTableInfo `json:"new_files,omitempty"`
+	NewFiles     []SSTableInfo `json:"new_files,omitempty"`
 	DeletedFiles []SSTableInfo `json:"deleted_files,omitempty"`
-	NextFileNum uint64        `json:"next_file_num,omitempty"`
+	NextFileNum  uint64        `json:"next_file_num,omitempty"`
 }
 
 // Manifest управляет журналом метаданных SSTable.
@@ -65,10 +65,10 @@ func NewManifest(vfs vfs.VFS, path string) (*Manifest, error) {
 	}
 
 	m := &Manifest{
-		vfs:      vfs,
-		file:     file,
-		filePath: path,
-		levels:   make([][]SSTableInfo, 10), // предполагаем максимум 10 уровней
+		vfs:         vfs,
+		file:        file,
+		filePath:    path,
+		levels:      make([][]SSTableInfo, 10), // предполагаем максимум 10 уровней
 		nextFileNum: 1,
 	}
 

@@ -25,6 +25,7 @@ import (
 // compactLevel0 performs compaction from level 0 to level 1.
 // Real implementation: merges all level-0 SSTables into a single new level-1 SSTable
 // using multi-way merge with deduplication and tombstone removal.
+//
 //nolint:unused // triggered by maybeCompact
 func (e *LSMEngine) compactLevel0() error {
 	e.mu.Lock()
@@ -219,6 +220,7 @@ func (e *LSMEngine) compactLevel0() error {
 }
 
 // maybeCompact checks conditions and triggers compaction if needed.
+//
 //nolint:unused // scheduled compaction entry point
 func (e *LSMEngine) maybeCompact() {
 	e.mu.Lock()

@@ -140,12 +140,14 @@ func (e *LSMEngine) flushMemTable() error {
 
 // maybeCompactLevel0 checks whether Level0 -> Level1 compaction is needed.
 // Calls maybeCompact, which already contains the check and compaction logic.
+//
 //nolint:unused // level-0 compaction trigger
 func (e *LSMEngine) maybeCompactLevel0() {
 	e.maybeCompact()
 }
 
 // maybeFlush checks if MemTable exceeds limit and triggers flush.
+//
 //nolint:unused // memtable flush trigger
 func (e *LSMEngine) maybeFlush() {
 	if e.memSize >= MaxMemTableSize {

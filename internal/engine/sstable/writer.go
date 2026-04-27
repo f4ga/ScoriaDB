@@ -38,10 +38,10 @@ type Writer struct {
 	offset uint64
 
 	// Текущий блок
-	blockBuf       []byte
-	blockEntries   int
-	blockStartKey  []byte
-	blockStartOff  uint64
+	blockBuf      []byte
+	blockEntries  int
+	blockStartKey []byte
+	blockStartOff uint64
 
 	// Индекс блоков
 	indexEntries [][]byte
@@ -211,16 +211,16 @@ func (w *Writer) Finish() error {
 	minKeyLen := uint64(len(w.minKey))
 	maxKeyLen := uint64(len(w.maxKey))
 	footer := Footer{
-		IndexOffset:   indexStart,
-		IndexSize:     indexSize,
-		BloomOffset:   bloomStart,
-		BloomSize:     bloomSize,
-		NumKeys:       uint64(len(w.keys)),
-		Magic:         MagicNumber,
-		MinKeyOffset:  minKeyStart,
-		MinKeyLength:  minKeyLen,
-		MaxKeyOffset:  maxKeyStart,
-		MaxKeyLength:  maxKeyLen,
+		IndexOffset:  indexStart,
+		IndexSize:    indexSize,
+		BloomOffset:  bloomStart,
+		BloomSize:    bloomSize,
+		NumKeys:      uint64(len(w.keys)),
+		Magic:        MagicNumber,
+		MinKeyOffset: minKeyStart,
+		MinKeyLength: minKeyLen,
+		MaxKeyOffset: maxKeyStart,
+		MaxKeyLength: maxKeyLen,
 	}
 	if err := binary.Write(w.writer, binary.LittleEndian, footer); err != nil {
 		return fmt.Errorf("failed to write footer: %w", err)
@@ -270,14 +270,14 @@ func compareKeys(a, b []byte) int {
 
 // Footer представляет футер SSTable.
 type Footer struct {
-	IndexOffset   uint64
-	IndexSize     uint64
-	BloomOffset   uint64
-	BloomSize     uint64
-	NumKeys       uint64
-	Magic         uint64
-	MinKeyOffset  uint64
-	MinKeyLength  uint64
-	MaxKeyOffset  uint64
-	MaxKeyLength  uint64
+	IndexOffset  uint64
+	IndexSize    uint64
+	BloomOffset  uint64
+	BloomSize    uint64
+	NumKeys      uint64
+	Magic        uint64
+	MinKeyOffset uint64
+	MinKeyLength uint64
+	MaxKeyOffset uint64
+	MaxKeyLength uint64
 }

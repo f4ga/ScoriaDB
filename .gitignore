@@ -20,6 +20,8 @@ scoria-cli
 server
 plan1.md
 functz.md
+NOLINT.md
+TECHDEBT.md
 # C extensions
 *.so
 

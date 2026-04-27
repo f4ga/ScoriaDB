@@ -15,8 +15,8 @@
 package engine
 
 import (
-	"testing"
 	"scoriadb/internal/mvcc"
+	"testing"
 )
 
 func TestMemTablePutGet(t *testing.T) {

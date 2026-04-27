@@ -73,7 +73,6 @@ func BenchmarkGetExisting(b *testing.B) {
 	}
 }
 
-
 // openBenchDB — вспомогательная функция, создающая временную БД
 func openBenchDB(b *testing.B) *LSMEngine {
 	b.Helper()

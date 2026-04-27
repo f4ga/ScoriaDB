@@ -15,8 +15,8 @@
 package engine_test
 
 import (
-	"testing"
 	"scoriadb/internal/engine"
+	"testing"
 )
 
 func TestLSMEnginePutGet(t *testing.T) {

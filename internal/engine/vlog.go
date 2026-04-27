@@ -18,7 +18,9 @@ import (
 	"encoding/binary"
 	"fmt"
 	"hash/crc32"
+	"log"
 	"os"
+	"scoriadb/internal/engine/vfs"
 	"sync"
 	"syscall"
 )
@@ -48,16 +50,24 @@ type VLog struct {
 }
 
 // OpenVLog открывает или создает VLog файл.
-func OpenVLog(path string) (*VLog, error) {
-	file, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0644)
+func OpenVLog(vfs vfs.VFS, path string) (*VLog, error) {
+	// Открываем файл через VFS
+	file, err := vfs.OpenFile(path, os.O_RDWR|os.O_CREATE, 0644)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open vlog file: %w", err)
 	}
 
-	// Получаем размер файла
-	stat, err := file.Stat()
-	if err != nil {
+	// Для mmap нужен *os.File (реальный файловый дескриптор)
+	osFile, ok := file.(*os.File)
+	if !ok {
 		file.Close()
+		return nil, fmt.Errorf("vlog mmap requires real os.File, got %T", file)
+	}
+
+	// Получаем размер файла
+	stat, err := osFile.Stat()
+	if err != nil {
+		osFile.Close()
 		return nil, fmt.Errorf("failed to stat vlog file: %w", err)
 	}
 	size := stat.Size()
@@ -67,39 +77,45 @@ func OpenVLog(path string) (*VLog, error) {
 		header := make([]byte, 8)
 		binary.BigEndian.PutUint32(header[0:4], VLogMagic)
 		binary.BigEndian.PutUint32(header[4:8], VLogVersion)
-		if _, err := file.Write(header); err != nil {
-			file.Close()
+		if _, err := osFile.Write(header); err != nil {
+			osFile.Close()
 			return nil, fmt.Errorf("failed to write vlog header: %w", err)
 		}
 		size = 8
 	} else {
 		// Проверяем заголовок
 		header := make([]byte, 8)
-		if _, err := file.ReadAt(header, 0); err != nil {
-			file.Close()
+		if _, err := osFile.ReadAt(header, 0); err != nil {
+			osFile.Close()
 			return nil, fmt.Errorf("failed to read vlog header: %w", err)
 		}
 		magic := binary.BigEndian.Uint32(header[0:4])
 		version := binary.BigEndian.Uint32(header[4:8])
 		if magic != VLogMagic {
-			file.Close()
-			return nil, fmt.Errorf("invalid vlog magic: %x", magic)
+			// Повреждённый VLog: логируем, удаляем файл и создаём новый
+			log.Printf("vlog: magic mismatch, removing corrupted file %s", path)
+			osFile.Close()
+			if err := vfs.Remove(path); err != nil {
+				return nil, fmt.Errorf("failed to remove corrupted vlog file: %w", err)
+			}
+			// Открываем заново (будет создан пустой файл)
+			return OpenVLog(vfs, path)
 		}
 		if version != VLogVersion {
-			file.Close()
+			osFile.Close()
 			return nil, fmt.Errorf("unsupported vlog version: %d", version)
 		}
 	}
 
 	// Отображаем файл в память
-	data, err := syscall.Mmap(int(file.Fd()), 0, int(size), syscall.PROT_READ, syscall.MAP_SHARED)
+	data, err := syscall.Mmap(int(osFile.Fd()), 0, int(size), syscall.PROT_READ, syscall.MAP_SHARED)
 	if err != nil {
-		file.Close()
+		osFile.Close()
 		return nil, fmt.Errorf("failed to mmap vlog file: %w", err)
 	}
 
 	vlog := &VLog{
-		file: file,
+		file: osFile,
 		data: data,
 		size: size,
 	}

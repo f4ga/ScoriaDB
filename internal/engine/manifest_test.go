@@ -17,8 +17,8 @@ package engine
 import (
 	"os"
 	"path/filepath"
-	"testing"
 	"scoriadb/internal/engine/vfs"
+	"testing"
 )
 
 func TestNewManifest(t *testing.T) {

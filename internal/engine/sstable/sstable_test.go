@@ -17,8 +17,8 @@ package sstable
 import (
 	"os"
 	"path/filepath"
-	"testing"
 	"scoriadb/internal/mvcc"
+	"testing"
 )
 
 func TestWriterAndReader(t *testing.T) {
