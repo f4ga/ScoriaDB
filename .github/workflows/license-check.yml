@@ -1,0 +1,31 @@
+name: License Check
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  license:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+
+      - name: Install addlicense
+        run: go install github.com/google/addlicense@latest
+
+      - name: Check headers
+        run: |
+          $HOME/go/bin/addlicense \
+            -c "Ekaterina Godulyan" \
+            -l apache \
+            -y 2026 \
+            -check \
+            -ignore "vendor/" \
+            -ignore "proto/" \
+            -ignore "scoriadb/proto/" \
+            .
