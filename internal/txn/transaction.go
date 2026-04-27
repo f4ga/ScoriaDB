@@ -43,7 +43,6 @@ func Begin(db *engine.LSMEngine, startTS uint64) *Transaction {
 // BeginWithNextTS starts a new transaction, automatically obtaining startTS as the next available timestamp.
 // For simplicity we use atomic increment of LastTS in the engine.
 func BeginWithNextTS(db *engine.LSMEngine) (*Transaction, error) {
-	// Uses current engine timestamp (atomic increment to be implemented in Release 2).
 	startTS := db.NextTimestamp()
 	return Begin(db, startTS), nil
 }

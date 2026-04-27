@@ -3,6 +3,7 @@ package engine
 import (
 	"bytes"
 	"fmt"
+	"log"
 	"path/filepath"
 	"scoriadb/internal/engine/sstable"
 )
@@ -57,7 +58,9 @@ func (e *LSMEngine) compactLevel0() error {
 	defer func() {
 		if writer != nil {
 			// If writer hasn't been finished, remove the partial file
-			_ = e.vfs.Remove(sstPath)
+			if err := e.vfs.Remove(sstPath); err != nil {
+				log.Printf("compaction: failed to remove %s: %v", sstPath, err)
+			}
 		}
 	}()
 
@@ -125,7 +128,9 @@ func (e *LSMEngine) compactLevel0() error {
 	// Open the created SSTable
 	reader, err := sstable.Open(sstPath)
 	if err != nil {
-		_ = e.vfs.Remove(sstPath)
+		if err := e.vfs.Remove(sstPath); err != nil {
+			log.Printf("compaction: failed to remove %s: %v", sstPath, err)
+		}
 		return fmt.Errorf("failed to open SSTable: %w", err)
 	}
 	defer func() {
@@ -137,7 +142,9 @@ func (e *LSMEngine) compactLevel0() error {
 	// Get file size
 	stat, err := e.vfs.Stat(sstPath)
 	if err != nil {
-		_ = e.vfs.Remove(sstPath)
+		if err := e.vfs.Remove(sstPath); err != nil {
+			log.Printf("compaction: failed to remove %s: %v", sstPath, err)
+		}
 		return fmt.Errorf("failed to stat SSTable: %w", err)
 	}
 
@@ -171,7 +178,9 @@ func (e *LSMEngine) compactLevel0() error {
 
 	// Apply edit to manifest
 	if err := e.manifest.Apply(edit); err != nil {
-		_ = e.vfs.Remove(sstPath)
+		if err := e.vfs.Remove(sstPath); err != nil {
+			log.Printf("compaction: failed to remove %s: %v", sstPath, err)
+		}
 		return fmt.Errorf("failed to apply manifest edit: %w", err)
 	}
 
@@ -180,7 +189,9 @@ func (e *LSMEngine) compactLevel0() error {
 		reader.Close()
 		if i < len(deletedFiles) && deletedFiles[i].FileNum != 0 {
 			oldPath := filepath.Join(e.dataDir, fmt.Sprintf("%06d.sst", deletedFiles[i].FileNum))
-			_ = e.vfs.Remove(oldPath) // ignore error
+			if err := e.vfs.Remove(oldPath); err != nil {
+				log.Printf("compaction: failed to remove %s: %v", oldPath, err)
+			}
 		}
 	}
 

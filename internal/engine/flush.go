@@ -3,6 +3,7 @@ package engine
 import (
 	"bytes"
 	"fmt"
+	"log"
 	"path/filepath"
 	"scoriadb/internal/engine/sstable"
 	// "scoriadb/internal/mvcc"  implement or decide where to do it
@@ -56,20 +57,26 @@ func (e *LSMEngine) flushMemTable() error {
 		if err := writer.Append(key, value); err != nil {
 			writer = nil
 			// Delete partially written file via VFS
-			_ = e.vfs.Remove(sstPath) // Logging of cleanup errors will be added in Release 2.
+			if err := e.vfs.Remove(sstPath); err != nil {
+				log.Printf("flush: failed to remove %s: %v", sstPath, err)
+			}
 			return fmt.Errorf("failed to append key to SSTable: %w", err)
 		}
 	}
 
 	if err := writer.Finish(); err != nil {
-		_ = e.vfs.Remove(sstPath) // Logging of cleanup errors will be added in Release 2.
+		if err := e.vfs.Remove(sstPath); err != nil {
+			log.Printf("flush: failed to remove %s: %v", sstPath, err)
+		}
 		return fmt.Errorf("failed to finish SSTable: %w", err)
 	}
 
 	// Open the created SSTable for reading
 	reader, err := sstable.Open(sstPath)
 	if err != nil {
-		_ = e.vfs.Remove(sstPath) // Logging of cleanup errors will be added in Release 2.
+		if err := e.vfs.Remove(sstPath); err != nil {
+			log.Printf("flush: failed to remove %s: %v", sstPath, err)
+		}
 		return fmt.Errorf("failed to open SSTable: %w", err)
 	}
 
@@ -77,7 +84,9 @@ func (e *LSMEngine) flushMemTable() error {
 	stat, err := e.vfs.Stat(sstPath)
 	if err != nil {
 		reader.Close()
-		_ = e.vfs.Remove(sstPath) // Logging of cleanup errors will be added in Release 2.
+		if err := e.vfs.Remove(sstPath); err != nil {
+			log.Printf("flush: failed to remove %s: %v", sstPath, err)
+		}
 		return fmt.Errorf("failed to stat SSTable: %w", err)
 	}
 
@@ -98,7 +107,9 @@ func (e *LSMEngine) flushMemTable() error {
 	// Apply edit to manifest
 	if err := e.manifest.Apply(edit); err != nil {
 		reader.Close()
-		_ = e.vfs.Remove(sstPath) // Logging of cleanup errors will be added in Release 2.
+		if err := e.vfs.Remove(sstPath); err != nil {
+			log.Printf("flush: failed to remove %s: %v", sstPath, err)
+		}
 		return fmt.Errorf("failed to apply manifest edit: %w", err)
 	}
 
