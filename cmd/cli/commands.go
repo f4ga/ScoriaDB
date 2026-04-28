@@ -243,6 +243,7 @@ func newAdminCmd() *cobra.Command {
 	}
 	cmd.AddCommand(newAdminUserAddCmd())
 	cmd.AddCommand(newAdminAuthCmd())
+	cmd.AddCommand(newAdminGCCmd())
 	return cmd
 }
 
@@ -304,6 +305,28 @@ func newAdminAuthCmd() *cobra.Command {
 				return fmt.Errorf("authentication failed: %w", err)
 			}
 			fmt.Println(resp.JwtToken)
+			return nil
+		},
+	}
+}
+
+// newAdminGCCmd creates the `admin gc` command.
+func newAdminGCCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "gc",
+		Short: "Run garbage collection on Value Log",
+		Long:  "Collects live ValuePointers from LSM tree and compacts the Value Log",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			client, err := NewClient(addr, token)
+			if err != nil {
+				return err
+			}
+			defer client.Close()
+
+			// TODO: Implement gRPC GC method
+			// For now, just print a message
+			fmt.Println("GC command is not yet implemented via gRPC.")
+			fmt.Println("Use embedded engine directly for GC.")
 			return nil
 		},
 	}

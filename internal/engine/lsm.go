@@ -572,6 +572,66 @@ func (e *LSMEngine) ReadVLogValue(fileID uint64, offset uint32) ([]byte, error) 
 	return e.vlog.Read(vp)
 }
 
+// CollectLiveValuePointers returns a set of all ValuePointers that are currently
+// referenced by live keys in the LSM tree (MemTable + SSTables).
+// This is used for garbage collection of the Value Log.
+func (e *LSMEngine) CollectLiveValuePointers() (map[ValuePointer]struct{}, error) {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+
+	if e.closed {
+		return nil, fmt.Errorf("engine closed")
+	}
+
+	livePointers := make(map[ValuePointer]struct{})
+
+	// Helper function to process a value
+	processValue := func(value []byte) {
+		if len(value) == 12 {
+			// Check if it's a ValuePointer (12 bytes)
+			if vp, ok := decodeValuePointer(value); ok {
+				livePointers[vp] = struct{}{}
+			}
+		}
+	}
+
+	// 1. Collect from MemTable
+	iter := e.memTable.NewIterator()
+	defer iter.Close()
+	for iter.Next() {
+		processValue(iter.Value())
+	}
+
+	// 2. Collect from frozen MemTable (if exists)
+	if e.frozenMemTable != nil {
+		iter := e.frozenMemTable.NewIterator()
+		defer iter.Close()
+		for iter.Next() {
+			processValue(iter.Value())
+		}
+	}
+
+	// 3. Collect from SSTables
+	for level := 0; level < len(e.levels); level++ {
+		for _, reader := range e.levels[level] {
+			iter, err := reader.NewIterator()
+			if err != nil {
+				// Log error but continue with other SSTables
+				log.Printf("gc: failed to create iterator for SSTable: %v", err)
+				continue
+			}
+			defer iter.Close()
+
+			for iter.Next() {
+				processValue(iter.Value())
+			}
+			iter.Close()
+		}
+	}
+
+	return livePointers, nil
+}
+
 // recoverFromWAL recovers MemTable from WAL.
 func recoverFromWAL(wal *WAL, memTable *MemTable, vlog *VLog) error {
 	return wal.Recover(func(entry *WalEntry) error {

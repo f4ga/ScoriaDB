@@ -21,6 +21,7 @@ import (
 	"log"
 	"os"
 	"scoriadb/internal/engine/vfs"
+	"sort"
 	"sync"
 	"syscall"
 )
@@ -247,6 +248,164 @@ func (v *VLog) Size() int64 {
 	v.mu.RLock()
 	defer v.mu.RUnlock()
 	return v.size
+}
+
+// GC performs garbage collection on the Value Log.
+// livePointers is a set of ValuePointers that are still referenced by the LSM tree.
+// It creates a new VLog file, copies all live values to it, and replaces the old file.
+// Returns a map from old ValuePointers to new ValuePointers, and any error.
+// The caller must update references in the LSM tree accordingly.
+func (v *VLog) GC(livePointers map[ValuePointer]struct{}) (map[ValuePointer]ValuePointer, error) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+
+	if v.closed {
+		return nil, fmt.Errorf("vlog is closed")
+	}
+
+	// Create a temporary file for the new VLog
+	tempPath := v.file.Name() + ".gc.tmp"
+	file, err := os.OpenFile(tempPath, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0644)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create temp vlog file: %w", err)
+	}
+	defer func() {
+		if file != nil {
+			file.Close()
+			os.Remove(tempPath)
+		}
+	}()
+
+	// Write header
+	header := make([]byte, 8)
+	binary.BigEndian.PutUint32(header[0:4], VLogMagic)
+	binary.BigEndian.PutUint32(header[4:8], VLogVersion)
+	if _, err := file.Write(header); err != nil {
+		return nil, fmt.Errorf("failed to write vlog header: %w", err)
+	}
+
+	// Map from old pointer to new pointer
+	translation := make(map[ValuePointer]ValuePointer)
+	newOffset := int64(8) // start after header
+
+	// Iterate through live pointers in sorted order to maintain deterministic output
+	// First, collect and sort pointers by offset
+	var pointers []ValuePointer
+	for vp := range livePointers {
+		pointers = append(pointers, vp)
+	}
+	// Sort by offset
+	sort.Slice(pointers, func(i, j int) bool {
+		return pointers[i].Offset < pointers[j].Offset
+	})
+
+	// Copy each live value to the new VLog
+	for _, oldVP := range pointers {
+		// Read the value from the old VLog
+		value, err := v.readAt(oldVP.Offset, oldVP.Size)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read value at offset %d: %w", oldVP.Offset, err)
+		}
+
+		// Write to new VLog
+		crc := crc32.ChecksumIEEE(value)
+		header := make([]byte, 8)
+		binary.BigEndian.PutUint32(header[0:4], crc)
+		binary.BigEndian.PutUint32(header[4:8], uint32(len(value)))
+		if _, err := file.Write(header); err != nil {
+			return nil, fmt.Errorf("failed to write vlog header: %w", err)
+		}
+		if _, err := file.Write(value); err != nil {
+			return nil, fmt.Errorf("failed to write vlog value: %w", err)
+		}
+
+		// Record translation
+		newVP := ValuePointer{Offset: newOffset, Size: oldVP.Size}
+		translation[oldVP] = newVP
+		newOffset += int64(8 + len(value))
+	}
+
+	// Sync the new file
+	if err := file.Sync(); err != nil {
+		return nil, fmt.Errorf("failed to sync new vlog: %w", err)
+	}
+
+	// Close the new file
+	if err := file.Close(); err != nil {
+		return nil, fmt.Errorf("failed to close new vlog: %w", err)
+	}
+	file = nil
+
+	// Close old VLog (unmap)
+	if err := syscall.Munmap(v.data); err != nil {
+		return nil, fmt.Errorf("failed to munmap old vlog: %w", err)
+	}
+	if err := v.file.Close(); err != nil {
+		return nil, fmt.Errorf("failed to close old vlog file: %w", err)
+	}
+
+	// Replace old file with new file
+	oldPath := v.file.Name()
+	if err := os.Rename(tempPath, oldPath); err != nil {
+		return nil, fmt.Errorf("failed to rename temp vlog: %w", err)
+	}
+
+	// Reopen the new file as the current VLog
+	newFile, err := os.OpenFile(oldPath, os.O_RDWR, 0644)
+	if err != nil {
+		return nil, fmt.Errorf("failed to reopen vlog: %w", err)
+	}
+	stat, err := newFile.Stat()
+	if err != nil {
+		newFile.Close()
+		return nil, fmt.Errorf("failed to stat new vlog: %w", err)
+	}
+	size := stat.Size()
+
+	// Remap
+	data, err := syscall.Mmap(int(newFile.Fd()), 0, int(size), syscall.PROT_READ, syscall.MAP_SHARED)
+	if err != nil {
+		newFile.Close()
+		return nil, fmt.Errorf("failed to mmap new vlog: %w", err)
+	}
+
+	// Update VLog state
+	v.file = newFile
+	v.data = data
+	v.size = size
+
+	return translation, nil
+}
+
+// readAt reads a value directly from the mmap'ed data at the given offset.
+// Assumes the caller holds the lock.
+func (v *VLog) readAt(offset int64, size int32) ([]byte, error) {
+	start := int(offset)
+	end := start + 8 + int(size) // header + value
+	if end > len(v.data) {
+		return nil, fmt.Errorf("value pointer out of range: offset=%d size=%d data len=%d", offset, size, len(v.data))
+	}
+
+	// Read header
+	crcStored := binary.BigEndian.Uint32(v.data[start : start+4])
+	sizeStored := binary.BigEndian.Uint32(v.data[start+4 : start+8])
+	if sizeStored != uint32(size) {
+		return nil, fmt.Errorf("size mismatch: stored=%d, pointer=%d", sizeStored, size)
+	}
+
+	// Read value
+	value := v.data[start+8 : end]
+
+	// Check CRC
+	crc := crc32.ChecksumIEEE(value)
+	if crc != crcStored {
+		return nil, fmt.Errorf("crc mismatch: stored=%x, computed=%x", crcStored, crc)
+	}
+
+	// Return a copy
+	result := make([]byte, len(value))
+	copy(result, value)
+	return result, nil
 }
 
 // Close закрывает VLog и освобождает ресурсы.

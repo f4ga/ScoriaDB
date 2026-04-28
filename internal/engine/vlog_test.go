@@ -69,6 +69,159 @@ func TestVLogWriteRead(t *testing.T) {
 	}
 }
 
+func TestBasicGC(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "vlog.db")
+
+	vlog, err := OpenVLog(vfs.Default, path)
+	if err != nil {
+		t.Fatalf("failed to open vlog: %v", err)
+	}
+	defer vlog.Close()
+
+	// Write some large values
+	value1 := make([]byte, 100)
+	for i := range value1 {
+		value1[i] = byte(i)
+	}
+	vp1, err := vlog.Write(value1)
+	if err != nil {
+		t.Fatalf("failed to write value1: %v", err)
+	}
+
+	value2 := make([]byte, 200)
+	for i := range value2 {
+		value2[i] = byte(i + 100)
+	}
+	vp2, err := vlog.Write(value2)
+	if err != nil {
+		t.Fatalf("failed to write value2: %v", err)
+	}
+
+	// Record initial size
+	initialSize := vlog.Size()
+
+	// Create a set of live pointers (simulate that only vp1 is still alive)
+	livePointers := map[ValuePointer]struct{}{
+		vp1: {},
+	}
+
+	// Run GC
+	translation, err := vlog.GC(livePointers)
+	if err != nil {
+		t.Fatalf("GC failed: %v", err)
+	}
+
+	// Check that translation map contains vp1 -> newVP
+	newVP1, ok := translation[vp1]
+	if !ok {
+		t.Error("translation map missing vp1")
+	}
+	// vp2 should not be in translation (it's dead)
+	if _, ok := translation[vp2]; ok {
+		t.Error("translation map should not contain dead pointer vp2")
+	}
+
+	// Verify new VLog size is smaller (since we removed one value)
+	newSize := vlog.Size()
+	if newSize >= initialSize {
+		t.Errorf("expected size to decrease after GC, got initial=%d new=%d", initialSize, newSize)
+	}
+
+	// Verify vp1 value is still readable via new pointer
+	read, err := vlog.Read(newVP1)
+	if err != nil {
+		t.Fatalf("failed to read value after GC: %v", err)
+	}
+	if len(read) != len(value1) {
+		t.Errorf("length mismatch: expected %d, got %d", len(value1), len(read))
+	}
+	for i := range value1 {
+		if read[i] != value1[i] {
+			t.Errorf("byte mismatch at index %d: expected %d, got %d", i, value1[i], read[i])
+			break
+		}
+	}
+
+	// Verify vp2 is no longer readable (should be out of range)
+	_, err = vlog.Read(vp2)
+	if err == nil {
+		t.Error("expected error reading dead pointer vp2")
+	}
+}
+
+func TestGCPreservesLatestVersions(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "vlog.db")
+
+	vlog, err := OpenVLog(vfs.Default, path)
+	if err != nil {
+		t.Fatalf("failed to open vlog: %v", err)
+	}
+	defer vlog.Close()
+
+	// Write a value
+	value1 := make([]byte, 100)
+	for i := range value1 {
+		value1[i] = byte(i)
+	}
+	vp1, err := vlog.Write(value1)
+	if err != nil {
+		t.Fatalf("failed to write value1: %v", err)
+	}
+
+	// Overwrite with new value (simulating update)
+	value2 := make([]byte, 150)
+	for i := range value2 {
+		value2[i] = byte(i + 100)
+	}
+	vp2, err := vlog.Write(value2)
+	if err != nil {
+		t.Fatalf("failed to write value2: %v", err)
+	}
+
+	// Only the latest version (vp2) is live
+	livePointers := map[ValuePointer]struct{}{
+		vp2: {},
+	}
+
+	// Run GC
+	translation, err := vlog.GC(livePointers)
+	if err != nil {
+		t.Fatalf("GC failed: %v", err)
+	}
+
+	// Check that only vp2 is translated
+	if len(translation) != 1 {
+		t.Errorf("expected 1 translation, got %d", len(translation))
+	}
+	newVP2, ok := translation[vp2]
+	if !ok {
+		t.Error("translation map missing vp2")
+	}
+
+	// Verify vp2 value is still readable
+	read, err := vlog.Read(newVP2)
+	if err != nil {
+		t.Fatalf("failed to read value after GC: %v", err)
+	}
+	if len(read) != len(value2) {
+		t.Errorf("length mismatch: expected %d, got %d", len(value2), len(read))
+	}
+	for i := range value2 {
+		if read[i] != value2[i] {
+			t.Errorf("byte mismatch at index %d: expected %d, got %d", i, value2[i], read[i])
+			break
+		}
+	}
+
+	// Old pointer vp1 should be invalid
+	_, err = vlog.Read(vp1)
+	if err == nil {
+		t.Error("expected error reading old pointer vp1")
+	}
+}
+
 func TestVLogCRCError(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "vlog.db")
