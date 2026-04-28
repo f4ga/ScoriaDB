@@ -17,13 +17,14 @@ package mvcc
 import (
 	"bytes"
 	"math"
+	"sync/atomic"
 
 	"github.com/google/btree"
 )
 
 // TimestampGenerator генерирует монотонные временные метки.
 type TimestampGenerator struct {
-	counter uint64
+	counter uint64 // atomic
 }
 
 // NewTimestampGenerator создает новый генератор.
@@ -33,19 +34,24 @@ func NewTimestampGenerator() *TimestampGenerator {
 
 // Next возвращает следующий timestamp.
 func (tg *TimestampGenerator) Next() uint64 {
-	return tg.counter
+	return atomic.LoadUint64(&tg.counter)
 }
 
 // Increment увеличивает счетчик и возвращает новый timestamp.
 func (tg *TimestampGenerator) Increment() uint64 {
-	tg.counter++
-	return tg.counter
+	return atomic.AddUint64(&tg.counter, 1)
 }
 
 // Set устанавливает счетчик в значение (для восстановления).
 func (tg *TimestampGenerator) Set(val uint64) {
-	if val > tg.counter {
-		tg.counter = val
+	for {
+		old := atomic.LoadUint64(&tg.counter)
+		if val <= old {
+			return
+		}
+		if atomic.CompareAndSwapUint64(&tg.counter, old, val) {
+			return
+		}
 	}
 }
 
