@@ -96,14 +96,30 @@ func OpenVLog(vfs vfs.VFS, path string) (*VLog, error) {
 			log.Printf("vlog: magic mismatch, removing corrupted file %s", path)
 			osFile.Close()
 			if err := vfs.Remove(path); err != nil {
-				return nil, fmt.Errorf("failed to remove corrupted vlog file: %w", err)
+				// Попробуем переименовать файл как запасной вариант
+				backupPath := path + ".corrupted"
+				if renameErr := vfs.Rename(path, backupPath); renameErr != nil {
+					return nil, fmt.Errorf("failed to remove corrupted vlog file (remove: %v, rename: %v)", err, renameErr)
+				}
+				log.Printf("vlog: renamed corrupted file to %s", backupPath)
 			}
 			// Открываем заново (будет создан пустой файл)
 			return OpenVLog(vfs, path)
 		}
 		if version != VLogVersion {
+			// Повреждённый VLog: логируем, удаляем файл и создаём новый
+			log.Printf("vlog: version mismatch (got %d, expected %d), removing corrupted file %s", version, VLogVersion, path)
 			osFile.Close()
-			return nil, fmt.Errorf("unsupported vlog version: %d", version)
+			if err := vfs.Remove(path); err != nil {
+				// Попробуем переименовать файл как запасной вариант
+				backupPath := path + ".corrupted"
+				if renameErr := vfs.Rename(path, backupPath); renameErr != nil {
+					return nil, fmt.Errorf("failed to remove corrupted vlog file (remove: %v, rename: %v)", err, renameErr)
+				}
+				log.Printf("vlog: renamed corrupted file to %s", backupPath)
+			}
+			// Открываем заново (будет создан пустой файл)
+			return OpenVLog(vfs, path)
 		}
 	}
 
@@ -224,6 +240,13 @@ func (v *VLog) remap() error {
 	}
 	v.data = data
 	return nil
+}
+
+// Size возвращает текущий размер файла VLog (в байтах).
+func (v *VLog) Size() int64 {
+	v.mu.RLock()
+	defer v.mu.RUnlock()
+	return v.size
 }
 
 // Close закрывает VLog и освобождает ресурсы.

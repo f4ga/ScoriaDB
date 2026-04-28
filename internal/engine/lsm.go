@@ -17,6 +17,7 @@ package engine
 import (
 	"encoding/binary"
 	"fmt"
+	"log"
 	"path/filepath"
 	"scoriadb/internal/engine/sstable"
 	"scoriadb/internal/engine/vfs"
@@ -328,6 +329,18 @@ func recoverFromWAL(wal *WAL, memTable *MemTable, vlog *VLog) error {
 		mvccKey := mvcc.NewMVCCKey(entry.Key, entry.Timestamp)
 		switch entry.Op {
 		case OpPut:
+			// Проверяем, является ли значение VLog-указателем (12 байт)
+			if len(entry.Value) == 12 {
+				if vp, ok := decodeValuePointer(entry.Value); ok {
+					// Проверяем, что указатель не выходит за пределы текущего VLog
+					// offset + size + 8 (заголовок) должен быть <= размеру VLog
+					if vp.Offset < 0 || vp.Size <= 0 || vp.Offset+int64(vp.Size)+8 > vlog.Size() {
+						log.Printf("wal: skipping entry with invalid VLog pointer offset=%d size=%d vlogSize=%d",
+							vp.Offset, vp.Size, vlog.Size())
+						return nil // пропускаем эту запись
+					}
+				}
+			}
 			memTable.Put(mvccKey, entry.Value)
 		case OpDelete:
 			memTable.Put(mvccKey, nil)
