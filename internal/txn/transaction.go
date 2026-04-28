@@ -46,6 +46,7 @@ type Transaction struct {
 // Begin starts a new transaction on the given engine.
 // startTS defines the isolation snapshot (all reads see data as of this timestamp).
 func Begin(db *engine.LSMEngine, startTS uint64) *Transaction {
+	db.RegisterSnapshot(startTS)
 	return &Transaction{
 		db:      db,
 		startTS: startTS,
@@ -58,6 +59,7 @@ func Begin(db *engine.LSMEngine, startTS uint64) *Transaction {
 // For simplicity we use atomic increment of LastTS in the engine.
 func BeginWithNextTS(db *engine.LSMEngine) (*Transaction, error) {
 	startTS := db.NextTimestamp()
+	db.RegisterSnapshot(startTS)
 	return Begin(db, startTS), nil
 }
 
@@ -116,6 +118,7 @@ func (tx *Transaction) Commit() error {
 		return ErrTransactionClosed
 	}
 	defer func() { tx.closed = true }()
+	defer tx.db.UnregisterSnapshot(tx.startTS)
 
 	if len(tx.writes) == 0 {
 		// No changes – transaction successfully completed
@@ -166,6 +169,7 @@ func (tx *Transaction) Rollback() error {
 	}
 	tx.closed = true
 	tx.writes = nil
+	tx.db.UnregisterSnapshot(tx.startTS)
 	return nil
 }
 

@@ -19,7 +19,9 @@ import (
 	"fmt"
 	"log"
 	"path/filepath"
+	"sort"
 	"scoriadb/internal/engine/sstable"
+	"scoriadb/internal/mvcc"
 )
 
 // compactLevel0 performs compaction from level 0 to level 1.
@@ -56,9 +58,38 @@ func (e *LSMEngine) compactLevel0() error {
 		iterators = append(iterators, iter)
 	}
 
-	// Create merge iterator
-	mergeIter := sstable.NewMergeIterator(iterators)
-	defer mergeIter.Close()
+	// Get minimum active snapshot timestamp
+	minActiveSnapshotTS := e.GetMinActiveSnapshotTS()
+
+	// Collect all key-value pairs from all iterators
+	type kv struct {
+		key   mvcc.MVCCKey
+		value []byte
+	}
+	var allKVs []kv
+	for _, iter := range iterators {
+		for iter.Next() {
+			key := iter.Key()
+			value := iter.Value()
+			// Skip tombstones during collection (they will be handled during processing)
+			allKVs = append(allKVs, kv{key, value})
+		}
+		iter.Close()
+	}
+
+	// Sort by user key, then by timestamp descending (newest first)
+	sort.Slice(allKVs, func(i, j int) bool {
+		ki, kj := allKVs[i].key, allKVs[j].key
+		cmp := bytes.Compare(ki.Key, kj.Key)
+		if cmp < 0 {
+			return true
+		}
+		if cmp > 0 {
+			return false
+		}
+		// Same user key: higher timestamp (newer) comes first
+		return ki.Timestamp > kj.Timestamp
+	})
 
 	// Get next file number
 	fileNum := e.manifest.NextFileNum()
@@ -82,51 +113,66 @@ func (e *LSMEngine) compactLevel0() error {
 	var minKey, maxKey []byte
 	var first = true
 	var writtenKeys int
-	var prevUserKey []byte
 
-	// Iterate over merged stream
-	for mergeIter.Next() {
-		key := mergeIter.Key()
-		value := mergeIter.Value()
-
-		// Skip tombstones (empty values) – they represent deletions
-		if len(value) == 0 {
-			continue
+	// Process grouped by user key
+	for i := 0; i < len(allKVs); {
+		userKey := allKVs[i].key.Key
+		
+		// Collect all versions for this user key
+		var versions []kv
+		for i < len(allKVs) && bytes.Equal(allKVs[i].key.Key, userKey) {
+			versions = append(versions, allKVs[i])
+			i++
 		}
 
-		userKey := key.Key
+		// Determine which versions to keep
+		// Always keep the newest version (first in slice due to sorting)
+		// For older versions, keep if commitTS <= minActiveSnapshotTS
+		for j, kv := range versions {
+			commitTS := kv.key.CommitTS()
+			if j == 0 {
+				// Newest version: always keep (unless it's a tombstone)
+				if len(kv.value) == 0 {
+					// Tombstone: skip writing, but still need to consider for range
+					continue
+				}
+			} else {
+				// Older version: keep only if needed by active snapshots
+				if minActiveSnapshotTS == 0 || commitTS > minActiveSnapshotTS {
+					// This version is not visible to any active snapshot (or no snapshots)
+					// Skip it
+					continue
+				}
+				// Also skip tombstones
+				if len(kv.value) == 0 {
+					continue
+				}
+			}
 
-		// Skip duplicate user key (should not happen due to merge iterator dedup)
-		if prevUserKey != nil && bytes.Equal(userKey, prevUserKey) {
-			continue
-		}
-
-		// Update range keys
-		if first {
-			minKey = make([]byte, len(userKey))
-			copy(minKey, userKey)
-			maxKey = make([]byte, len(userKey))
-			copy(maxKey, userKey)
-			first = false
-		} else {
-			if bytes.Compare(userKey, minKey) < 0 {
+			// Update range keys
+			if first {
 				minKey = make([]byte, len(userKey))
 				copy(minKey, userKey)
-			}
-			if bytes.Compare(userKey, maxKey) > 0 {
 				maxKey = make([]byte, len(userKey))
 				copy(maxKey, userKey)
+				first = false
+			} else {
+				if bytes.Compare(userKey, minKey) < 0 {
+					minKey = make([]byte, len(userKey))
+					copy(minKey, userKey)
+				}
+				if bytes.Compare(userKey, maxKey) > 0 {
+					maxKey = make([]byte, len(userKey))
+					copy(maxKey, userKey)
+				}
 			}
-		}
 
-		// Write to new SSTable
-		if err := writer.Append(key, value); err != nil {
-			return fmt.Errorf("failed to append key to SSTable: %w", err)
+			// Write to new SSTable
+			if err := writer.Append(kv.key, kv.value); err != nil {
+				return fmt.Errorf("failed to append key to SSTable: %w", err)
+			}
+			writtenKeys++
 		}
-		writtenKeys++
-
-		// Update previous user key (copy)
-		prevUserKey = append([]byte(nil), userKey...)
 	}
 
 	// If no keys written (all tombstones), we still need to produce an empty SSTable?

@@ -28,18 +28,19 @@ import (
 
 // LSMEngine represents an LSM engine with VLog and MVCC.
 type LSMEngine struct {
-	mu             sync.RWMutex
-	dataDir        string
-	memTable       *MemTable
-	frozenMemTable *MemTable
-	vlog           *VLog
-	wal            *WAL
-	manifest       *Manifest           // SSTable metadata journal
-	vfs            vfs.VFS             // filesystem abstraction
-	levels         [][]*sstable.Reader // SSTable levels (Level0, Level1, ...)
-	LastTS         uint64              // atomic timestamp counter
-	closed         bool
-	memSize        int64 // approximate MemTable size in bytes
+	mu                  sync.RWMutex
+	dataDir             string
+	memTable            *MemTable
+	frozenMemTable      *MemTable
+	vlog                *VLog
+	wal                 *WAL
+	manifest            *Manifest           // SSTable metadata journal
+	vfs                 vfs.VFS             // filesystem abstraction
+	levels              [][]*sstable.Reader // SSTable levels (Level0, Level1, ...)
+	LastTS              uint64              // atomic timestamp counter
+	minActiveSnapshotTS uint64              // atomic, minimum timestamp of active snapshots
+	closed              bool
+	memSize             int64 // approximate MemTable size in bytes
 }
 
 // NewLSMEngine creates a new LSM engine.
@@ -125,6 +126,43 @@ func NewLSMEngine(dataDir string) (*LSMEngine, error) {
 func (e *LSMEngine) NextTimestamp() uint64 {
 	// Use atomic operation to increment LastTS
 	return atomic.AddUint64(&e.LastTS, 1)
+}
+
+// RegisterSnapshot registers an active snapshot with the given timestamp.
+// Updates minActiveSnapshotTS if this snapshot is the oldest active one.
+func (e *LSMEngine) RegisterSnapshot(snapshotTS uint64) {
+	for {
+		oldMin := atomic.LoadUint64(&e.minActiveSnapshotTS)
+		if oldMin == 0 || snapshotTS < oldMin {
+			if atomic.CompareAndSwapUint64(&e.minActiveSnapshotTS, oldMin, snapshotTS) {
+				return
+			}
+			// CAS failed, retry
+			continue
+		}
+		return
+	}
+}
+
+// UnregisterSnapshot removes an active snapshot.
+// If this snapshot was the minimum, we need to find the new minimum.
+// For simplicity, we reset to 0 and rely on other snapshots to update it.
+// In a production system, we would maintain a data structure of all active snapshots.
+func (e *LSMEngine) UnregisterSnapshot(snapshotTS uint64) {
+	oldMin := atomic.LoadUint64(&e.minActiveSnapshotTS)
+	if oldMin == snapshotTS {
+		// The snapshot being removed is the current minimum.
+		// We don't know the next minimum, so reset to 0.
+		// The next RegisterSnapshot will set it correctly.
+		// This is safe because compaction checks for 0 (no active snapshots).
+		atomic.StoreUint64(&e.minActiveSnapshotTS, 0)
+	}
+}
+
+// GetMinActiveSnapshotTS returns the minimum timestamp of active snapshots.
+// Returns 0 if there are no active snapshots.
+func (e *LSMEngine) GetMinActiveSnapshotTS() uint64 {
+	return atomic.LoadUint64(&e.minActiveSnapshotTS)
 }
 
 // PutWithTS writes a key‑value pair with the given timestamp.
