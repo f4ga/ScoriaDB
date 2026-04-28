@@ -29,6 +29,7 @@ type OpType byte
 const (
 	OpPut    OpType = 1
 	OpDelete OpType = 2
+	OpBatch  OpType = 3 // атомарный батч операций
 )
 
 // WalEntry представляет запись в WAL.
@@ -210,3 +211,4 @@ func decodeWalEntry(r io.Reader) (*WalEntry, error) {
 		Timestamp: timestamp,
 	}, nil
 }
+

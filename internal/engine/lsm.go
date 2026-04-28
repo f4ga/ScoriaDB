@@ -272,6 +272,217 @@ func (e *LSMEngine) DeleteWithTS(key []byte, commitTS uint64) error {
 	return nil
 }
 
+// WriteAtomicBatch applies a serialized WriteBatch atomically with a single WAL entry.
+// The data parameter must be the result of txn.EncodeBatch(batch).
+func (e *LSMEngine) WriteAtomicBatch(data []byte, commitTS uint64) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	if e.closed {
+		return fmt.Errorf("engine closed")
+	}
+
+	if len(data) == 0 {
+		return nil
+	}
+
+	// Decode batch operations locally (without importing txn)
+	ops, err := decodeBatchLocal(data)
+	if err != nil {
+		return fmt.Errorf("failed to decode batch: %w", err)
+	}
+
+	// Process each operation to handle VLog for large values
+	processedOps := make([]struct {
+		IsDelete bool
+		Key      []byte
+		Value    []byte
+	}, 0, len(ops))
+
+	for _, op := range ops {
+		var storedValue []byte
+		if op.IsDelete {
+			processedOps = append(processedOps, struct {
+				IsDelete bool
+				Key      []byte
+				Value    []byte
+			}{
+				IsDelete: true,
+				Key:      op.Key,
+				Value:    nil,
+			})
+		} else {
+			// Handle VLog for large values (same logic as PutWithTS)
+			if len(op.Value) <= MaxInlineSize {
+				storedValue = op.Value
+			} else {
+				vp, err := e.vlog.Write(op.Value)
+				if err != nil {
+					return fmt.Errorf("failed to write to vlog: %w", err)
+				}
+				storedValue = encodeValuePointer(vp)
+			}
+			processedOps = append(processedOps, struct {
+				IsDelete bool
+				Key      []byte
+				Value    []byte
+			}{
+				IsDelete: false,
+				Key:      op.Key,
+				Value:    storedValue,
+			})
+		}
+	}
+
+	// Create a temporary batch with processed values for serialization
+	// We need to re-encode with processed values to store in WAL
+	tempData, err := encodeBatchLocal(processedOps)
+	if err != nil {
+		return fmt.Errorf("failed to re-encode batch: %w", err)
+	}
+
+	// Write batch as single WAL entry
+	walEntry := &WalEntry{
+		Op:        OpBatch,
+		Key:       []byte{}, // empty key for batch
+		Value:     tempData,
+		Timestamp: commitTS,
+	}
+	if err := e.wal.Write(walEntry); err != nil {
+		return fmt.Errorf("failed to write batch to wal: %w", err)
+	}
+
+	// Apply operations to MemTable
+	for _, pop := range processedOps {
+		mvccKey := mvcc.NewMVCCKey(pop.Key, commitTS)
+		if pop.IsDelete {
+			e.memTable.DeleteWithTS(mvccKey)
+		} else {
+			e.memTable.Put(mvccKey, pop.Value)
+		}
+	}
+
+	return nil
+}
+
+// decodeBatchLocal decodes a serialized batch without importing txn package.
+// Format matches txn.EncodeBatch: 2 bytes numOps, then for each operation:
+//   1 byte type (1=Put, 2=Delete), 2 bytes keyLen, key, 4 bytes valLen, value.
+func decodeBatchLocal(data []byte) ([]struct {
+	IsDelete bool
+	Key      []byte
+	Value    []byte
+}, error) {
+	if len(data) < 2 {
+		return nil, fmt.Errorf("batch data too short")
+	}
+
+	pos := 0
+	numOps := int(binary.BigEndian.Uint16(data[pos : pos+2]))
+	pos += 2
+
+	ops := make([]struct {
+		IsDelete bool
+		Key      []byte
+		Value    []byte
+	}, 0, numOps)
+
+	for i := 0; i < numOps; i++ {
+		if pos+1 > len(data) {
+			return nil, fmt.Errorf("malformed batch data: missing op type")
+		}
+		opType := data[pos]
+		pos++
+
+		if pos+2 > len(data) {
+			return nil, fmt.Errorf("malformed batch data: missing key length")
+		}
+		keyLen := int(binary.BigEndian.Uint16(data[pos : pos+2]))
+		pos += 2
+
+		if pos+keyLen > len(data) {
+			return nil, fmt.Errorf("malformed batch data: key length exceeds buffer")
+		}
+		key := make([]byte, keyLen)
+		copy(key, data[pos:pos+keyLen])
+		pos += keyLen
+
+		if pos+4 > len(data) {
+			return nil, fmt.Errorf("malformed batch data: missing value length")
+		}
+		valLen := int(binary.BigEndian.Uint32(data[pos : pos+4]))
+		pos += 4
+
+		if pos+valLen > len(data) {
+			return nil, fmt.Errorf("malformed batch data: value length exceeds buffer")
+		}
+		value := make([]byte, valLen)
+		copy(value, data[pos:pos+valLen])
+		pos += valLen
+
+		ops = append(ops, struct {
+			IsDelete bool
+			Key      []byte
+			Value    []byte
+		}{
+			IsDelete: opType == 2, // 1 for Put, 2 for Delete
+			Key:      key,
+			Value:    value,
+		})
+	}
+
+	return ops, nil
+}
+
+// encodeBatchLocal encodes processed operations into the batch format.
+func encodeBatchLocal(ops []struct {
+	IsDelete bool
+	Key      []byte
+	Value    []byte
+}) ([]byte, error) {
+	// Calculate total size
+	totalSize := 2 // for numOps
+	for _, op := range ops {
+		totalSize += 1 + 2 + len(op.Key) + 4 + len(op.Value)
+	}
+
+	buf := make([]byte, totalSize)
+	pos := 0
+
+	// Number of operations
+	binary.BigEndian.PutUint16(buf[pos:pos+2], uint16(len(ops)))
+	pos += 2
+
+	// Each operation
+	for _, op := range ops {
+		// Operation type
+		if op.IsDelete {
+			buf[pos] = 2
+		} else {
+			buf[pos] = 1
+		}
+		pos++
+
+		// Key length
+		binary.BigEndian.PutUint16(buf[pos:pos+2], uint16(len(op.Key)))
+		pos += 2
+
+		// Key
+		copy(buf[pos:pos+len(op.Key)], op.Key)
+		pos += len(op.Key)
+
+		// Value length
+		binary.BigEndian.PutUint32(buf[pos:pos+4], uint32(len(op.Value)))
+		pos += 4
+
+		// Value
+		copy(buf[pos:pos+len(op.Value)], op.Value)
+		pos += len(op.Value)
+	}
+
+	return buf, nil
+}
+
 // ActiveMemTable returns the active (current) MemTable.
 func (e *LSMEngine) ActiveMemTable() *MemTable {
 	return e.memTable
@@ -364,9 +575,9 @@ func (e *LSMEngine) ReadVLogValue(fileID uint64, offset uint32) ([]byte, error) 
 // recoverFromWAL recovers MemTable from WAL.
 func recoverFromWAL(wal *WAL, memTable *MemTable, vlog *VLog) error {
 	return wal.Recover(func(entry *WalEntry) error {
-		mvccKey := mvcc.NewMVCCKey(entry.Key, entry.Timestamp)
 		switch entry.Op {
 		case OpPut:
+			mvccKey := mvcc.NewMVCCKey(entry.Key, entry.Timestamp)
 			// Проверяем, является ли значение VLog-указателем (12 байт)
 			if len(entry.Value) == 12 {
 				if vp, ok := decodeValuePointer(entry.Value); ok {
@@ -381,7 +592,26 @@ func recoverFromWAL(wal *WAL, memTable *MemTable, vlog *VLog) error {
 			}
 			memTable.Put(mvccKey, entry.Value)
 		case OpDelete:
+			mvccKey := mvcc.NewMVCCKey(entry.Key, entry.Timestamp)
 			memTable.Put(mvccKey, nil)
+		case OpBatch:
+			// Десериализуем батч и применяем его операции
+			ops, err := decodeBatchLocal(entry.Value)
+			if err != nil {
+				log.Printf("wal: failed to decode batch: %v", err)
+				return nil // пропускаем повреждённый батч
+			}
+			// Применяем операции батча
+			for _, op := range ops {
+				mvccKey := mvcc.NewMVCCKey(op.Key, entry.Timestamp)
+				if op.IsDelete {
+					memTable.Put(mvccKey, nil)
+				} else {
+					// Для батча значения уже обработаны (VLog указатели или inline)
+					// op.Value уже содержит либо inline значение, либо VLog указатель
+					memTable.Put(mvccKey, op.Value)
+				}
+			}
 		}
 		return nil
 	})

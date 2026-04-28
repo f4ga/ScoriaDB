@@ -15,6 +15,7 @@
 package txn
 
 import (
+	"encoding/binary"
 	"fmt"
 	"scoriadb/internal/engine"
 )
@@ -85,23 +86,15 @@ func ApplyBatch(db *engine.LSMEngine, batch *WriteBatch) (uint64, error) {
 	// Генерируем единый commit timestamp.
 	commitTS := db.NextTimestamp()
 
-	// Применяем операции последовательно.
-	// В реальной реализации нужно обеспечить атомарность через WAL.
-	for _, op := range batch.ops {
-		switch op.Type {
-		case OpPut:
-			if err := db.PutWithTS(op.Key, op.Value, commitTS); err != nil {
-				// В случае ошибки нужно откатить предыдущие операции.
-				// Для простоты пока просто возвращаем ошибку.
-				return 0, fmt.Errorf("failed to apply Put operation: %w", err)
-			}
-		case OpDelete:
-			if err := db.DeleteWithTS(op.Key, commitTS); err != nil {
-				return 0, fmt.Errorf("failed to apply Delete operation: %w", err)
-			}
-		default:
-			return 0, fmt.Errorf("unknown operation type: %v", op.Type)
-		}
+	// Сериализуем батч.
+	encoded, err := EncodeBatch(batch)
+	if err != nil {
+		return 0, fmt.Errorf("failed to encode batch: %w", err)
+	}
+
+	// Применяем батч атомарно через новый метод.
+	if err := db.WriteAtomicBatch(encoded, commitTS); err != nil {
+		return 0, fmt.Errorf("failed to apply batch atomically: %w", err)
 	}
 
 	return commitTS, nil
@@ -110,19 +103,119 @@ func ApplyBatch(db *engine.LSMEngine, batch *WriteBatch) (uint64, error) {
 // ApplyBatchWithTS применяет батч с заданным commit timestamp.
 // Используется внутри транзакций, где timestamp уже известен.
 func ApplyBatchWithTS(db *engine.LSMEngine, batch *WriteBatch, commitTS uint64) error {
+	if batch.Size() == 0 {
+		return nil
+	}
+	// Сериализуем батч.
+	encoded, err := EncodeBatch(batch)
+	if err != nil {
+		return fmt.Errorf("failed to encode batch: %w", err)
+	}
+	return db.WriteAtomicBatch(encoded, commitTS)
+}
+
+// EncodeBatch сериализует WriteBatch в байты для хранения в WAL.
+// Формат: количество операций (2 байта) + для каждой операции:
+//   тип (1 байт) + длина ключа (2 байта) + ключ + длина значения (4 байта) + значение
+func EncodeBatch(batch *WriteBatch) ([]byte, error) {
+	// Сначала вычисляем общий размер
+	totalSize := 2 // для количества операций
 	for _, op := range batch.ops {
-		switch op.Type {
-		case OpPut:
-			if err := db.PutWithTS(op.Key, op.Value, commitTS); err != nil {
-				return fmt.Errorf("failed to apply Put operation: %w", err)
-			}
-		case OpDelete:
-			if err := db.DeleteWithTS(op.Key, commitTS); err != nil {
-				return fmt.Errorf("failed to apply Delete operation: %w", err)
-			}
-		default:
-			return fmt.Errorf("unknown operation type: %v", op.Type)
+		totalSize += 1 + 2 + len(op.Key) + 4 + len(op.Value)
+	}
+
+	buf := make([]byte, totalSize)
+	pos := 0
+
+	// Количество операций
+	binary.BigEndian.PutUint16(buf[pos:pos+2], uint16(len(batch.ops)))
+	pos += 2
+
+	// Каждая операция
+	for _, op := range batch.ops {
+		// Тип операции
+		if op.Type == OpPut {
+			buf[pos] = 1
+		} else if op.Type == OpDelete {
+			buf[pos] = 2
+		} else {
+			return nil, fmt.Errorf("unknown operation type: %v", op.Type)
+		}
+		pos++
+
+		// Длина ключа
+		binary.BigEndian.PutUint16(buf[pos:pos+2], uint16(len(op.Key)))
+		pos += 2
+
+		// Ключ
+		copy(buf[pos:pos+len(op.Key)], op.Key)
+		pos += len(op.Key)
+
+		// Длина значения
+		binary.BigEndian.PutUint32(buf[pos:pos+4], uint32(len(op.Value)))
+		pos += 4
+
+		// Значение
+		copy(buf[pos:pos+len(op.Value)], op.Value)
+		pos += len(op.Value)
+	}
+
+	return buf, nil
+}
+
+// DecodeBatch десериализует WriteBatch из байтов.
+func DecodeBatch(data []byte) (*WriteBatch, error) {
+	if len(data) < 2 {
+		return nil, fmt.Errorf("batch data too short")
+	}
+
+	pos := 0
+	numOps := binary.BigEndian.Uint16(data[pos : pos+2])
+	pos += 2
+
+	batch := NewWriteBatch()
+
+	for i := 0; i < int(numOps); i++ {
+		if pos+1 > len(data) {
+			return nil, fmt.Errorf("malformed batch data: missing op type")
+		}
+		opType := data[pos]
+		pos++
+
+		if pos+2 > len(data) {
+			return nil, fmt.Errorf("malformed batch data: missing key length")
+		}
+		keyLen := binary.BigEndian.Uint16(data[pos : pos+2])
+		pos += 2
+
+		if pos+int(keyLen) > len(data) {
+			return nil, fmt.Errorf("malformed batch data: key length exceeds buffer")
+		}
+		key := make([]byte, keyLen)
+		copy(key, data[pos:pos+int(keyLen)])
+		pos += int(keyLen)
+
+		if pos+4 > len(data) {
+			return nil, fmt.Errorf("malformed batch data: missing value length")
+		}
+		valLen := binary.BigEndian.Uint32(data[pos : pos+4])
+		pos += 4
+
+		if pos+int(valLen) > len(data) {
+			return nil, fmt.Errorf("malformed batch data: value length exceeds buffer")
+		}
+		value := make([]byte, valLen)
+		copy(value, data[pos:pos+int(valLen)])
+		pos += int(valLen)
+
+		if opType == 1 {
+			batch.AddPut(key, value)
+		} else if opType == 2 {
+			batch.AddDelete(key)
+		} else {
+			return nil, fmt.Errorf("unknown operation type in batch: %d", opType)
 		}
 	}
-	return nil
+
+	return batch, nil
 }

@@ -18,6 +18,7 @@
     <tr><td>📖</td><td><a href="#-what-is-scoriadb">What is ScoriaDB</a></td></tr>
     <tr><td>👥</td><td><a href="#-who-is-it-for">Who is it for</a></td></tr>
     <tr><td>✨</td><td><a href="#-why-scoriadb">Why ScoriaDB</a></td></tr>
+    <tr><td>🔰</td><td><a href="#-current-status">Current status</a></td></tr>
     <tr><td>📊</td><td><a href="#-benchmarks">Benchmarks</a></td></tr>
     <tr><td>📊</td><td><a href="#-how-we-compare-to-redis">Comparison with Redis</a></td></tr>
     <tr><td>🧩</td><td><a href="#-features--capabilities">Features & capabilities</a></td></tr>
@@ -40,7 +41,7 @@
 **ScoriaDB** is an embeddable key‑value database that replaces the need for a combination of networked and embedded storage solutions.
 
 - **As an embedded library** — compiles directly into your Go process, giving you maximum speed with zero external dependencies.
-- **As a server** — provides built‑in gRPC, REST, CLI, and (in development) Web UI, without requiring a single line of extra code.
+- **As a server** — provides built‑in gRPC, REST and CLI (Web UI planned for v0.1.1), without requiring a single line of extra code.
 
 > The project is currently in the **v0.1.0 release cycle**. All core components are implemented and tested. A demo tool **Scorix** for log analysis is under development.
 
@@ -63,13 +64,29 @@ ScoriaDB is useful for:
 | Advantage | What it gives you |
 | :--- | :--- |
 | **Embeddable** | Pure Go, no cgo, a single `import` — a powerful LSM engine inside your process. |
-| **Ready‑made server** | gRPC, REST, CLI (and Web UI in development) available immediately, without writing network code. |
+| **Ready‑made server** | gRPC, REST, CLI (and upcoming Web UI) available immediately, without writing network code. |
 | **ACID transactions** | Snapshot Isolation, interactive transactions, atomic WriteBatch. |
 | **Column Families** | Independent LSM trees with per‑CF compaction settings and atomicity across them. |
 | **MVCC** | Readers never block writers; snapshot reads and (future) Time Travel queries. |
 | **Cross‑language access** | 12+ languages via gRPC — Python, Java, C++, Rust, Node.js, C#, and more. |
 | **Reliability** | WAL + Manifest with fsync — crash recovery without data loss. |
 | **Performance** | ~150 ns reads (MemTable), ~1 µs writes, zero‑copy Value Log for large values. |
+
+---
+
+## 🔰 Current status
+
+ScoriaDB is in **active development towards v1.0**. The core engine (LSM, MVCC, transactions) is functionally complete and passes concurrency, race, and crash recovery tests. The v0.1.0 release will be the first stable API and file format snapshot.
+
+| Component | Readiness |
+|-----------|------------|
+| Storage engine | ✅ Stable for non‑critical workloads |
+| Embedded Go API | ✅ Usable, API may change until v1.0 |
+| gRPC / REST / CLI | ✅ Ready for reads, writes, scans |
+| Web UI | 🛠️ Planned for v0.1.1 |
+
+**The `main` branch is recommended for evaluation only.**  
+For any production use, wait for v1.0.0 or pin a specific release tag once it appears.
 
 ---
 
@@ -151,7 +168,7 @@ YCSB benchmarks will be published during v1.0.0.
 | **gRPC API** | All CRUD operations, Scan streaming, transactions. | ✅ |
 | **REST API + WebSocket** | HTTP endpoints for Web UI, push notifications on key changes. | ✅ |
 | **CLI client (`scoria`)** | Commands: `get`, `set`, `del`, `scan`, `txn`, `admin`, `inspect`, interactive shell. | ✅ |
-| **Web UI (React)** | Dashboard for data browsing and user management. | 🛠️ v0.2.0 |
+| **Web UI (React)** | Dashboard for data browsing and user management. | 🛠️ v0.1.1 |
 | **Authentication** | JWT, bcrypt, roles `admin`/`readwrite`/`readonly`. | ✅ |
 | **Docker & docker‑compose** | Multi‑stage server and CLI images, one‑command startup. | ✅ |
 | **CI/CD** | GitHub Actions: lint, tests with race detector, license header check. | ✅ |
@@ -210,12 +227,31 @@ TOKEN=$(./scoria-cli --addr localhost:50051 admin auth admin admin)
 ./scoria-cli --addr localhost:50051 --token "$TOKEN" get hello
 ```
 
+### Concurrent writes and reads — safe thanks to MVCC
+
+```go
+var wg sync.WaitGroup
+for i := 0; i < 10; i++ {
+    wg.Add(1)
+    go func(id int) {
+        defer wg.Done()
+        txn, _ := db.Begin("default")
+        txn.Put([]byte(fmt.Sprintf("key%d", id)), []byte(fmt.Sprintf("val%d", id)))
+        txn.Commit()
+    }(i)
+}
+wg.Wait()
+// All changes are isolated, conflicts are handled
+```
+
 ### Run tests (with race detector) and benchmarks
 
 ```bash
 go test -race ./...
 go test -bench=. ./internal/engine ./pkg/scoria
 ```
+
+All core tests pass with the `-race` flag — concurrent access is free of data races.
 
 ---
 
@@ -230,11 +266,11 @@ All of the following must pass before tagging v0.1.0:
 | | Manifest, VFS, Compaction | 🛠️ |
 | | Basic GC Value Log | 🛠️ |
 | **Versioning** | MVCC (Snapshot Isolation) | ✅ |
-| **Transactions** | WriteBatch, Interactive transactions | 🛠️ |
+| **Transactions** | WriteBatch, Interactive transactions | ✅ |
 | **Data** | Column Families | ✅ |
 | **API** | Embedded Go, gRPC, REST, WebSocket | ✅ |
 | **Interfaces** | CLI client (`scoria`) | ✅ |
-| | Web UI (React) | 🛠️ v0.2.0 |
+| | Web UI (React) | 🛠️ v0.1.1 |
 | **Security** | Authentication (JWT, roles) | ✅ |
 | **DevOps** | Docker, docker‑compose | ✅ |
 | **Quality** | All tests pass, benchmarks are run | 🛠️ |
@@ -278,9 +314,9 @@ scoriadb/
 | Version | Content |
 |:---|:---|
 | **v0.1.0** | Full core engine, MVCC, ACID transactions, Column Families, Embedded & gRPC/REST API, CLI client, authentication, Docker, CI/CD, Critical Hardening (Manifest fsync, atomic timestamps, MVCC‑safe compaction, atomic WriteBatch in WAL, basic GC Value Log), concurrency & crash recovery tests |
-| **v0.2.0** | Web UI (React) , TUI |
-| **v0.3.0** | TTL for records |
-| **v0.4.0** | Kubernetes Operator, advanced GC Value Log |
+| **v0.1.1** | Web UI (React) |
+| **v0.2.0** | TTL for records |
+| **v0.3.0** | Kubernetes Operator, advanced GC Value Log |
 | **v1.0.0-alpha.1 → v1.0.0** | Raft replication, sharding, distributed ACID transactions (2PC), native data structures (Sorted Sets, Lists, queues, secondary indexes, JSON documents), mTLS, Row‑Level Security, audit |
 
 ---
@@ -314,28 +350,31 @@ Both use WiscKey. BadgerDB is only a library — no server, no interactive trans
 ### 4. How does it differ from RocksDB?
 RocksDB — C++ (cgo), no built‑in server. ScoriaDB — pure Go, with its own gRPC/CLI and interactive ACID transactions.
 
-### 5. Can I use ScoriaDB from Python/Java/C++?
+### 5. Why Snapshot Isolation instead of full serializability?
+Snapshot Isolation provides the optimal balance between performance and consistency for key‑value workloads. Readers are never blocked, and writers check conflicts only at commit time. Full serializability would require heavier locking and is not planned for v1.0.
+
+### 6. Can I use ScoriaDB from Python/Java/C++?
 Yes, via the gRPC API.
 
-### 6. Does ScoriaDB support SQL?
+### 7. Does ScoriaDB support SQL?
 No. ScoriaDB is a KV database. SQL‑like queries are not planned.
 
-### 7. What happens to data on a sudden power loss?
+### 8. What happens to data on a sudden power loss?
 WAL + Manifest with fsync guarantee full recovery without metadata corruption or data loss.
 
-### 8. Is it production‑ready?
+### 9. Is it production‑ready?
 v0.1.0 will be the first stable release. For critical systems we recommend waiting for v1.0.0.
 
-### 9. What data structures are currently supported?
+### 10. What data structures are currently supported?
 Strings. v1.0.0 will introduce Sorted Sets, Lists, queues, and indexes.
 
-### 10. Will there be a distributed mode?
+### 11. Will there be a distributed mode?
 Yes, in v1.0.0: Raft replication, sharding, and federation.
 
-### 11. Why gRPC instead of REST?
+### 12. Why gRPC instead of REST?
 gRPC is faster (HTTP/2, binary protobuf) and supports streaming. REST is used for Web UI and debugging.
 
-### 12. How can I help?
+### 13. How can I help?
 ⭐ Star the repo, report bugs in Issues, submit Pull Requests, and share the project.
 
 ---
