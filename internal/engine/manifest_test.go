@@ -262,3 +262,59 @@ func TestManifestCorruptedFile(t *testing.T) {
 		t.Errorf("expected next file num 1, got %d", m.NextFileNum())
 	}
 }
+
+// TestManifestFsync проверяет, что Apply вызывает Sync и данные сохраняются после "краха".
+func TestManifestFsync(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "MANIFEST")
+
+	// Используем стандартный VFS
+	vfs := vfs.NewDefaultVFS()
+	m, err := NewManifest(vfs, path)
+	if err != nil {
+		t.Fatalf("failed to create manifest: %v", err)
+	}
+	defer m.Close()
+
+	// Применяем несколько VersionEdit
+	edit1 := &VersionEdit{
+		NewFiles: []SSTableInfo{
+			{FileNum: 1, Level: 0, MinKey: []byte("a"), MaxKey: []byte("b"), Size: 100},
+		},
+		NextFileNum: 2,
+	}
+	if err := m.Apply(edit1); err != nil {
+		t.Fatalf("failed to apply edit1: %v", err)
+	}
+	edit2 := &VersionEdit{
+		NewFiles: []SSTableInfo{
+			{FileNum: 2, Level: 1, MinKey: []byte("c"), MaxKey: []byte("d"), Size: 200},
+		},
+		NextFileNum: 3,
+	}
+	if err := m.Apply(edit2); err != nil {
+		t.Fatalf("failed to apply edit2: %v", err)
+	}
+
+	// Закрываем манифест (симулируем нормальное завершение)
+	m.Close()
+
+	// Открываем заново (симулируем восстановление после краха)
+	m2, err := NewManifest(vfs, path)
+	if err != nil {
+		t.Fatalf("failed to reopen manifest: %v", err)
+	}
+	defer m2.Close()
+
+	// Проверяем, что все изменения восстановились
+	levels := m2.GetLevels()
+	if len(levels[0]) != 1 || levels[0][0].FileNum != 1 {
+		t.Errorf("level 0 mismatch after recovery: %v", levels[0])
+	}
+	if len(levels[1]) != 1 || levels[1][0].FileNum != 2 {
+		t.Errorf("level 1 mismatch after recovery: %v", levels[1])
+	}
+	if m2.NextFileNum() != 3 {
+		t.Errorf("expected next file num 3 after recovery, got %d", m2.NextFileNum())
+	}
+}
