@@ -17,6 +17,7 @@ package scoria
 import (
 	"bytes"
 	"encoding/binary"
+	"fmt"
 	"math"
 	"sort"
 	"sync/atomic"
@@ -103,6 +104,17 @@ type Batch interface {
 type ScoriaDB struct {
 	registry *cf.Registry
 }
+
+// errorIterator — итератор, возвращающий ошибку при проверке через Err().
+type errorIterator struct {
+	err error
+}
+
+func (it *errorIterator) Next() bool  { return false }
+func (it *errorIterator) Key() []byte { return nil }
+func (it *errorIterator) Value() []byte { return nil }
+func (it *errorIterator) Err() error  { return it.err }
+func (it *errorIterator) Close()      {}
 
 // emptyIterator — заглушка итератора, не возвращающая данных.
 type emptyIterator struct{}
@@ -376,9 +388,8 @@ func (db *ScoriaDB) Scan(prefix []byte) Iterator {
 func (db *ScoriaDB) ScanCF(cfName string, prefix []byte) Iterator {
 	eng, err := db.registry.GetCF(cfName)
 	if err != nil {
-		// В случае ошибки возвращаем пустой итератор (можно было бы вернуть errorIterator,
-		// но интерфейс Iterator не поддерживает ошибку при создании).
-		return &emptyIterator{}
+		// Возвращаем итератор с ошибкой, чтобы вызывающий код мог понять причину.
+		return &errorIterator{err: fmt.Errorf("CF %q not found: %w", cfName, err)}
 	}
 	return newMergeIterator(eng, prefix)
 }
