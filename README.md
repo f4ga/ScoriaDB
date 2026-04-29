@@ -330,9 +330,6 @@ Additional terms:
 - Contributions are governed by the [Contributor License Agreement](CONTRIBUTING.md).  
 - All source files contain mandatory license headers; verification is performed automatically in CI.
 
-Enterprise features (Raft replication, mTLS, Row‑Level Security) will be available under a separate commercial license.  
-For commercial licensing inquiries: **scoriadb@gmail.com**.
-
 ---
 
 ## ❓ FAQ
