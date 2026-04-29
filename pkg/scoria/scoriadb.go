@@ -116,15 +116,6 @@ func (it *errorIterator) Value() []byte { return nil }
 func (it *errorIterator) Err() error  { return it.err }
 func (it *errorIterator) Close()      {}
 
-// emptyIterator — заглушка итератора, не возвращающая данных.
-type emptyIterator struct{}
-
-func (it *emptyIterator) Next() bool { return false }
-func (it *emptyIterator) Key() []byte { return nil }
-func (it *emptyIterator) Value() []byte { return nil }
-func (it *emptyIterator) Err() error { return nil }
-func (it *emptyIterator) Close() {}
-
 // mergeIterator — итератор, объединяющий данные из активной MemTable, frozen MemTable и SSTable.
 type mergeIterator struct {
 	// собранные ключи (userKey -> latest MVCCKey)
@@ -406,8 +397,7 @@ func (db *ScoriaDB) NewTransaction() Transaction {
 	startTS := uint64(0) // временно
 	return txn.Begin(eng, startTS)
 }
-
-// NewBatch создаёт новый батч операций, привязанный к CF "default".
+// NewBatch creates a new batch of operations bound to CF "default".
 func (db *ScoriaDB) NewBatch() Batch {
 	return &scoriaBatch{
 		db:     db,
@@ -416,6 +406,14 @@ func (db *ScoriaDB) NewBatch() Batch {
 	}
 }
 
+// NewBatchForCF creates a new batch of operations bound to the specified CF.
+func (db *ScoriaDB) NewBatchForCF(cfName string) Batch {
+	return &scoriaBatch{
+		db:     db,
+		cfName: cfName,
+		inner:  txn.NewWriteBatch(),
+	}
+}
 // Close закрывает все Column Families и освобождает ресурсы.
 func (db *ScoriaDB) Close() error {
 	return db.registry.Close()
