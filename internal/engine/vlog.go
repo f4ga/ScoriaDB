@@ -32,7 +32,7 @@ const (
 	// VLogVersion версия формата.
 	VLogVersion uint32 = 1
 	// MaxInlineSize максимальный размер значения для inline хранения.
-	MaxInlineSize = 1 << 30 // ~1 GB, временно для демо-проекта Scorix
+	MaxInlineSize = 64 
 )
 
 // ValuePointer указывает на значение в VLog.

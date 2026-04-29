@@ -263,17 +263,16 @@ All of the following must pass before tagging v0.1.0:
 | :--- | :--- | :--- |
 | **Core** | LSM tree, Value Log, WAL | ✅ |
 | | SSTable (Bloom, range filter) | ✅ |
-| | Manifest, VFS, Compaction | 🛠️ |
-| | Basic GC Value Log | 🛠️ |
+| | Manifest, VFS, Compaction | ✅ |
+| | Basic GC Value Log | ✅ |
 | **Versioning** | MVCC (Snapshot Isolation) | ✅ |
 | **Transactions** | WriteBatch, Interactive transactions | ✅ |
 | **Data** | Column Families | ✅ |
 | **API** | Embedded Go, gRPC, REST, WebSocket | ✅ |
 | **Interfaces** | CLI client (`scoria`) | ✅ |
-| | Web UI (React) | 🛠️ v0.1.1 |
 | **Security** | Authentication (JWT, roles) | ✅ |
 | **DevOps** | Docker, docker‑compose | ✅ |
-| **Quality** | All tests pass, benchmarks are run | 🛠️ |
+| **Quality** | All tests pass, benchmarks are run | ✅ |
 | **Stress** | Concurrency, crash recovery, long‑running write | 🛠️ |
 
 All tests listed in the full technical specification must pass for v0.1.0.

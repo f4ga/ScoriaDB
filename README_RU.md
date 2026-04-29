@@ -264,17 +264,16 @@ go test -bench=. ./internal/engine ./pkg/scoria
 | :--- | :--- | :--- |
 | **Ядро** | LSM‑дерево, Value Log, WAL | ✅ |
 | | SSTable (Bloom, диапазонный фильтр) | ✅ |
-| | Manifest, VFS, Compaction | 🛠️ |
-| | Базовый GC Value Log | 🛠️ |
+| | Manifest, VFS, Compaction | ✅ |
+| | Базовый GC Value Log | ✅ |
 | **Версионность** | MVCC (Snapshot Isolation) | ✅ |
 | **Транзакции** | WriteBatch, Интерактивные транзакции | ✅ |
 | **Данные** | Column Families | ✅ |
 | **API** | Embedded Go, gRPC, REST, WebSocket | ✅ |
 | **Интерфейсы** | CLI‑клиент (`scoria`) | ✅ |
-| | Web UI (React) | 🛠️ v0.1.1 |
 | **Безопасность** | Аутентификация (JWT, роли) | ✅ |
 | **DevOps** | Docker, docker‑compose | ✅ |
-| **Качество** | Все тесты проходят, бенчмарки запущены | 🛠️ |
+| **Качество** | Все тесты проходят, бенчмарки запущены | ✅ |
 | **Стресс‑тесты** | Конкурентность, crash recovery, длительная запись | 🛠️ |
 
 Все тесты, перечисленные в полном техническом задании, должны проходить для v0.1.0.
