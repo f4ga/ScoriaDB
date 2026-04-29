@@ -77,14 +77,8 @@ func NewLSMEngine(dataDir string) (*LSMEngine, error) {
 		return nil, fmt.Errorf("failed to open wal: %w", err)
 	}
 
-	// Recover data from WAL
+	// Create empty MemTable
 	memTable := NewMemTable()
-	if err := recoverFromWAL(wal, memTable, vlog); err != nil {
-		vlog.Close()
-		wal.Close()
-		manifest.Close()
-		return nil, fmt.Errorf("failed to recover from wal: %w", err)
-	}
 
 	// Determine last timestamp (simple counter for now)
 	lastTS := uint64(1) // TODO: restore from persisted data
@@ -118,6 +112,14 @@ func NewLSMEngine(dataDir string) (*LSMEngine, error) {
 		levels:   levels,
 		LastTS:   lastTS,
 		memSize:  0,
+	}
+	// After VLog may have been recreated (magic mismatch), invalidate any remaining pointers
+	// BEFORE recovering from WAL, to avoid conflicts with stale pointers
+	engine.InvalidateVLogPointers()
+	// Recover data from WAL
+	if err := recoverFromWAL(engine.wal, engine.memTable, engine.vlog); err != nil {
+		engine.Close()
+		return nil, fmt.Errorf("failed to recover from wal: %w", err)
 	}
 	return engine, nil
 }
@@ -632,6 +634,42 @@ func (e *LSMEngine) CollectLiveValuePointers() (map[ValuePointer]struct{}, error
 	return livePointers, nil
 }
 
+// InvalidateVLogPointers removes all entries in MemTable (active and frozen) that contain
+// VLog pointers (12‑byte values). This is called after VLog is recreated (magic mismatch)
+// to avoid "value pointer out of range" errors when reading those entries.
+func (e *LSMEngine) InvalidateVLogPointers() {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	if e.closed {
+		return
+	}
+
+	// Helper to process a MemTable
+	processTable := func(mt *MemTable) {
+		iter := mt.NewIterator()
+		defer iter.Close()
+
+		var toDelete []mvcc.MVCCKey
+		for iter.Next() {
+			val := iter.Value()
+			if len(val) == 12 {
+				// Could be a VLog pointer; we don't need to decode, just delete
+				toDelete = append(toDelete, iter.Key())
+			}
+		}
+		// Delete collected entries
+		for _, key := range toDelete {
+			mt.DeleteWithTS(key)
+		}
+	}
+
+	processTable(e.memTable)
+	if e.frozenMemTable != nil {
+		processTable(e.frozenMemTable)
+	}
+}
+
 // recoverFromWAL recovers MemTable from WAL.
 func recoverFromWAL(wal *WAL, memTable *MemTable, vlog *VLog) error {
 	return wal.Recover(func(entry *WalEntry) error {
@@ -666,11 +704,29 @@ func recoverFromWAL(wal *WAL, memTable *MemTable, vlog *VLog) error {
 				mvccKey := mvcc.NewMVCCKey(op.Key, entry.Timestamp)
 				if op.IsDelete {
 					memTable.Put(mvccKey, nil)
-				} else {
-					// Для батча значения уже обработаны (VLog указатели или inline)
-					// op.Value уже содержит либо inline значение, либо VLog указатель
-					memTable.Put(mvccKey, op.Value)
+					continue
 				}
+				// Для батча значения уже обработаны (VLog указатели или inline)
+				// op.Value уже содержит либо inline значение, либо VLog указатель
+				if len(op.Value) == 12 {
+					if vp, ok := decodeValuePointer(op.Value); ok {
+						// Проверяем, что указатель не выходит за пределы текущего VLog
+						if vp.Offset < 0 || vp.Size <= 0 || vp.Offset+int64(vp.Size)+8 > vlog.Size() {
+							log.Printf("wal: skipping batch entry with invalid VLog pointer offset=%d size=%d vlogSize=%d",
+								vp.Offset, vp.Size, vlog.Size())
+							// Сохраняем ключ с tombstone, чтобы не терять факт существования ключа
+							memTable.Put(mvccKey, nil)
+							continue
+						}
+					} else {
+						// Не удалось декодировать указатель (коррупция) – пропускаем операцию
+						log.Printf("wal: skipping batch entry with malformed VLog pointer")
+						memTable.Put(mvccKey, nil)
+						continue
+					}
+				}
+				// Валидный указатель или inline значение
+				memTable.Put(mvccKey, op.Value)
 			}
 		}
 		return nil

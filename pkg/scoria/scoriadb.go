@@ -47,6 +47,7 @@ type CFDB interface {
 	// Транзакции
 	NewTransaction() Transaction
 	NewBatch() Batch
+	NewBatchForCF(cfName string) Batch
 
 	// Администрирование Column Families
 	CreateCF(name string) error

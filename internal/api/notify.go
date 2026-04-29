@@ -96,6 +96,10 @@ func (ndb *NotifyingDB) NewBatch() scoria.Batch {
 	return ndb.inner.NewBatch()
 }
 
+// NewBatchForCF делегирует вызов внутреннему CFDB.
+func (ndb *NotifyingDB) NewBatchForCF(cfName string) scoria.Batch {
+    return ndb.inner.NewBatchForCF(cfName)
+}
 // CreateCF делегирует вызов внутренней БД.
 func (ndb *NotifyingDB) CreateCF(name string) error {
 	return ndb.inner.CreateCF(name)
