@@ -38,9 +38,9 @@ type pendingOp struct {
 // Transaction represents an interactive transaction with optimistic concurrency control.
 type Transaction struct {
 	db      *engine.LSMEngine
-	startTS uint64            // snapshot timestamp
+	startTS uint64                 // snapshot timestamp
 	writes  map[string]*pendingOp // buffer of uncommitted changes (key → operation)
-	closed  bool              // true after Commit or Rollback
+	closed  bool                  // true after Commit or Rollback
 }
 
 // Begin starts a new transaction on the given engine.
@@ -125,15 +125,15 @@ func (tx *Transaction) Commit() error {
 		return nil
 	}
 
-	// Check conflicts
+	// Check conflicts for each key in the write set
 	for _, op := range tx.writes {
-		// For each key we need to verify there is no version in the engine with commitTS > startTS.
-		// Get the newest version of the key (with any timestamp).
-		// In a real implementation we would use GetWithTS with a larger snapshotTS
-		// or a dedicated conflict‑checking method.
-		// For simplicity we skip the check for now.
-		// TODO: implement conflict checking
-		_ = op
+		conflict, err := tx.db.CheckConflict(op.Key, tx.startTS)
+		if err != nil {
+			return err
+		}
+		if conflict {
+			return ErrConflict
+		}
 	}
 
 	// Generate commitTS (must be > startTS)

@@ -178,3 +178,40 @@ func TestTransactionClosed(t *testing.T) {
 		t.Errorf("expected ErrTransactionClosed on rollback after commit, got %v", err)
 	}
 }
+
+func TestTransactionConflict(t *testing.T) {
+    dir := t.TempDir()
+    db, err := engine.NewLSMEngine(dir)
+    if err != nil {
+        t.Fatalf("failed to create engine: %v", err)
+    }
+    defer db.Close()
+
+    // Запись начального значения
+    if err := db.PutWithTS([]byte("key"), []byte("initial"), 1); err != nil {
+        t.Fatalf("init put: %v", err)
+    }
+
+    // Транзакция A: startTS = 10
+    txA := Begin(db, 10)
+    if err := txA.Put([]byte("key"), []byte("A")); err != nil {
+        t.Fatal(err)
+    }
+
+    // Транзакция B: startTS = 10 (такой же)
+    txB := Begin(db, 10)
+    if err := txB.Put([]byte("key"), []byte("B")); err != nil {
+        t.Fatal(err)
+    }
+
+    // Коммитим A — должен успешно
+    if err := txA.Commit(); err != nil {
+        t.Fatalf("txA commit: %v", err)
+    }
+
+    // Коммитим B — должен вернуть ErrConflict
+    err = txB.Commit()
+    if err != ErrConflict {
+        t.Fatalf("expected ErrConflict, got %v", err)
+    }
+}

@@ -17,6 +17,7 @@ package main
 import (
 	"fmt"
 	"strings"
+	"os"
 
 	"github.com/c-bata/go-prompt"
 	"github.com/spf13/cobra"
@@ -62,10 +63,11 @@ func (s *shellState) executor(line string) {
 	if line == "" {
 		return
 	}
-	if line == "exit" || line == "quit" {
-		fmt.Println("Goodbye!")
-		// TODO: exit the prompt
-		return
+	if line == "exit" {
+		fmt.Println("Bye")
+		os.Exit(0)
+		return  
+
 	}
 	if line == "help" {
 		s.help()

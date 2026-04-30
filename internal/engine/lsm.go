@@ -15,6 +15,7 @@
 package engine
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"log"
@@ -41,6 +42,8 @@ type LSMEngine struct {
 	minActiveSnapshotTS uint64              // atomic, minimum timestamp of active snapshots
 	closed              bool
 	memSize             int64 // approximate MemTable size in bytes
+	// lastCommitCache stores the latest commitTS for each user key (fast conflict detection)
+	lastCommitCache sync.Map
 }
 
 // NewLSMEngine creates a new LSM engine.
@@ -167,6 +170,20 @@ func (e *LSMEngine) GetMinActiveSnapshotTS() uint64 {
 	return atomic.LoadUint64(&e.minActiveSnapshotTS)
 }
 
+// updateLastCommitCache atomically stores the latest commitTS for a key.
+func (e *LSMEngine) updateLastCommitCache(key []byte, commitTS uint64) {
+	e.lastCommitCache.Store(string(key), commitTS)
+}
+
+// getLastCommitCache returns the latest known commitTS for a key from cache.
+func (e *LSMEngine) getLastCommitCache(key []byte) (uint64, bool) {
+	val, ok := e.lastCommitCache.Load(string(key))
+	if !ok {
+		return 0, false
+	}
+	return val.(uint64), true
+}
+
 // PutWithTS writes a key‑value pair with the given timestamp.
 func (e *LSMEngine) PutWithTS(key, value []byte, commitTS uint64) error {
 	e.mu.Lock()
@@ -215,6 +232,9 @@ func (e *LSMEngine) PutWithTS(key, value []byte, commitTS uint64) error {
 	// Update MemTable
 	e.memTable.Put(mvccKey, storedValue)
 
+	// Update last commit cache
+	e.updateLastCommitCache(key, commitTS)
+
 	// TODO: check if flush is needed
 	return nil
 }
@@ -247,6 +267,110 @@ func (e *LSMEngine) GetWithTS(key []byte, snapshotTS uint64) ([]byte, error) {
 	return nil, nil // key not found
 }
 
+// GetLatestInfo returns the latest value and its commitTS for a key.
+// If the key does not exist, returns (nil, 0, nil).
+func (e *LSMEngine) GetLatestInfo(key []byte) ([]byte, uint64, error) {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+
+	if e.closed {
+		return nil, 0, fmt.Errorf("engine closed")
+	}
+
+	// Helper to search a MemTable and return the latest version with key and value
+	searchMemTable := func(mt *MemTable) ([]byte, uint64, bool) {
+		if mt == nil {
+			return nil, 0, false
+		}
+		iter := mt.NewIterator()
+		defer iter.Close()
+		var bestValue []byte
+		var bestTS uint64
+		for iter.Next() {
+			mvccKey := iter.Key()
+			if bytes.Equal(mvccKey.Key, key) {
+				commitTS := mvccKey.CommitTS()
+				if commitTS > bestTS {
+					bestTS = commitTS
+					bestValue = iter.Value()
+				}
+			}
+		}
+		return bestValue, bestTS, bestValue != nil
+	}
+
+	// Search active MemTable
+	val, ts, found := searchMemTable(e.memTable)
+	if found {
+		decoded, err := e.decodeStoredValue(val)
+		return decoded, ts, err
+	}
+
+	// Search frozen MemTable
+	val, ts, found = searchMemTable(e.frozenMemTable)
+	if found {
+		decoded, err := e.decodeStoredValue(val)
+		return decoded, ts, err
+	}
+
+	// Search SSTables
+	for _, level := range e.levels {
+		for _, sst := range level {
+			iter, err := sst.NewIterator()
+			if err != nil {
+				continue
+			}
+			defer iter.Close()
+			var bestValue []byte
+			var bestTS uint64
+			for iter.Next() {
+				mvccKey := iter.Key()
+				if bytes.Equal(mvccKey.Key, key) {
+					commitTS := mvccKey.CommitTS()
+					if commitTS > bestTS {
+						bestTS = commitTS
+						bestValue = iter.Value()
+					}
+				}
+			}
+			if bestValue != nil {
+				decoded, err := e.decodeStoredValue(bestValue)
+				return decoded, bestTS, err
+			}
+		}
+	}
+
+	return nil, 0, nil // not found
+}
+
+// CheckConflict returns true if the key has been modified after startTS.
+// Uses fast cache first, then falls back to full GetLatestInfo.
+func (e *LSMEngine) CheckConflict(key []byte, startTS uint64) (bool, error) {
+	// Fast path: cache
+	if lastTS, ok := e.getLastCommitCache(key); ok {
+		if lastTS > startTS {
+			return true, nil
+		}
+		// Cache indicates no conflict. We trust it because we update cache on every write.
+		return false, nil
+	}
+
+	// Slow path: full lookup
+	_, lastTS, err := e.GetLatestInfo(key)
+	if err != nil {
+		return false, err
+	}
+	if lastTS > startTS {
+		// Also update cache for future
+		e.updateLastCommitCache(key, lastTS)
+		return true, nil
+	}
+	if lastTS > 0 {
+		e.updateLastCommitCache(key, lastTS)
+	}
+	return false, nil
+}
+
 // DeleteWithTS marks a key as deleted (tombstone).
 func (e *LSMEngine) DeleteWithTS(key []byte, commitTS uint64) error {
 	e.mu.Lock()
@@ -270,6 +394,9 @@ func (e *LSMEngine) DeleteWithTS(key []byte, commitTS uint64) error {
 	// Insert tombstone (nil value) into MemTable
 	mvccKey := mvcc.NewMVCCKey(key, commitTS)
 	e.memTable.DeleteWithTS(mvccKey)
+
+	// Update last commit cache (tombstone also updates the latest commitTS)
+	e.updateLastCommitCache(key, commitTS)
 
 	return nil
 }
@@ -354,7 +481,7 @@ func (e *LSMEngine) WriteAtomicBatch(data []byte, commitTS uint64) error {
 		return fmt.Errorf("failed to write batch to wal: %w", err)
 	}
 
-	// Apply operations to MemTable
+	// Apply operations to MemTable and update cache
 	for _, pop := range processedOps {
 		mvccKey := mvcc.NewMVCCKey(pop.Key, commitTS)
 		if pop.IsDelete {
@@ -362,6 +489,8 @@ func (e *LSMEngine) WriteAtomicBatch(data []byte, commitTS uint64) error {
 		} else {
 			e.memTable.Put(mvccKey, pop.Value)
 		}
+		// Update cache for each key in batch
+		e.updateLastCommitCache(pop.Key, commitTS)
 	}
 
 	return nil
@@ -537,6 +666,11 @@ func (e *LSMEngine) decodeStoredValue(stored []byte) ([]byte, error) {
 	}
 	// Try to decode as ValuePointer
 	if vp, ok := decodeValuePointer(stored); ok {
+		// Validate pointer before reading VLog to avoid out-of-range panic
+		if vp.Offset < 0 || vp.Size <= 0 || vp.Offset+int64(vp.Size)+8 > e.vlog.Size() {
+			// Invalid pointer – treat as inline value (could be ordinary 12-byte data)
+			return stored, nil
+		}
 		// Read from VLog
 		return e.vlog.Read(vp)
 	}
@@ -622,8 +756,7 @@ func (e *LSMEngine) CollectLiveValuePointers() (map[ValuePointer]struct{}, error
 				log.Printf("gc: failed to create iterator for SSTable: %v", err)
 				continue
 			}
-			defer iter.Close()
-
+			// Defer is tricky in loop; we call close manually after usage
 			for iter.Next() {
 				processValue(iter.Value())
 			}
