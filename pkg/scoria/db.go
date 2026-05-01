@@ -16,8 +16,8 @@ package scoria
 
 import (
 	"math"
-	"sync/atomic"
 	"scoriadb/internal/engine"
+	"sync/atomic"
 )
 
 // DB представляет публичный интерфейс базы данных ScoriaDB.

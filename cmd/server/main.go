@@ -38,10 +38,10 @@ import (
 )
 
 var (
-	dataDir    = flag.String("data-dir", "./data", "Directory for database files")
-	grpcPort   = flag.Int("grpc-port", 50051, "Port for gRPC server")
-	httpPort   = flag.Int("http-port", 8080, "Port for HTTP/REST server")
-	jwtSecret  = flag.String("jwt-secret", "default-secret-change-in-production", "JWT signing secret")
+	dataDir   = flag.String("data-dir", "./data", "Directory for database files")
+	grpcPort  = flag.Int("grpc-port", 50051, "Port for gRPC server")
+	httpPort  = flag.Int("http-port", 8080, "Port for HTTP/REST server")
+	jwtSecret = flag.String("jwt-secret", "default-secret-change-in-production", "JWT signing secret")
 )
 
 func main() {

@@ -211,4 +211,3 @@ func decodeWalEntry(r io.Reader) (*WalEntry, error) {
 		Timestamp: timestamp,
 	}, nil
 }
-

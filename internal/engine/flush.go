@@ -31,6 +31,7 @@ const (
 )
 
 // flushMemTable flushes current MemTable into a Level0 SSTable.
+//
 //nolint:unused // flush goroutine worker
 func (e *LSMEngine) flushMemTable() error {
 	e.mu.Lock()

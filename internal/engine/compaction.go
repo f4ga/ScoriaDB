@@ -19,9 +19,9 @@ import (
 	"fmt"
 	"log"
 	"path/filepath"
-	"sort"
 	"scoriadb/internal/engine/sstable"
 	"scoriadb/internal/mvcc"
+	"sort"
 )
 
 // compactLevel0 performs compaction from level 0 to level 1.
@@ -117,7 +117,7 @@ func (e *LSMEngine) compactLevel0() error {
 	// Process grouped by user key
 	for i := 0; i < len(allKVs); {
 		userKey := allKVs[i].key.Key
-		
+
 		// Collect all versions for this user key
 		var versions []kv
 		for i < len(allKVs) && bytes.Equal(allKVs[i].key.Key, userKey) {

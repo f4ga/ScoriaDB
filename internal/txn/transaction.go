@@ -38,7 +38,7 @@ type pendingOp struct {
 // Transaction represents an interactive transaction with optimistic concurrency control.
 type Transaction struct {
 	db      *engine.LSMEngine
-	startTS uint64                 // snapshot timestamp
+	startTS uint64                // snapshot timestamp
 	writes  map[string]*pendingOp // buffer of uncommitted changes (key → operation)
 	closed  bool                  // true after Commit or Rollback
 }

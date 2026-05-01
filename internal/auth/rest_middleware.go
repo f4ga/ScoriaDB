@@ -15,8 +15,8 @@
 package auth
 
 import (
-    "log"
 	"context"
+	"log"
 	"net/http"
 	"strings"
 )
@@ -88,8 +88,8 @@ func writeAuthError(w http.ResponseWriter, status int, message string) {
 	w.WriteHeader(status)
 	jsonBody := `{"code":"` + getErrorCode(status) + `","message":"` + message + `"}`
 	if _, err := w.Write([]byte(jsonBody)); err != nil {
-    log.Printf("failed to write error response: %v", err)
-}
+		log.Printf("failed to write error response: %v", err)
+	}
 }
 
 // getErrorCode возвращает строковый код ошибки по HTTP статусу.

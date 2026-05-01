@@ -111,11 +111,11 @@ type errorIterator struct {
 	err error
 }
 
-func (it *errorIterator) Next() bool  { return false }
-func (it *errorIterator) Key() []byte { return nil }
+func (it *errorIterator) Next() bool    { return false }
+func (it *errorIterator) Key() []byte   { return nil }
 func (it *errorIterator) Value() []byte { return nil }
-func (it *errorIterator) Err() error  { return it.err }
-func (it *errorIterator) Close()      {}
+func (it *errorIterator) Err() error    { return it.err }
+func (it *errorIterator) Close()        {}
 
 // mergeIterator — итератор, объединяющий данные из активной MemTable, frozen MemTable и SSTable.
 type mergeIterator struct {
@@ -149,26 +149,26 @@ func (it *mergeIterator) Value() []byte {
 	if it.index < 0 || it.index >= len(it.rawValues) {
 		return nil
 	}
-	
+
 	// Если значение уже разрешено, возвращаем его
 	if it.resolvedValues != nil && it.resolvedValues[it.index] != nil {
 		return it.resolvedValues[it.index]
 	}
-	
+
 	raw := it.rawValues[it.index]
 	// Если длина 12 байт — это указатель на VLog
 	if len(raw) == 12 {
 		// Декодируем указатель: [fileID: 8 байт][offset: 4 байта]
 		fileID := binary.BigEndian.Uint64(raw[0:8])
 		offset := binary.BigEndian.Uint32(raw[8:12])
-		
+
 		// Читаем значение из VLog
 		val, err := it.engine.ReadVLogValue(fileID, offset)
 		if err != nil {
 			it.err = err
 			return nil
 		}
-		
+
 		// Инициализируем кеш, если нужно
 		if it.resolvedValues == nil {
 			it.resolvedValues = make([][]byte, len(it.rawValues))
@@ -176,7 +176,7 @@ func (it *mergeIterator) Value() []byte {
 		it.resolvedValues[it.index] = val
 		return val
 	}
-	
+
 	// Иначе это inline значение
 	return raw
 }
@@ -262,10 +262,10 @@ type errorTransaction struct {
 }
 
 func (tx *errorTransaction) Get(key []byte) ([]byte, error) { return nil, tx.err }
-func (tx *errorTransaction) Put(key, value []byte) error { return tx.err }
-func (tx *errorTransaction) Delete(key []byte) error { return tx.err }
-func (tx *errorTransaction) Commit() error { return tx.err }
-func (tx *errorTransaction) Rollback() error { return nil }
+func (tx *errorTransaction) Put(key, value []byte) error    { return tx.err }
+func (tx *errorTransaction) Delete(key []byte) error        { return tx.err }
+func (tx *errorTransaction) Commit() error                  { return tx.err }
+func (tx *errorTransaction) Rollback() error                { return nil }
 
 // scoriaBatch — обёртка над txn.WriteBatch, привязанная к конкретному ScoriaDB и CF.
 type scoriaBatch struct {
@@ -398,6 +398,7 @@ func (db *ScoriaDB) NewTransaction() Transaction {
 	startTS := uint64(0) // временно
 	return txn.Begin(eng, startTS)
 }
+
 // NewBatch creates a new batch of operations bound to CF "default".
 func (db *ScoriaDB) NewBatch() Batch {
 	return &scoriaBatch{
@@ -415,6 +416,7 @@ func (db *ScoriaDB) NewBatchForCF(cfName string) Batch {
 		inner:  txn.NewWriteBatch(),
 	}
 }
+
 // Close закрывает все Column Families и освобождает ресурсы.
 func (db *ScoriaDB) Close() error {
 	return db.registry.Close()

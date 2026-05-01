@@ -18,10 +18,10 @@ import (
 	"context"
 	"testing"
 
-	"scoriadb/pkg/scoria"
-	"scoriadb/scoriadb/proto"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"scoriadb/pkg/scoria"
+	"scoriadb/scoriadb/proto"
 )
 
 func TestServer_GetPut(t *testing.T) {
@@ -39,8 +39,8 @@ func TestServer_GetPut(t *testing.T) {
 	// Test Put
 	ctx := context.Background()
 	putReq := &proto.PutRequest{
-		Key:   []byte("test-key"),
-		Value: []byte("test-value"),
+		Key:    []byte("test-key"),
+		Value:  []byte("test-value"),
 		CfName: "default",
 	}
 	putResp, err := srv.Put(ctx, putReq)
@@ -53,7 +53,7 @@ func TestServer_GetPut(t *testing.T) {
 
 	// Test Get
 	getReq := &proto.GetRequest{
-		Key:   []byte("test-key"),
+		Key:    []byte("test-key"),
 		CfName: "default",
 	}
 	getResp, err := srv.Get(ctx, getReq)
@@ -69,7 +69,7 @@ func TestServer_GetPut(t *testing.T) {
 
 	// Test Get non-existent key
 	getReq2 := &proto.GetRequest{
-		Key:   []byte("non-existent"),
+		Key:    []byte("non-existent"),
 		CfName: "default",
 	}
 	getResp2, err := srv.Get(ctx, getReq2)
@@ -94,8 +94,8 @@ func TestServer_Delete(t *testing.T) {
 
 	// First put a key
 	_, err = srv.Put(ctx, &proto.PutRequest{
-		Key:   []byte("to-delete"),
-		Value: []byte("value"),
+		Key:    []byte("to-delete"),
+		Value:  []byte("value"),
 		CfName: "default",
 	})
 	if err != nil {
@@ -104,7 +104,7 @@ func TestServer_Delete(t *testing.T) {
 
 	// Delete it
 	_, err = srv.Delete(ctx, &proto.DeleteRequest{
-		Key:   []byte("to-delete"),
+		Key:    []byte("to-delete"),
 		CfName: "default",
 	})
 	if err != nil {
@@ -113,7 +113,7 @@ func TestServer_Delete(t *testing.T) {
 
 	// Verify it's gone
 	resp, err := srv.Get(ctx, &proto.GetRequest{
-		Key:   []byte("to-delete"),
+		Key:    []byte("to-delete"),
 		CfName: "default",
 	})
 	if err != nil {

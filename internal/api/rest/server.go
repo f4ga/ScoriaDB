@@ -143,8 +143,8 @@ func (s *Server) handlePut(w http.ResponseWriter, r *http.Request, key string) {
 	}
 
 	resp := map[string]interface{}{
-		"key":   key,
-		"cf":    cf,
+		"key":    key,
+		"cf":     cf,
 		"status": "ok",
 	}
 	writeJSON(w, http.StatusOK, resp)
@@ -163,8 +163,8 @@ func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request, key string
 	}
 
 	resp := map[string]interface{}{
-		"key":   key,
-		"cf":    cf,
+		"key":    key,
+		"cf":     cf,
 		"status": "deleted",
 	}
 	writeJSON(w, http.StatusOK, resp)
@@ -202,9 +202,9 @@ func (s *Server) handleScan(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := map[string]interface{}{
-		"cf":    cf,
+		"cf":     cf,
 		"prefix": req.Prefix,
-		"items": items,
+		"items":  items,
 	}
 	writeJSON(w, http.StatusOK, resp)
 }

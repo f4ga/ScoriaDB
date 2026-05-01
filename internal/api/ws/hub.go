@@ -90,10 +90,10 @@ func (h *Hub) Close() {
 
 // Event представляет уведомление об изменении данных.
 type Event struct {
-	Type   string `json:"event"`          // "key_updated" или "key_deleted"
-	Key    string `json:"key"`            // ключ
-	Value  string `json:"value,omitempty"` // значение (только для key_updated)
-	CF     string `json:"cf"`             // column family
+	Type  string `json:"event"`           // "key_updated" или "key_deleted"
+	Key   string `json:"key"`             // ключ
+	Value string `json:"value,omitempty"` // значение (только для key_updated)
+	CF    string `json:"cf"`              // column family
 }
 
 // NotifyKeyUpdated отправляет уведомление об обновлении ключа.

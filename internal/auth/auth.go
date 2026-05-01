@@ -43,7 +43,7 @@ type Claims struct {
 
 // Константы для ролей.
 const (
-	RoleAdmin    = "admin"
+	RoleAdmin     = "admin"
 	RoleReadWrite = "readwrite"
 	RoleReadOnly  = "readonly"
 )
@@ -292,8 +292,8 @@ func extractBearerToken(header string) string {
 
 // Ошибки аутентификации.
 var (
-	ErrUserNotFound        = errors.New("user not found")
-	ErrUserAlreadyExists   = errors.New("user already exists")
-	ErrInvalidCredentials  = errors.New("invalid credentials")
+	ErrUserNotFound           = errors.New("user not found")
+	ErrUserAlreadyExists      = errors.New("user already exists")
+	ErrInvalidCredentials     = errors.New("invalid credentials")
 	ErrInsufficientPrivileges = errors.New("insufficient privileges")
 )

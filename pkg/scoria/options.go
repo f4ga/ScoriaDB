@@ -50,7 +50,7 @@ func DefaultOptions(workDir string) Options {
 	return Options{
 		WorkDir:      workDir,
 		MemTableSize: 64 * 1024 * 1024, // 64 MiB
-		Levels:       nil,               // пока используем настройки движка по умолчанию
-		VFS:          nil,               // будет использоваться vfs.DefaultVFS внутри движка
+		Levels:       nil,              // пока используем настройки движка по умолчанию
+		VFS:          nil,              // будет использоваться vfs.DefaultVFS внутри движка
 	}
 }

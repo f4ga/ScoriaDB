@@ -498,7 +498,8 @@ func (e *LSMEngine) WriteAtomicBatch(data []byte, commitTS uint64) error {
 
 // decodeBatchLocal decodes a serialized batch without importing txn package.
 // Format matches txn.EncodeBatch: 2 bytes numOps, then for each operation:
-//   1 byte type (1=Put, 2=Delete), 2 bytes keyLen, key, 4 bytes valLen, value.
+//
+//	1 byte type (1=Put, 2=Delete), 2 bytes keyLen, key, 4 bytes valLen, value.
 func decodeBatchLocal(data []byte) ([]struct {
 	IsDelete bool
 	Key      []byte

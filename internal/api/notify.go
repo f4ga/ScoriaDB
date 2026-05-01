@@ -15,8 +15,8 @@
 package api
 
 import (
-	"scoriadb/pkg/scoria"
 	"scoriadb/internal/api/ws"
+	"scoriadb/pkg/scoria"
 )
 
 // NotifyingDB оборачивает CFDB и отправляет уведомления в WebSocket‑хаб при записи/удалении.
@@ -98,8 +98,9 @@ func (ndb *NotifyingDB) NewBatch() scoria.Batch {
 
 // NewBatchForCF делегирует вызов внутреннему CFDB.
 func (ndb *NotifyingDB) NewBatchForCF(cfName string) scoria.Batch {
-    return ndb.inner.NewBatchForCF(cfName)
+	return ndb.inner.NewBatchForCF(cfName)
 }
+
 // CreateCF делегирует вызов внутренней БД.
 func (ndb *NotifyingDB) CreateCF(name string) error {
 	return ndb.inner.CreateCF(name)

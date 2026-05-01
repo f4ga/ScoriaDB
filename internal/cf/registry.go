@@ -30,38 +30,40 @@ type Registry struct {
 	rootDir string
 	cfs     map[string]*engine.LSMEngine // CF name → engine
 }
+
 func NewRegistry(rootDir string) (*Registry, error) {
-    if err := os.MkdirAll(rootDir, 0755); err != nil {
-        return nil, fmt.Errorf("failed to create root directory: %w", err)
-    }
+	if err := os.MkdirAll(rootDir, 0755); err != nil {
+		return nil, fmt.Errorf("failed to create root directory: %w", err)
+	}
 
-    reg := &Registry{
-        rootDir: rootDir,
-        cfs:     make(map[string]*engine.LSMEngine),
-    }
+	reg := &Registry{
+		rootDir: rootDir,
+		cfs:     make(map[string]*engine.LSMEngine),
+	}
 
-    // Create default CF
-    if err := reg.CreateCF("default"); err != nil {
-        return nil, fmt.Errorf("failed to create default CF: %w", err)
-    }
+	// Create default CF
+	if err := reg.CreateCF("default"); err != nil {
+		return nil, fmt.Errorf("failed to create default CF: %w", err)
+	}
 
-    // Scan existing subdirectories and load them as CFs
-    entries, err := os.ReadDir(rootDir)
-    if err != nil {
-        return nil, fmt.Errorf("failed to read root directory: %w", err)
-    }
-    for _, entry := range entries {
-        if entry.IsDir() && entry.Name() != "default" {
-            if _, exists := reg.cfs[entry.Name()]; !exists {
-                if err := reg.CreateCF(entry.Name()); err != nil {
-                    fmt.Fprintf(os.Stderr, "Registry: failed to load CF %s: %v\n", entry.Name(), err)
-                }
-            }
-        }
-    }
+	// Scan existing subdirectories and load them as CFs
+	entries, err := os.ReadDir(rootDir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read root directory: %w", err)
+	}
+	for _, entry := range entries {
+		if entry.IsDir() && entry.Name() != "default" {
+			if _, exists := reg.cfs[entry.Name()]; !exists {
+				if err := reg.CreateCF(entry.Name()); err != nil {
+					fmt.Fprintf(os.Stderr, "Registry: failed to load CF %s: %v\n", entry.Name(), err)
+				}
+			}
+		}
+	}
 
-    return reg, nil
+	return reg, nil
 }
+
 // CreateCF creates a new Column Family with the given name.
 // If the CF already exists, returns an error.
 func (r *Registry) CreateCF(name string) error {

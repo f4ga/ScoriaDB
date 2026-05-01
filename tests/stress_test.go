@@ -109,11 +109,11 @@ func TestConcurrentReadWrite(t *testing.T) {
 	defer cleanup()
 
 	const (
-		numReaders   = 50
-		numWriters   = 50
-		numDeleters  = 10
-		keyPoolSize  = 1000
-		duration     = 30 * time.Second
+		numReaders  = 50
+		numWriters  = 50
+		numDeleters = 10
+		keyPoolSize = 1000
+		duration    = 30 * time.Second
 	)
 
 	// Pre-populate key pool with initial values.

@@ -15,8 +15,8 @@
 package txn
 
 import (
-	"testing"
 	"scoriadb/internal/engine"
+	"testing"
 )
 
 func TestWriteBatchBasic(t *testing.T) {

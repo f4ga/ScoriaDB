@@ -116,7 +116,8 @@ func ApplyBatchWithTS(db *engine.LSMEngine, batch *WriteBatch, commitTS uint64) 
 
 // EncodeBatch сериализует WriteBatch в байты для хранения в WAL.
 // Формат: количество операций (2 байта) + для каждой операции:
-//   тип (1 байт) + длина ключа (2 байта) + ключ + длина значения (4 байта) + значение
+//
+//	тип (1 байт) + длина ключа (2 байта) + ключ + длина значения (4 байта) + значение
 func EncodeBatch(batch *WriteBatch) ([]byte, error) {
 	// Сначала вычисляем общий размер
 	totalSize := 2 // для количества операций
