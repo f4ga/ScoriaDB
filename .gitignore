@@ -22,6 +22,9 @@ plan1.md
 functz.md
 NOLINT.md
 TECHDEBT.md
+cli
+sstable.test
+
 # C extensions
 *.so
 
