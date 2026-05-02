@@ -242,6 +242,43 @@ func UpdateUserRoles(cfdb scoria.CFDB, username string, roles []string) error {
 	return cfdb.PutCF(AuthCF, userKey(username), data)
 }
 
+// ChangePassword меняет пароль существующего пользователя
+func ChangePassword(db scoria.CFDB, username, newPassword string) error {
+	if newPassword == "" {
+		return ErrInvalidCredentials
+	}
+
+	key := []byte("user:" + username)
+	val, err := db.GetCF("__auth__", key)
+	if err != nil {
+		return err
+	}
+	if val == nil {
+		return ErrUserNotFound
+	}
+
+	var user struct {
+		PasswordHash string   `json:"password_hash"`
+		Roles        []string `json:"roles"`
+	}
+	if err := json.Unmarshal(val, &user); err != nil {
+		return err
+	}
+
+	// Генерируем новый хеш
+	hashed, err := bcrypt.GenerateFromPassword([]byte(newPassword), bcrypt.DefaultCost)
+	if err != nil {
+		return err
+	}
+	user.PasswordHash = string(hashed)
+
+	newVal, err := json.Marshal(user)
+	if err != nil {
+		return err
+	}
+	return db.PutCF("__auth__", key, newVal)
+}
+
 // Проверяет, является ли роль допустимой.
 func isValidRole(role string) bool {
 	switch role {

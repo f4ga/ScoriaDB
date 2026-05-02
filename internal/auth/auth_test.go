@@ -373,3 +373,189 @@ func TestInvalidRoleValidation(t *testing.T) {
 		t.Error("expected error for invalid role")
 	}
 }
+
+// TestChangePasswordSuccess проверяет успешную смену пароля
+func TestChangePasswordSuccess(t *testing.T) {
+	dir := t.TempDir()
+	db, err := scoria.NewScoriaDB(dir)
+	if err != nil {
+		t.Fatalf("failed to open test database: %v", err)
+	}
+	defer db.Close()
+
+	err = db.CreateCF(AuthCF)
+	if err != nil {
+		t.Fatalf("failed to create auth CF: %v", err)
+	}
+
+	jwtSecret := []byte("test-secret")
+
+	// Создаём пользователя
+	err = CreateUser(db, "alice", "oldpass", []string{RoleReadWrite})
+	if err != nil {
+		t.Fatalf("CreateUser failed: %v", err)
+	}
+
+	// Меняем пароль
+	err = ChangePassword(db, "alice", "newpass")
+	if err != nil {
+		t.Fatalf("ChangePassword failed: %v", err)
+	}
+
+	// Старый пароль не должен работать
+	_, err = Authenticate(db, "alice", "oldpass", jwtSecret)
+	if err != ErrInvalidCredentials {
+		t.Errorf("expected ErrInvalidCredentials for old password, got %v", err)
+	}
+
+	// Новый пароль должен работать
+	token, err := Authenticate(db, "alice", "newpass", jwtSecret)
+	if err != nil {
+		t.Fatalf("auth with new password failed: %v", err)
+	}
+	if token == "" {
+		t.Error("expected non-empty token")
+	}
+}
+
+// TestChangePasswordUserNotFound проверяет ошибку при смене пароля у несуществующего пользователя
+func TestChangePasswordUserNotFound(t *testing.T) {
+	dir := t.TempDir()
+	db, err := scoria.NewScoriaDB(dir)
+	if err != nil {
+		t.Fatalf("failed to open test database: %v", err)
+	}
+	defer db.Close()
+
+	err = db.CreateCF(AuthCF)
+	if err != nil {
+		t.Fatalf("failed to create auth CF: %v", err)
+	}
+
+	err = ChangePassword(db, "nonexistent", "anypass")
+	if err != ErrUserNotFound {
+		t.Errorf("expected ErrUserNotFound, got %v", err)
+	}
+}
+
+// TestChangePasswordPreservesRoles проверяет, что роли не сбрасываются при смене пароля
+func TestChangePasswordPreservesRoles(t *testing.T) {
+	dir := t.TempDir()
+	db, err := scoria.NewScoriaDB(dir)
+	if err != nil {
+		t.Fatalf("failed to open test database: %v", err)
+	}
+	defer db.Close()
+
+	err = db.CreateCF(AuthCF)
+	if err != nil {
+		t.Fatalf("failed to create auth CF: %v", err)
+	}
+
+	jwtSecret := []byte("test-secret")
+
+	// Создаём пользователя с ролями
+	err = CreateUser(db, "bob", "pass123", []string{RoleAdmin, RoleReadWrite})
+	if err != nil {
+		t.Fatalf("CreateUser failed: %v", err)
+	}
+
+	// Меняем пароль
+	err = ChangePassword(db, "bob", "newpass456")
+	if err != nil {
+		t.Fatalf("ChangePassword failed: %v", err)
+	}
+
+	// Аутентифицируемся с новым паролем
+	token, err := Authenticate(db, "bob", "newpass456", jwtSecret)
+	if err != nil {
+		t.Fatalf("auth failed: %v", err)
+	}
+
+	// Проверяем, что роли сохранились (через разбор токена)
+	claims, err := ValidateToken(token, jwtSecret)
+	if err != nil {
+		t.Fatalf("ValidateToken failed: %v", err)
+	}
+
+	// Проверяем наличие ролей
+	hasAdmin := false
+	hasReadWrite := false
+	for _, role := range claims.Roles {
+		if role == RoleAdmin {
+			hasAdmin = true
+		}
+		if role == RoleReadWrite {
+			hasReadWrite = true
+		}
+	}
+	if !hasAdmin {
+		t.Error("admin role not preserved after password change")
+	}
+	if !hasReadWrite {
+		t.Error("readwrite role not preserved after password change")
+	}
+}
+
+// TestChangePasswordEmptyNewPassword проверяет, что пустой пароль не допускается
+func TestChangePasswordEmptyNewPassword(t *testing.T) {
+	dir := t.TempDir()
+	db, err := scoria.NewScoriaDB(dir)
+	if err != nil {
+		t.Fatalf("failed to open test database: %v", err)
+	}
+	defer db.Close()
+
+	err = db.CreateCF(AuthCF)
+	if err != nil {
+		t.Fatalf("failed to create auth CF: %v", err)
+	}
+
+	err = CreateUser(db, "charlie", "oldpass", []string{RoleReadOnly})
+	if err != nil {
+		t.Fatalf("CreateUser failed: %v", err)
+	}
+
+	err = ChangePassword(db, "charlie", "")
+	if err != ErrInvalidCredentials {
+		t.Errorf("expected ErrInvalidCredentials for empty password, got %v", err)
+	}
+}
+
+// TestChangePasswordSamePassword проверяет смену на тот же пароль (должно работать, но старый пароль перестаёт работать)
+func TestChangePasswordSamePassword(t *testing.T) {
+	dir := t.TempDir()
+	db, err := scoria.NewScoriaDB(dir)
+	if err != nil {
+		t.Fatalf("failed to open test database: %v", err)
+	}
+	defer db.Close()
+
+	err = db.CreateCF(AuthCF)
+	if err != nil {
+		t.Fatalf("failed to create auth CF: %v", err)
+	}
+
+	jwtSecret := []byte("test-secret")
+
+	err = CreateUser(db, "dave", "samepass", []string{RoleReadOnly})
+	if err != nil {
+		t.Fatalf("CreateUser failed: %v", err)
+	}
+
+	// Смена на тот же пароль (должна работать)
+	err = ChangePassword(db, "dave", "samepass")
+	if err != nil {
+		t.Fatalf("ChangePassword with same password failed: %v", err)
+	}
+
+	// Старый пароль всё ещё должен работать
+	// (потому что хеш перезаписался тем же самым паролем, но bcrypt даёт разные хеши — так что работает)
+	token, err := Authenticate(db, "dave", "samepass", jwtSecret)
+	if err != nil {
+		t.Fatalf("auth with same password failed: %v", err)
+	}
+	if token == "" {
+		t.Error("expected non-empty token")
+	}
+}

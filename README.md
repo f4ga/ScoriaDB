@@ -242,7 +242,7 @@ Complete documentation is available in the [`docs/`](docs/) directory:
 
 | Language | Documentation | Example |
 |:---|:---|:---|
-| **Go (embedded)** | [GoDoc](https://pkg.go.dev/github.com/f4ga/ScoriaDB/pkg/scoria) | `pkg/scoria` |
+| **Go (embedded)** | [Go-Embedded](docs/README.md#go-embedded-api) | `pkg/scoria` |
 | **Python** | [python-doc.md](docs/python/python-doc.md) | [example.py](docs/python/example.py) |
 | **Java** | [java-doc.md](docs/java/java-doc.md) | [example.java](docs/java/example.java) |
 | **C++** | [cpp-doc.md](docs/c++/cpp-doc.md) | [example.cpp](docs/c++/example.cpp) |

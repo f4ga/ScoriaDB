@@ -25,6 +25,11 @@ service ScoriaDB {
   rpc Delete(DeleteRequest) returns (DeleteResponse);
   rpc Scan(ScanRequest) returns (stream ScanResponse);
 
+  // Column Family operations
+  rpc ListCF(ListCFRequest) returns (ListCFResponse);
+  rpc CreateCF(CreateCFRequest) returns (CreateCFResponse);
+  rpc DeleteCF(DeleteCFRequest) returns (DeleteCFResponse);
+
   // Transaction operations
   rpc BeginTxn(BeginTxnRequest) returns (BeginTxnResponse);
   rpc CommitTxn(CommitTxnRequest) returns (CommitTxnResponse);
@@ -33,9 +38,13 @@ service ScoriaDB {
   // Authentication and user management
   rpc CreateUser(CreateUserRequest) returns (CreateUserResponse);
   rpc Authenticate(AuthRequest) returns (AuthResponse);
+  rpc ChangePassword(ChangePasswordRequest) returns (ChangePasswordResponse);
 }
 
-// GetRequest contains key and optional column family name and snapshot timestamp.
+// ============================================
+// Basic KV operations
+// ============================================
+
 message GetRequest {
   bytes key = 1;
   string cf_name = 2;
@@ -76,7 +85,37 @@ message ScanResponse {
   bytes value = 2;
 }
 
-// Transaction messages
+// ============================================
+// Column Family operations
+// ============================================
+
+message ListCFRequest {
+  // empty
+}
+
+message ListCFResponse {
+  repeated string cf_names = 1;
+}
+
+message CreateCFRequest {
+  string name = 1;
+}
+
+message CreateCFResponse {
+  // empty for success
+}
+
+message DeleteCFRequest {
+  string name = 1;
+}
+
+message DeleteCFResponse {
+  // empty for success
+}
+// ============================================
+// Transaction operations
+// ============================================
+
 message BeginTxnRequest {
   // empty for now
 }
@@ -114,7 +153,10 @@ message RollbackTxnResponse {
   // empty for success
 }
 
-// User management messages
+// ============================================
+// Authentication and user management
+// ============================================
+
 message CreateUserRequest {
   string username = 1;
   string password = 2;
@@ -132,4 +174,13 @@ message AuthRequest {
 
 message AuthResponse {
   string jwt_token = 1;
+}
+
+message ChangePasswordRequest {
+  string username = 1;
+  string new_password = 2;
+}
+
+message ChangePasswordResponse {
+  // empty for success
 }

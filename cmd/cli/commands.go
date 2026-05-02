@@ -235,7 +235,6 @@ func newTxnRollbackCmd() *cobra.Command {
 	}
 }
 
-// newAdminCmd creates the `admin` command group.
 func newAdminCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "admin",
@@ -244,6 +243,7 @@ func newAdminCmd() *cobra.Command {
 	cmd.AddCommand(newAdminUserAddCmd())
 	cmd.AddCommand(newAdminAuthCmd())
 	cmd.AddCommand(newAdminGCCmd())
+	cmd.AddCommand(newAdminChangePasswordCmd())
 	return cmd
 }
 
@@ -281,6 +281,33 @@ func newAdminUserAddCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&roles, "roles", "", "comma-separated roles (admin,readwrite,readonly)")
 	return cmd
+}
+
+// newAdminChangePasswordCmd создаёт команду `admin change-password`
+func newAdminChangePasswordCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "change-password <username> <new-password>",
+		Short: "Change user password (admin only)",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			username, newPassword := args[0], args[1]
+			client, err := NewClient(addr, token)
+			if err != nil {
+				return err
+			}
+			defer client.Close()
+
+			ctx, cancel := defaultContext()
+			defer cancel()
+
+			err = client.ChangePassword(ctx, username, newPassword)
+			if err != nil {
+				return fmt.Errorf("change password failed: %w", err)
+			}
+			fmt.Println("Password changed successfully")
+			return nil
+		},
+	}
 }
 
 // newAdminAuthCmd creates the `admin auth` command.

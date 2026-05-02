@@ -69,6 +69,16 @@ func NewClient(addr, token string) (*Client, error) {
 	}, nil
 }
 
+// ChangePassword меняет пароль пользователя (требует прав admin)
+func (c *Client) ChangePassword(ctx context.Context, username, newPassword string) error {
+	req := &proto.ChangePasswordRequest{
+		Username:    username,
+		NewPassword: newPassword,
+	}
+	_, err := c.client.ChangePassword(ctx, req)
+	return err
+}
+
 // Close closes the connection.
 func (c *Client) Close() error {
 	return c.conn.Close()
@@ -169,4 +179,28 @@ func (c *Client) Authenticate(ctx context.Context, username, password string) (*
 // defaultContext returns a context with timeout.
 func defaultContext() (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.Background(), 10*time.Second)
+}
+func (c *Client) CreateCF(ctx context.Context, cfName string) error {
+    req := &proto.CreateCFRequest{
+        Name: cfName,
+    }
+    _, err := c.client.CreateCF(ctx, req)
+    return err
+}
+
+// ListCF returns all column family names
+func (c *Client) ListCF(ctx context.Context) ([]string, error) {
+    req := &proto.ListCFRequest{}
+    resp, err := c.client.ListCF(ctx, req, grpc.PerRPCCredentials(jwtCredentials{c.token}))
+    if err != nil {
+        return nil, err
+    }
+    return resp.CfNames, nil
+}
+
+// DeleteCF deletes a column family
+func (c *Client) DeleteCF(ctx context.Context, name string) error {
+    req := &proto.DeleteCFRequest{Name: name}
+    _, err := c.client.DeleteCF(ctx, req, grpc.PerRPCCredentials(jwtCredentials{c.token}))
+    return err
 }

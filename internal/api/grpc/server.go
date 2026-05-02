@@ -219,6 +219,30 @@ func (s *server) CreateUser(ctx context.Context, req *proto.CreateUserRequest) (
 	return &proto.CreateUserResponse{}, nil
 }
 
+// ChangePassword handles ChangePassword RPC
+func (s *server) ChangePassword(ctx context.Context, req *proto.ChangePasswordRequest) (*proto.ChangePasswordResponse, error) {
+	// Проверяем, что вызывающий пользователь имеет роль admin
+	claims, ok := auth.GetClaimsFromContext(ctx)
+	if !ok {
+		return nil, status.Error(codes.Unauthenticated, "authentication required")
+	}
+	if !auth.HasAnyRole(&auth.User{Roles: claims.Roles}, []string{auth.RoleAdmin}) {
+		return nil, status.Error(codes.PermissionDenied, "admin role required")
+	}
+
+	// Меняем пароль
+	err := auth.ChangePassword(s.db, req.GetUsername(), req.GetNewPassword())
+	if err != nil {
+		switch err {
+		case auth.ErrUserNotFound:
+			return nil, status.Error(codes.NotFound, "user not found")
+		default:
+			return nil, status.Error(codes.Internal, err.Error())
+		}
+	}
+	return &proto.ChangePasswordResponse{}, nil
+}
+
 // Authenticate handles Authenticate RPC.
 func (s *server) Authenticate(ctx context.Context, req *proto.AuthRequest) (*proto.AuthResponse, error) {
 	// Аутентификация не требует токена
@@ -239,4 +263,26 @@ func (s *server) Authenticate(ctx context.Context, req *proto.AuthRequest) (*pro
 func (s *server) generateTxnID() string {
 	// TODO: use proper UUID
 	return fmt.Sprintf("txn-%d", len(s.txns)+1)
+}
+
+// ListCF returns all column family names
+func (s *server) ListCF(ctx context.Context, req *proto.ListCFRequest) (*proto.ListCFResponse, error) {
+    cfs := s.db.ListCFs()
+    return &proto.ListCFResponse{CfNames: cfs}, nil
+}
+
+// DeleteCF deletes a column family (cannot delete system CFs: __auth__, __meta__)
+func (s *server) DeleteCF(ctx context.Context, req *proto.DeleteCFRequest) (*proto.DeleteCFResponse, error) {
+    cfName := req.GetName()
+    
+    // Prevent deletion of system CFs
+    if cfName == "__auth__" || cfName == "__meta__" {
+        return nil, status.Errorf(codes.PermissionDenied, "cannot delete system CF: %s", cfName)
+    }
+    
+    err := s.db.DropCF(cfName)
+    if err != nil {
+        return nil, status.Errorf(codes.Internal, "failed to delete CF: %v", err)
+    }
+    return &proto.DeleteCFResponse{}, nil
 }

@@ -242,7 +242,7 @@ db.Put("user:1", "bob")     // commitTS = 101
 
 | Язык | Документация | Пример |
 |:---|:---|:---|
-| **Go (встраиваемый)** | [GoDoc](https://pkg.go.dev/github.com/f4ga/ScoriaDB/pkg/scoria) | `pkg/scoria` |
+| **Go (встраиваемый)** | [Go-Embedded](docs/README.md#go-embedded-api) | [pkg/scoria](pkg/scoria/) |
 | **Python** | [python-doc.md](docs/python/python-doc.md) | [example.py](docs/python/example.py) |
 | **Java** | [java-doc.md](docs/java/java-doc.md) | [example.java](docs/java/example.java) |
 | **C++** | [cpp-doc.md](docs/c++/cpp-doc.md) | [example.cpp](docs/c++/example.cpp) |
