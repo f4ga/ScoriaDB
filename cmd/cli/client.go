@@ -181,26 +181,45 @@ func defaultContext() (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.Background(), 10*time.Second)
 }
 func (c *Client) CreateCF(ctx context.Context, cfName string) error {
-    req := &proto.CreateCFRequest{
-        Name: cfName,
-    }
-    _, err := c.client.CreateCF(ctx, req)
-    return err
+	req := &proto.CreateCFRequest{
+		Name: cfName,
+	}
+	_, err := c.client.CreateCF(ctx, req)
+	return err
 }
 
 // ListCF returns all column family names
 func (c *Client) ListCF(ctx context.Context) ([]string, error) {
-    req := &proto.ListCFRequest{}
-    resp, err := c.client.ListCF(ctx, req, grpc.PerRPCCredentials(jwtCredentials{c.token}))
-    if err != nil {
-        return nil, err
-    }
-    return resp.CfNames, nil
+	req := &proto.ListCFRequest{}
+	resp, err := c.client.ListCF(ctx, req, grpc.PerRPCCredentials(jwtCredentials{c.token}))
+	if err != nil {
+		return nil, err
+	}
+	return resp.CfNames, nil
 }
 
 // DeleteCF deletes a column family
 func (c *Client) DeleteCF(ctx context.Context, name string) error {
-    req := &proto.DeleteCFRequest{Name: name}
-    _, err := c.client.DeleteCF(ctx, req, grpc.PerRPCCredentials(jwtCredentials{c.token}))
-    return err
+	req := &proto.DeleteCFRequest{Name: name}
+	_, err := c.client.DeleteCF(ctx, req, grpc.PerRPCCredentials(jwtCredentials{c.token}))
+	return err
+}
+// ListUsers returns all users
+func (c *Client) ListUsers(ctx context.Context) ([]User, error) {
+    req := &proto.ListUsersRequest{}
+    resp, err := c.client.ListUsers(ctx, req, grpc.PerRPCCredentials(jwtCredentials{c.token}))
+    if err != nil {
+        return nil, err
+    }
+    users := make([]User, len(resp.Users))
+    for i, u := range resp.Users {
+        users[i] = User{Username: u.Username, Roles: u.Roles}
+    }
+    return users, nil
+}
+
+// User represents a user in the system
+type User struct {
+    Username string
+    Roles    []string
 }

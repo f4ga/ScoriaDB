@@ -267,22 +267,47 @@ func (s *server) generateTxnID() string {
 
 // ListCF returns all column family names
 func (s *server) ListCF(ctx context.Context, req *proto.ListCFRequest) (*proto.ListCFResponse, error) {
-    cfs := s.db.ListCFs()
-    return &proto.ListCFResponse{CfNames: cfs}, nil
+	cfs := s.db.ListCFs()
+	return &proto.ListCFResponse{CfNames: cfs}, nil
 }
 
 // DeleteCF deletes a column family (cannot delete system CFs: __auth__, __meta__)
 func (s *server) DeleteCF(ctx context.Context, req *proto.DeleteCFRequest) (*proto.DeleteCFResponse, error) {
-    cfName := req.GetName()
-    
-    // Prevent deletion of system CFs
-    if cfName == "__auth__" || cfName == "__meta__" {
-        return nil, status.Errorf(codes.PermissionDenied, "cannot delete system CF: %s", cfName)
+	cfName := req.GetName()
+
+	// Prevent deletion of system CFs
+	if cfName == "__auth__" || cfName == "__meta__" {
+		return nil, status.Errorf(codes.PermissionDenied, "cannot delete system CF: %s", cfName)
+	}
+
+	err := s.db.DropCF(cfName)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to delete CF: %v", err)
+	}
+	return &proto.DeleteCFResponse{}, nil
+}
+
+// ListUsers returns all users (admin only)
+func (s *server) ListUsers(ctx context.Context, req *proto.ListUsersRequest) (*proto.ListUsersResponse, error) {
+    claims, ok := auth.GetClaimsFromContext(ctx)
+    if !ok {
+        return nil, status.Error(codes.Unauthenticated, "authentication required")
     }
-    
-    err := s.db.DropCF(cfName)
+    if !auth.HasAnyRole(&auth.User{Roles: claims.Roles}, []string{auth.RoleAdmin}) {
+        return nil, status.Error(codes.PermissionDenied, "admin role required")
+    }
+
+    users, err := auth.ListUsers(s.db)
     if err != nil {
-        return nil, status.Errorf(codes.Internal, "failed to delete CF: %v", err)
+        return nil, status.Error(codes.Internal, err.Error())
     }
-    return &proto.DeleteCFResponse{}, nil
+
+    resp := &proto.ListUsersResponse{}
+    for _, u := range users {
+        resp.Users = append(resp.Users, &proto.UserInfo{
+            Username: u.Username,
+            Roles:    u.Roles,
+        })
+    }
+    return resp, nil
 }

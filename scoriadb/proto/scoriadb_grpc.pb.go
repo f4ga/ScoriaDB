@@ -37,16 +37,16 @@ const (
 	ScoriaDB_Put_FullMethodName            = "/scoriadb.ScoriaDB/Put"
 	ScoriaDB_Delete_FullMethodName         = "/scoriadb.ScoriaDB/Delete"
 	ScoriaDB_Scan_FullMethodName           = "/scoriadb.ScoriaDB/Scan"
-	ScoriaDB_ListCFs_FullMethodName        = "/scoriadb.ScoriaDB/ListCFs"
+	ScoriaDB_ListCF_FullMethodName         = "/scoriadb.ScoriaDB/ListCF"
 	ScoriaDB_CreateCF_FullMethodName       = "/scoriadb.ScoriaDB/CreateCF"
 	ScoriaDB_DeleteCF_FullMethodName       = "/scoriadb.ScoriaDB/DeleteCF"
-	ScoriaDB_UseCF_FullMethodName          = "/scoriadb.ScoriaDB/UseCF"
 	ScoriaDB_BeginTxn_FullMethodName       = "/scoriadb.ScoriaDB/BeginTxn"
 	ScoriaDB_CommitTxn_FullMethodName      = "/scoriadb.ScoriaDB/CommitTxn"
 	ScoriaDB_RollbackTxn_FullMethodName    = "/scoriadb.ScoriaDB/RollbackTxn"
 	ScoriaDB_CreateUser_FullMethodName     = "/scoriadb.ScoriaDB/CreateUser"
 	ScoriaDB_Authenticate_FullMethodName   = "/scoriadb.ScoriaDB/Authenticate"
 	ScoriaDB_ChangePassword_FullMethodName = "/scoriadb.ScoriaDB/ChangePassword"
+	ScoriaDB_ListUsers_FullMethodName      = "/scoriadb.ScoriaDB/ListUsers"
 )
 
 // ScoriaDBClient is the client API for ScoriaDB service.
@@ -61,10 +61,9 @@ type ScoriaDBClient interface {
 	Delete(ctx context.Context, in *DeleteRequest, opts ...grpc.CallOption) (*DeleteResponse, error)
 	Scan(ctx context.Context, in *ScanRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ScanResponse], error)
 	// Column Family operations
-	ListCFs(ctx context.Context, in *ListCFsRequest, opts ...grpc.CallOption) (*ListCFsResponse, error)
+	ListCF(ctx context.Context, in *ListCFRequest, opts ...grpc.CallOption) (*ListCFResponse, error)
 	CreateCF(ctx context.Context, in *CreateCFRequest, opts ...grpc.CallOption) (*CreateCFResponse, error)
 	DeleteCF(ctx context.Context, in *DeleteCFRequest, opts ...grpc.CallOption) (*DeleteCFResponse, error)
-	UseCF(ctx context.Context, in *UseCFRequest, opts ...grpc.CallOption) (*UseCFResponse, error)
 	// Transaction operations
 	BeginTxn(ctx context.Context, in *BeginTxnRequest, opts ...grpc.CallOption) (*BeginTxnResponse, error)
 	CommitTxn(ctx context.Context, in *CommitTxnRequest, opts ...grpc.CallOption) (*CommitTxnResponse, error)
@@ -73,6 +72,7 @@ type ScoriaDBClient interface {
 	CreateUser(ctx context.Context, in *CreateUserRequest, opts ...grpc.CallOption) (*CreateUserResponse, error)
 	Authenticate(ctx context.Context, in *AuthRequest, opts ...grpc.CallOption) (*AuthResponse, error)
 	ChangePassword(ctx context.Context, in *ChangePasswordRequest, opts ...grpc.CallOption) (*ChangePasswordResponse, error)
+	ListUsers(ctx context.Context, in *ListUsersRequest, opts ...grpc.CallOption) (*ListUsersResponse, error)
 }
 
 type scoriaDBClient struct {
@@ -132,10 +132,10 @@ func (c *scoriaDBClient) Scan(ctx context.Context, in *ScanRequest, opts ...grpc
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type ScoriaDB_ScanClient = grpc.ServerStreamingClient[ScanResponse]
 
-func (c *scoriaDBClient) ListCFs(ctx context.Context, in *ListCFsRequest, opts ...grpc.CallOption) (*ListCFsResponse, error) {
+func (c *scoriaDBClient) ListCF(ctx context.Context, in *ListCFRequest, opts ...grpc.CallOption) (*ListCFResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(ListCFsResponse)
-	err := c.cc.Invoke(ctx, ScoriaDB_ListCFs_FullMethodName, in, out, cOpts...)
+	out := new(ListCFResponse)
+	err := c.cc.Invoke(ctx, ScoriaDB_ListCF_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -156,16 +156,6 @@ func (c *scoriaDBClient) DeleteCF(ctx context.Context, in *DeleteCFRequest, opts
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(DeleteCFResponse)
 	err := c.cc.Invoke(ctx, ScoriaDB_DeleteCF_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *scoriaDBClient) UseCF(ctx context.Context, in *UseCFRequest, opts ...grpc.CallOption) (*UseCFResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(UseCFResponse)
-	err := c.cc.Invoke(ctx, ScoriaDB_UseCF_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -232,6 +222,16 @@ func (c *scoriaDBClient) ChangePassword(ctx context.Context, in *ChangePasswordR
 	return out, nil
 }
 
+func (c *scoriaDBClient) ListUsers(ctx context.Context, in *ListUsersRequest, opts ...grpc.CallOption) (*ListUsersResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListUsersResponse)
+	err := c.cc.Invoke(ctx, ScoriaDB_ListUsers_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ScoriaDBServer is the server API for ScoriaDB service.
 // All implementations must embed UnimplementedScoriaDBServer
 // for forward compatibility.
@@ -244,10 +244,9 @@ type ScoriaDBServer interface {
 	Delete(context.Context, *DeleteRequest) (*DeleteResponse, error)
 	Scan(*ScanRequest, grpc.ServerStreamingServer[ScanResponse]) error
 	// Column Family operations
-	ListCFs(context.Context, *ListCFsRequest) (*ListCFsResponse, error)
+	ListCF(context.Context, *ListCFRequest) (*ListCFResponse, error)
 	CreateCF(context.Context, *CreateCFRequest) (*CreateCFResponse, error)
 	DeleteCF(context.Context, *DeleteCFRequest) (*DeleteCFResponse, error)
-	UseCF(context.Context, *UseCFRequest) (*UseCFResponse, error)
 	// Transaction operations
 	BeginTxn(context.Context, *BeginTxnRequest) (*BeginTxnResponse, error)
 	CommitTxn(context.Context, *CommitTxnRequest) (*CommitTxnResponse, error)
@@ -256,6 +255,7 @@ type ScoriaDBServer interface {
 	CreateUser(context.Context, *CreateUserRequest) (*CreateUserResponse, error)
 	Authenticate(context.Context, *AuthRequest) (*AuthResponse, error)
 	ChangePassword(context.Context, *ChangePasswordRequest) (*ChangePasswordResponse, error)
+	ListUsers(context.Context, *ListUsersRequest) (*ListUsersResponse, error)
 	mustEmbedUnimplementedScoriaDBServer()
 }
 
@@ -278,17 +278,14 @@ func (UnimplementedScoriaDBServer) Delete(context.Context, *DeleteRequest) (*Del
 func (UnimplementedScoriaDBServer) Scan(*ScanRequest, grpc.ServerStreamingServer[ScanResponse]) error {
 	return status.Error(codes.Unimplemented, "method Scan not implemented")
 }
-func (UnimplementedScoriaDBServer) ListCFs(context.Context, *ListCFsRequest) (*ListCFsResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method ListCFs not implemented")
+func (UnimplementedScoriaDBServer) ListCF(context.Context, *ListCFRequest) (*ListCFResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListCF not implemented")
 }
 func (UnimplementedScoriaDBServer) CreateCF(context.Context, *CreateCFRequest) (*CreateCFResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method CreateCF not implemented")
 }
 func (UnimplementedScoriaDBServer) DeleteCF(context.Context, *DeleteCFRequest) (*DeleteCFResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method DeleteCF not implemented")
-}
-func (UnimplementedScoriaDBServer) UseCF(context.Context, *UseCFRequest) (*UseCFResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method UseCF not implemented")
 }
 func (UnimplementedScoriaDBServer) BeginTxn(context.Context, *BeginTxnRequest) (*BeginTxnResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method BeginTxn not implemented")
@@ -307,6 +304,9 @@ func (UnimplementedScoriaDBServer) Authenticate(context.Context, *AuthRequest) (
 }
 func (UnimplementedScoriaDBServer) ChangePassword(context.Context, *ChangePasswordRequest) (*ChangePasswordResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ChangePassword not implemented")
+}
+func (UnimplementedScoriaDBServer) ListUsers(context.Context, *ListUsersRequest) (*ListUsersResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListUsers not implemented")
 }
 func (UnimplementedScoriaDBServer) mustEmbedUnimplementedScoriaDBServer() {}
 func (UnimplementedScoriaDBServer) testEmbeddedByValue()                  {}
@@ -394,20 +394,20 @@ func _ScoriaDB_Scan_Handler(srv interface{}, stream grpc.ServerStream) error {
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type ScoriaDB_ScanServer = grpc.ServerStreamingServer[ScanResponse]
 
-func _ScoriaDB_ListCFs_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ListCFsRequest)
+func _ScoriaDB_ListCF_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListCFRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(ScoriaDBServer).ListCFs(ctx, in)
+		return srv.(ScoriaDBServer).ListCF(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: ScoriaDB_ListCFs_FullMethodName,
+		FullMethod: ScoriaDB_ListCF_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(ScoriaDBServer).ListCFs(ctx, req.(*ListCFsRequest))
+		return srv.(ScoriaDBServer).ListCF(ctx, req.(*ListCFRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -444,24 +444,6 @@ func _ScoriaDB_DeleteCF_Handler(srv interface{}, ctx context.Context, dec func(i
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(ScoriaDBServer).DeleteCF(ctx, req.(*DeleteCFRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _ScoriaDB_UseCF_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(UseCFRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(ScoriaDBServer).UseCF(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: ScoriaDB_UseCF_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(ScoriaDBServer).UseCF(ctx, req.(*UseCFRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -574,6 +556,24 @@ func _ScoriaDB_ChangePassword_Handler(srv interface{}, ctx context.Context, dec 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ScoriaDB_ListUsers_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListUsersRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ScoriaDBServer).ListUsers(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ScoriaDB_ListUsers_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ScoriaDBServer).ListUsers(ctx, req.(*ListUsersRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // ScoriaDB_ServiceDesc is the grpc.ServiceDesc for ScoriaDB service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -594,8 +594,8 @@ var ScoriaDB_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _ScoriaDB_Delete_Handler,
 		},
 		{
-			MethodName: "ListCFs",
-			Handler:    _ScoriaDB_ListCFs_Handler,
+			MethodName: "ListCF",
+			Handler:    _ScoriaDB_ListCF_Handler,
 		},
 		{
 			MethodName: "CreateCF",
@@ -604,10 +604,6 @@ var ScoriaDB_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "DeleteCF",
 			Handler:    _ScoriaDB_DeleteCF_Handler,
-		},
-		{
-			MethodName: "UseCF",
-			Handler:    _ScoriaDB_UseCF_Handler,
 		},
 		{
 			MethodName: "BeginTxn",
@@ -632,6 +628,10 @@ var ScoriaDB_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ChangePassword",
 			Handler:    _ScoriaDB_ChangePassword_Handler,
+		},
+		{
+			MethodName: "ListUsers",
+			Handler:    _ScoriaDB_ListUsers_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

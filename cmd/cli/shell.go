@@ -15,13 +15,14 @@
 package main
 
 import (
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"runtime"
 	"strings"
-	"encoding/base64"
-    "encoding/json"
+
 	"github.com/c-bata/go-prompt"
 	"github.com/spf13/cobra"
 )
@@ -72,7 +73,7 @@ func (s *shellState) executor(line string) {
 		return
 	}
 
-	// Сохраняем в историю
+	// Save to history
 	s.cmdHistory = append(s.cmdHistory, line)
 	if len(s.cmdHistory) > 100 {
 		s.cmdHistory = s.cmdHistory[1:]
@@ -133,32 +134,26 @@ func (s *shellState) executor(line string) {
 
 	case "list-cf":
 		s.listCF()
-	
+
 	case "create-cf":
 		if len(args) < 1 {
-			fmt.Println("Usage: create-cf <column-family>")
+			fmt.Println("Usage: create-cf <cf-name>")
 			return
 		}
 		s.createCF(args[0])
 
 	case "delete-cf":
-    if len(args) < 1 {
-        fmt.Println("Usage: delete-cf <cf-name>")
-        return
-    }
-    s.deleteCF(args[0])
+		if len(args) < 1 {
+			fmt.Println("Usage: delete-cf <cf-name>")
+			return
+		}
+		s.deleteCF(args[0])
 
 	case "whoami":
 		s.whoami()
 
 	case "stats":
 		s.stats()
-
-	case "last-error":
-		s.lastErrorCmd()
-
-	case "history":
-		s.history()
 
 	case "export":
 		if len(args) < 2 {
@@ -168,8 +163,14 @@ func (s *shellState) executor(line string) {
 		}
 		s.export(args[0], args[1])
 
+	case "history":
+		s.history()
+
+	case "last-error":
+		s.lastErrorCmd()
+
 	default:
-		// Попробуем обработать admin команды
+		// Try to handle admin commands
 		if cmd == "admin" {
 			s.handleAdmin(args)
 			return
@@ -178,7 +179,7 @@ func (s *shellState) executor(line string) {
 	}
 }
 
-// handleAdmin обрабатывает admin подкоманды
+// handleAdmin processes admin subcommands
 func (s *shellState) handleAdmin(args []string) {
 	if len(args) == 0 {
 		fmt.Println("Admin subcommands: change-password, user-add, list-users")
@@ -211,13 +212,6 @@ func (s *shellState) handleAdmin(args []string) {
 		}
 		s.userAdd(username, password, roleList)
 
-	case "create-cf":
-    if len(args) != 2 {
-        fmt.Println("Usage: admin create-cf <cf-name>")
-        return
-    }
-    s.createCF(args[1])
-
 	case "list-users":
 		s.listUsers()
 
@@ -232,7 +226,6 @@ func (s *shellState) completer(d prompt.Document) []prompt.Suggest {
 	text := d.TextBeforeCursor()
 	words := strings.Fields(text)
 
-	// Базовые команды
 	commands := []prompt.Suggest{
 		{Text: "get", Description: "Get value for key"},
 		{Text: "set", Description: "Set key-value pair"},
@@ -241,6 +234,8 @@ func (s *shellState) completer(d prompt.Document) []prompt.Suggest {
 		{Text: "use", Description: "Set default column family"},
 		{Text: "cf", Description: "Show current column family"},
 		{Text: "list-cf", Description: "List all column families"},
+		{Text: "create-cf", Description: "Create a new column family"},
+		{Text: "delete-cf", Description: "Delete a column family"},
 		{Text: "whoami", Description: "Show current user info"},
 		{Text: "stats", Description: "Show database statistics"},
 		{Text: "export", Description: "Export scan results to file"},
@@ -253,14 +248,12 @@ func (s *shellState) completer(d prompt.Document) []prompt.Suggest {
 		{Text: "quit", Description: "Exit shell"},
 	}
 
-	// Админские подкоманды
 	adminCommands := []prompt.Suggest{
 		{Text: "change-password", Description: "Change user password"},
 		{Text: "user-add", Description: "Create new user"},
 		{Text: "list-users", Description: "List all users"},
 	}
 
-	// Если набираем admin, предлагаем подкоманды
 	if len(words) > 0 && words[0] == "admin" {
 		if len(words) == 1 {
 			return prompt.FilterHasPrefix(adminCommands, d.GetWordBeforeCursor(), true)
@@ -271,45 +264,45 @@ func (s *shellState) completer(d prompt.Document) []prompt.Suggest {
 }
 
 // help prints help message.
-func (s *shellState) help() {func (s *shellState) help() {
-    fmt.Println("Available commands:")
-    fmt.Println("  get <key>                 - Get value for key")
-    fmt.Println("  set <key> <value>         - Set key-value pair")
-    fmt.Println("  del <key>                 - Delete key")
-    fmt.Println("  scan [prefix]             - Scan keys with prefix")
-    fmt.Println("  use <cf>                  - Set default column family")
-    fmt.Println("  cf                        - Show current column family")
-    fmt.Println("  list-cf                   - List all column families")
-    fmt.Println("  create-cf <name>          - Create a new column family")
-    fmt.Println("  delete-cf <name>          - Delete a column family (cannot delete system CFs)")
-    fmt.Println("  whoami                    - Show current user info")
-    fmt.Println("  stats                     - Show database statistics")
-    fmt.Println("  export <prefix> <file>    - Export scan results to file")
-    fmt.Println("  clear                     - Clear screen")
-    fmt.Println("  history                   - Show command history")
-    fmt.Println("  last-error                - Show last error")
-    fmt.Println("")
-    fmt.Println("Admin commands:")
-    fmt.Println("  admin change-password <user> <pass>  - Change user password")
-    fmt.Println("  admin user-add <user> <pass> [--roles=...] - Create new user")
-    fmt.Println("  admin list-users          - List all users")
-    fmt.Println("")
-    fmt.Println("  help                      - Show this help")
-    fmt.Println("  exit, quit                - Exit shell")
+func (s *shellState) help() {
+	fmt.Println("Available commands:")
+	fmt.Println("  get <key>                 - Get value for key")
+	fmt.Println("  set <key> <value>         - Set key-value pair")
+	fmt.Println("  del <key>                 - Delete key")
+	fmt.Println("  scan [prefix]             - Scan keys with prefix")
+	fmt.Println("  use <cf>                  - Set default column family")
+	fmt.Println("  cf                        - Show current column family")
+	fmt.Println("  list-cf                   - List all column families")
+	fmt.Println("  create-cf <name>          - Create a new column family")
+	fmt.Println("  delete-cf <name>          - Delete a column family (cannot delete system CFs)")
+	fmt.Println("  whoami                    - Show current user info")
+	fmt.Println("  stats                     - Show database statistics")
+	fmt.Println("  export <prefix> <file>    - Export scan results to file")
+	fmt.Println("  clear                     - Clear screen")
+	fmt.Println("  history                   - Show command history")
+	fmt.Println("  last-error                - Show last error")
+	fmt.Println("")
+	fmt.Println("Admin commands:")
+	fmt.Println("  admin change-password <user> <pass>  - Change user password")
+	fmt.Println("  admin user-add <user> <pass> [--roles=...] - Create new user")
+	fmt.Println("  admin list-users          - List all users")
+	fmt.Println("")
+	fmt.Println("  help                      - Show this help")
+	fmt.Println("  exit, quit                - Exit shell")
 }
-// clearScreen clears the screen.
+
+// clearScreen clears the terminal screen.
 func (s *shellState) clearScreen() {
-    var cmd *exec.Cmd
-    if runtime.GOOS == "windows" {
-        cmd = exec.Command("cmd", "/c", "cls")
-    } else {
-        cmd = exec.Command("clear")
-    }
-    cmd.Stdout = os.Stdout
-    if err := cmd.Run(); err != nil {
-        fmt.Printf("Error: %v\n", err)	
-    }
+	var cmd *exec.Cmd
+	if runtime.GOOS == "windows" {
+		cmd = exec.Command("cmd", "/c", "cls")
+	} else {
+		cmd = exec.Command("clear")
+	}
+	cmd.Stdout = os.Stdout
+	_ = cmd.Run()
 }
+
 // get executes get command.
 func (s *shellState) get(key string) {
 	ctx, cancel := defaultContext()
@@ -378,24 +371,11 @@ func (s *shellState) showCF() {
 	fmt.Printf("Current column family: %s\n", s.currentCF)
 }
 
-func (s *shellState) createCF(cfName string) {
-    ctx, cancel := defaultContext()
-    defer cancel()
-
-    err := s.client.CreateCF(ctx, cfName)
-    if err != nil {
-        s.lastError = err
-        fmt.Printf("Error: %v\n", err)
-        return
-    }
-    fmt.Printf("Column family '%s' created\n", cfName)
-}
 // useCF sets default column family.
 func (s *shellState) useCF(cfName string) {
 	ctx, cancel := defaultContext()
 	defer cancel()
 
-	// Проверяем, существует ли CF
 	_, err := s.client.Scan(ctx, []byte(""), cfName)
 	if err != nil && strings.Contains(err.Error(), "CF") {
 		fmt.Printf("Column family '%s' does not exist. Use 'list-cf' to see available.\n", cfName)
@@ -405,98 +385,98 @@ func (s *shellState) useCF(cfName string) {
 	fmt.Printf("Switched to column family: %s\n", cfName)
 }
 
-// listCF lists all column families.func (s *shellState) listCF() {
-    ctx, cancel := defaultContext()
-    defer cancel()
+// listCF lists all column families.
+func (s *shellState) listCF() {
+	ctx, cancel := defaultContext()
+	defer cancel()
 
-    cfs, err := s.client.ListCF(ctx)
-    if err != nil {
-        s.lastError = err
-        fmt.Printf("Error: %v\n", err)
-        return
-    }
-
-    if len(cfs) == 0 {
-        fmt.Println("No column families")
-        return
-    }
-
-    for _, cf := range cfs {
-        fmt.Println(cf)
-    }
+	cfs, err := s.client.ListCF(ctx)
+	if err != nil {
+		s.lastError = err
+		fmt.Printf("Error: %v\n", err)
+		return
+	}
+	for _, cf := range cfs {
+		fmt.Println(cf)
+	}
 }
 
+// createCF creates a new column family.
+func (s *shellState) createCF(cfName string) {
+	ctx, cancel := defaultContext()
+	defer cancel()
+
+	err := s.client.CreateCF(ctx, cfName)
+	if err != nil {
+		s.lastError = err
+		fmt.Printf("Error: %v\n", err)
+		return
+	}
+	fmt.Printf("Column family '%s' created\n", cfName)
+}
+
+// deleteCF deletes a column family.
 func (s *shellState) deleteCF(cfName string) {
-    ctx, cancel := defaultContext()
-    defer cancel()
+	ctx, cancel := defaultContext()
+	defer cancel()
 
-    err := s.client.DeleteCF(ctx, cfName)
-    if err != nil {
-        s.lastError = err
-        fmt.Printf("Error: %v\n", err)
-        return
-    }
-
-    // If we deleted the current CF, reset to default
-    if s.currentCF == cfName {
-        s.currentCF = "default"
-        fmt.Printf("Current CF was '%s', reset to 'default'\n", cfName)
-    }
-
-    fmt.Printf("Column family '%s' deleted\n", cfName)
+	err := s.client.DeleteCF(ctx, cfName)
+	if err != nil {
+		s.lastError = err
+		fmt.Printf("Error: %v\n", err)
+		return
+	}
+	if s.currentCF == cfName {
+		s.currentCF = "default"
+		fmt.Printf("Current CF was '%s', reset to 'default'\n", cfName)
+	}
+	fmt.Printf("Column family '%s' deleted\n", cfName)
 }
 
-// whoami shows current user.
+// whoami shows current user info from JWT.
 func (s *shellState) whoami() {
-    if token == "" {
-        fmt.Println("Not authenticated")
-        return
-    }
-
-    username, roles, err := parseJWT(token)
-    if err != nil {
-        fmt.Printf("Error parsing token: %v\n", err)
-        return
-    }
-
-    fmt.Printf("Username: %s\n", username)
-    fmt.Printf("Roles: %s\n", strings.Join(roles, ", "))
+	if token == "" {
+		fmt.Println("Not authenticated")
+		return
+	}
+	username, roles, err := parseJWT(token)
+	if err != nil {
+		fmt.Printf("Error parsing token: %v\n", err)
+		return
+	}
+	fmt.Printf("Username: %s\n", username)
+	fmt.Printf("Roles: %s\n", strings.Join(roles, ", "))
 }
 
-func parseJWT(token string) (username string, roles []string, err error) {
-    parts := strings.Split(token, ".")
-    if len(parts) != 3 {
-        return "", nil, fmt.Errorf("invalid JWT format")
-    }
-
-    // Декодируем payload (вторая часть)
-    payload, err := base64.RawURLEncoding.DecodeString(parts[1])
-    if err != nil {
-        return "", nil, err
-    }
-
-    var claims struct {
-        Subject string   `json:"sub"`
-        Roles   []string `json:"roles"`
-    }
-    if err := json.Unmarshal(payload, &claims); err != nil {
-        return "", nil, err
-    }
-
-    return claims.Subject, claims.Roles, nil
+// parseJWT decodes the JWT token and returns username and roles.
+func parseJWT(tokenStr string) (string, []string, error) {
+	parts := strings.Split(tokenStr, ".")
+	if len(parts) != 3 {
+		return "", nil, fmt.Errorf("invalid JWT format")
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return "", nil, err
+	}
+	var claims struct {
+		Subject string   `json:"sub"`
+		Roles   []string `json:"roles"`
+	}
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		return "", nil, err
+	}
+	return claims.Subject, claims.Roles, nil
 }
 
-
-// stats shows database statistics.
+// stats shows key count in current CF.
 func (s *shellState) stats() {
-	// Простое сканирование для подсчёта ключей
 	ctx, cancel := defaultContext()
 	defer cancel()
 
 	results, err := s.client.Scan(ctx, []byte(""), s.currentCF)
 	if err != nil {
 		s.lastError = err
-		fmt.Printf("Error getting stats: %v\n", err)
+		fmt.Printf("Error: %v\n", err)
 		return
 	}
 	fmt.Printf("Current CF '%s': %d keys\n", s.currentCF, len(results))
@@ -533,14 +513,12 @@ func (s *shellState) export(prefix, filename string) {
 		fmt.Printf("Error scanning: %v\n", err)
 		return
 	}
-
 	file, err := os.Create(filename)
 	if err != nil {
 		fmt.Printf("Error creating file: %v\n", err)
 		return
 	}
 	defer file.Close()
-
 	for _, resp := range results {
 		line := fmt.Sprintf("%s\t%s\n", resp.Key, resp.Value)
 		if _, err := file.WriteString(line); err != nil {
@@ -555,7 +533,6 @@ func (s *shellState) export(prefix, filename string) {
 func (s *shellState) changePassword(username, newPassword string) {
 	ctx, cancel := defaultContext()
 	defer cancel()
-
 	err := s.client.ChangePassword(ctx, username, newPassword)
 	if err != nil {
 		s.lastError = err
@@ -565,26 +542,34 @@ func (s *shellState) changePassword(username, newPassword string) {
 	fmt.Printf("Password changed for user '%s'\n", username)
 }
 
-// userAdd adds a new user.
-func (s *shellState) userAdd(username, password string, roleList []string) {
+// userAdd creates a new user.
+func (s *shellState) userAdd(username, password string, roles []string) {
 	ctx, cancel := defaultContext()
 	defer cancel()
-
-	_, err := s.client.CreateUser(ctx, username, password, roleList)
+	_, err := s.client.CreateUser(ctx, username, password, roles)
 	if err != nil {
 		s.lastError = err
 		fmt.Printf("Error: %v\n", err)
 		return
 	}
-	fmt.Printf("User '%s' created with roles: %v\n", username, roleList)
+	fmt.Printf("User '%s' created with roles: %v\n", username, roles)
 }
 
 // listUsers lists all users.
 func (s *shellState) listUsers() {
-	// TODO: добавить метод ListUsers в gRPC
-	fmt.Println("User listing not yet implemented in gRPC")
-	fmt.Println("Use embedded API or direct auth package")
+    ctx, cancel := defaultContext()
+    defer cancel()
+    users, err := s.client.ListUsers(ctx)
+    if err != nil {
+        s.lastError = err
+        fmt.Printf("Error: %v\n", err)
+        return
+    }
+    for _, u := range users {
+        fmt.Printf("%s %v\n", u.Username, u.Roles)
+    }
 }
+
 
 // newShellCmd creates the `shell` command.
 func newShellCmd() *cobra.Command {

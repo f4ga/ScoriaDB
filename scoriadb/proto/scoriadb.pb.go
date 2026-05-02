@@ -78,7 +78,7 @@ func (x TxnOp_OpType) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use TxnOp_OpType.Descriptor instead.
 func (TxnOp_OpType) EnumDescriptor() ([]byte, []int) {
-	return file_proto_scoriadb_proto_rawDescGZIP(), []int{18, 0}
+	return file_proto_scoriadb_proto_rawDescGZIP(), []int{16, 0}
 }
 
 type GetRequest struct {
@@ -497,26 +497,26 @@ func (x *ScanResponse) GetValue() []byte {
 	return nil
 }
 
-type ListCFsRequest struct {
+type ListCFRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *ListCFsRequest) Reset() {
-	*x = ListCFsRequest{}
+func (x *ListCFRequest) Reset() {
+	*x = ListCFRequest{}
 	mi := &file_proto_scoriadb_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *ListCFsRequest) String() string {
+func (x *ListCFRequest) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*ListCFsRequest) ProtoMessage() {}
+func (*ListCFRequest) ProtoMessage() {}
 
-func (x *ListCFsRequest) ProtoReflect() protoreflect.Message {
+func (x *ListCFRequest) ProtoReflect() protoreflect.Message {
 	mi := &file_proto_scoriadb_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -528,32 +528,32 @@ func (x *ListCFsRequest) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use ListCFsRequest.ProtoReflect.Descriptor instead.
-func (*ListCFsRequest) Descriptor() ([]byte, []int) {
+// Deprecated: Use ListCFRequest.ProtoReflect.Descriptor instead.
+func (*ListCFRequest) Descriptor() ([]byte, []int) {
 	return file_proto_scoriadb_proto_rawDescGZIP(), []int{8}
 }
 
-type ListCFsResponse struct {
+type ListCFResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	CfNames       []string               `protobuf:"bytes,1,rep,name=cf_names,json=cfNames,proto3" json:"cf_names,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *ListCFsResponse) Reset() {
-	*x = ListCFsResponse{}
+func (x *ListCFResponse) Reset() {
+	*x = ListCFResponse{}
 	mi := &file_proto_scoriadb_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *ListCFsResponse) String() string {
+func (x *ListCFResponse) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*ListCFsResponse) ProtoMessage() {}
+func (*ListCFResponse) ProtoMessage() {}
 
-func (x *ListCFsResponse) ProtoReflect() protoreflect.Message {
+func (x *ListCFResponse) ProtoReflect() protoreflect.Message {
 	mi := &file_proto_scoriadb_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -565,12 +565,12 @@ func (x *ListCFsResponse) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use ListCFsResponse.ProtoReflect.Descriptor instead.
-func (*ListCFsResponse) Descriptor() ([]byte, []int) {
+// Deprecated: Use ListCFResponse.ProtoReflect.Descriptor instead.
+func (*ListCFResponse) Descriptor() ([]byte, []int) {
 	return file_proto_scoriadb_proto_rawDescGZIP(), []int{9}
 }
 
-func (x *ListCFsResponse) GetCfNames() []string {
+func (x *ListCFResponse) GetCfNames() []string {
 	if x != nil {
 		return x.CfNames
 	}
@@ -737,86 +737,6 @@ func (*DeleteCFResponse) Descriptor() ([]byte, []int) {
 	return file_proto_scoriadb_proto_rawDescGZIP(), []int{13}
 }
 
-type UseCFRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *UseCFRequest) Reset() {
-	*x = UseCFRequest{}
-	mi := &file_proto_scoriadb_proto_msgTypes[14]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *UseCFRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*UseCFRequest) ProtoMessage() {}
-
-func (x *UseCFRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_scoriadb_proto_msgTypes[14]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use UseCFRequest.ProtoReflect.Descriptor instead.
-func (*UseCFRequest) Descriptor() ([]byte, []int) {
-	return file_proto_scoriadb_proto_rawDescGZIP(), []int{14}
-}
-
-func (x *UseCFRequest) GetName() string {
-	if x != nil {
-		return x.Name
-	}
-	return ""
-}
-
-type UseCFResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *UseCFResponse) Reset() {
-	*x = UseCFResponse{}
-	mi := &file_proto_scoriadb_proto_msgTypes[15]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *UseCFResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*UseCFResponse) ProtoMessage() {}
-
-func (x *UseCFResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_scoriadb_proto_msgTypes[15]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use UseCFResponse.ProtoReflect.Descriptor instead.
-func (*UseCFResponse) Descriptor() ([]byte, []int) {
-	return file_proto_scoriadb_proto_rawDescGZIP(), []int{15}
-}
-
 type BeginTxnRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
@@ -825,7 +745,7 @@ type BeginTxnRequest struct {
 
 func (x *BeginTxnRequest) Reset() {
 	*x = BeginTxnRequest{}
-	mi := &file_proto_scoriadb_proto_msgTypes[16]
+	mi := &file_proto_scoriadb_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -837,7 +757,7 @@ func (x *BeginTxnRequest) String() string {
 func (*BeginTxnRequest) ProtoMessage() {}
 
 func (x *BeginTxnRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_scoriadb_proto_msgTypes[16]
+	mi := &file_proto_scoriadb_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -850,7 +770,7 @@ func (x *BeginTxnRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BeginTxnRequest.ProtoReflect.Descriptor instead.
 func (*BeginTxnRequest) Descriptor() ([]byte, []int) {
-	return file_proto_scoriadb_proto_rawDescGZIP(), []int{16}
+	return file_proto_scoriadb_proto_rawDescGZIP(), []int{14}
 }
 
 type BeginTxnResponse struct {
@@ -863,7 +783,7 @@ type BeginTxnResponse struct {
 
 func (x *BeginTxnResponse) Reset() {
 	*x = BeginTxnResponse{}
-	mi := &file_proto_scoriadb_proto_msgTypes[17]
+	mi := &file_proto_scoriadb_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -875,7 +795,7 @@ func (x *BeginTxnResponse) String() string {
 func (*BeginTxnResponse) ProtoMessage() {}
 
 func (x *BeginTxnResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_scoriadb_proto_msgTypes[17]
+	mi := &file_proto_scoriadb_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -888,7 +808,7 @@ func (x *BeginTxnResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BeginTxnResponse.ProtoReflect.Descriptor instead.
 func (*BeginTxnResponse) Descriptor() ([]byte, []int) {
-	return file_proto_scoriadb_proto_rawDescGZIP(), []int{17}
+	return file_proto_scoriadb_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *BeginTxnResponse) GetTxnId() string {
@@ -917,7 +837,7 @@ type TxnOp struct {
 
 func (x *TxnOp) Reset() {
 	*x = TxnOp{}
-	mi := &file_proto_scoriadb_proto_msgTypes[18]
+	mi := &file_proto_scoriadb_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -929,7 +849,7 @@ func (x *TxnOp) String() string {
 func (*TxnOp) ProtoMessage() {}
 
 func (x *TxnOp) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_scoriadb_proto_msgTypes[18]
+	mi := &file_proto_scoriadb_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -942,7 +862,7 @@ func (x *TxnOp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TxnOp.ProtoReflect.Descriptor instead.
 func (*TxnOp) Descriptor() ([]byte, []int) {
-	return file_proto_scoriadb_proto_rawDescGZIP(), []int{18}
+	return file_proto_scoriadb_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *TxnOp) GetOp() TxnOp_OpType {
@@ -983,7 +903,7 @@ type CommitTxnRequest struct {
 
 func (x *CommitTxnRequest) Reset() {
 	*x = CommitTxnRequest{}
-	mi := &file_proto_scoriadb_proto_msgTypes[19]
+	mi := &file_proto_scoriadb_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -995,7 +915,7 @@ func (x *CommitTxnRequest) String() string {
 func (*CommitTxnRequest) ProtoMessage() {}
 
 func (x *CommitTxnRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_scoriadb_proto_msgTypes[19]
+	mi := &file_proto_scoriadb_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1008,7 +928,7 @@ func (x *CommitTxnRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CommitTxnRequest.ProtoReflect.Descriptor instead.
 func (*CommitTxnRequest) Descriptor() ([]byte, []int) {
-	return file_proto_scoriadb_proto_rawDescGZIP(), []int{19}
+	return file_proto_scoriadb_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *CommitTxnRequest) GetTxnId() string {
@@ -1033,7 +953,7 @@ type CommitTxnResponse struct {
 
 func (x *CommitTxnResponse) Reset() {
 	*x = CommitTxnResponse{}
-	mi := &file_proto_scoriadb_proto_msgTypes[20]
+	mi := &file_proto_scoriadb_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1045,7 +965,7 @@ func (x *CommitTxnResponse) String() string {
 func (*CommitTxnResponse) ProtoMessage() {}
 
 func (x *CommitTxnResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_scoriadb_proto_msgTypes[20]
+	mi := &file_proto_scoriadb_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1058,7 +978,7 @@ func (x *CommitTxnResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CommitTxnResponse.ProtoReflect.Descriptor instead.
 func (*CommitTxnResponse) Descriptor() ([]byte, []int) {
-	return file_proto_scoriadb_proto_rawDescGZIP(), []int{20}
+	return file_proto_scoriadb_proto_rawDescGZIP(), []int{18}
 }
 
 type RollbackTxnRequest struct {
@@ -1070,7 +990,7 @@ type RollbackTxnRequest struct {
 
 func (x *RollbackTxnRequest) Reset() {
 	*x = RollbackTxnRequest{}
-	mi := &file_proto_scoriadb_proto_msgTypes[21]
+	mi := &file_proto_scoriadb_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1082,7 +1002,7 @@ func (x *RollbackTxnRequest) String() string {
 func (*RollbackTxnRequest) ProtoMessage() {}
 
 func (x *RollbackTxnRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_scoriadb_proto_msgTypes[21]
+	mi := &file_proto_scoriadb_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1095,7 +1015,7 @@ func (x *RollbackTxnRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RollbackTxnRequest.ProtoReflect.Descriptor instead.
 func (*RollbackTxnRequest) Descriptor() ([]byte, []int) {
-	return file_proto_scoriadb_proto_rawDescGZIP(), []int{21}
+	return file_proto_scoriadb_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *RollbackTxnRequest) GetTxnId() string {
@@ -1113,7 +1033,7 @@ type RollbackTxnResponse struct {
 
 func (x *RollbackTxnResponse) Reset() {
 	*x = RollbackTxnResponse{}
-	mi := &file_proto_scoriadb_proto_msgTypes[22]
+	mi := &file_proto_scoriadb_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1125,7 +1045,7 @@ func (x *RollbackTxnResponse) String() string {
 func (*RollbackTxnResponse) ProtoMessage() {}
 
 func (x *RollbackTxnResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_scoriadb_proto_msgTypes[22]
+	mi := &file_proto_scoriadb_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1138,7 +1058,7 @@ func (x *RollbackTxnResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RollbackTxnResponse.ProtoReflect.Descriptor instead.
 func (*RollbackTxnResponse) Descriptor() ([]byte, []int) {
-	return file_proto_scoriadb_proto_rawDescGZIP(), []int{22}
+	return file_proto_scoriadb_proto_rawDescGZIP(), []int{20}
 }
 
 type CreateUserRequest struct {
@@ -1152,7 +1072,7 @@ type CreateUserRequest struct {
 
 func (x *CreateUserRequest) Reset() {
 	*x = CreateUserRequest{}
-	mi := &file_proto_scoriadb_proto_msgTypes[23]
+	mi := &file_proto_scoriadb_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1164,7 +1084,7 @@ func (x *CreateUserRequest) String() string {
 func (*CreateUserRequest) ProtoMessage() {}
 
 func (x *CreateUserRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_scoriadb_proto_msgTypes[23]
+	mi := &file_proto_scoriadb_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1177,7 +1097,7 @@ func (x *CreateUserRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateUserRequest.ProtoReflect.Descriptor instead.
 func (*CreateUserRequest) Descriptor() ([]byte, []int) {
-	return file_proto_scoriadb_proto_rawDescGZIP(), []int{23}
+	return file_proto_scoriadb_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *CreateUserRequest) GetUsername() string {
@@ -1209,7 +1129,7 @@ type CreateUserResponse struct {
 
 func (x *CreateUserResponse) Reset() {
 	*x = CreateUserResponse{}
-	mi := &file_proto_scoriadb_proto_msgTypes[24]
+	mi := &file_proto_scoriadb_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1221,7 +1141,7 @@ func (x *CreateUserResponse) String() string {
 func (*CreateUserResponse) ProtoMessage() {}
 
 func (x *CreateUserResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_scoriadb_proto_msgTypes[24]
+	mi := &file_proto_scoriadb_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1234,7 +1154,7 @@ func (x *CreateUserResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateUserResponse.ProtoReflect.Descriptor instead.
 func (*CreateUserResponse) Descriptor() ([]byte, []int) {
-	return file_proto_scoriadb_proto_rawDescGZIP(), []int{24}
+	return file_proto_scoriadb_proto_rawDescGZIP(), []int{22}
 }
 
 type AuthRequest struct {
@@ -1247,7 +1167,7 @@ type AuthRequest struct {
 
 func (x *AuthRequest) Reset() {
 	*x = AuthRequest{}
-	mi := &file_proto_scoriadb_proto_msgTypes[25]
+	mi := &file_proto_scoriadb_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1259,7 +1179,7 @@ func (x *AuthRequest) String() string {
 func (*AuthRequest) ProtoMessage() {}
 
 func (x *AuthRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_scoriadb_proto_msgTypes[25]
+	mi := &file_proto_scoriadb_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1272,7 +1192,7 @@ func (x *AuthRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AuthRequest.ProtoReflect.Descriptor instead.
 func (*AuthRequest) Descriptor() ([]byte, []int) {
-	return file_proto_scoriadb_proto_rawDescGZIP(), []int{25}
+	return file_proto_scoriadb_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *AuthRequest) GetUsername() string {
@@ -1298,7 +1218,7 @@ type AuthResponse struct {
 
 func (x *AuthResponse) Reset() {
 	*x = AuthResponse{}
-	mi := &file_proto_scoriadb_proto_msgTypes[26]
+	mi := &file_proto_scoriadb_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1310,7 +1230,7 @@ func (x *AuthResponse) String() string {
 func (*AuthResponse) ProtoMessage() {}
 
 func (x *AuthResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_scoriadb_proto_msgTypes[26]
+	mi := &file_proto_scoriadb_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1323,7 +1243,7 @@ func (x *AuthResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AuthResponse.ProtoReflect.Descriptor instead.
 func (*AuthResponse) Descriptor() ([]byte, []int) {
-	return file_proto_scoriadb_proto_rawDescGZIP(), []int{26}
+	return file_proto_scoriadb_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *AuthResponse) GetJwtToken() string {
@@ -1343,7 +1263,7 @@ type ChangePasswordRequest struct {
 
 func (x *ChangePasswordRequest) Reset() {
 	*x = ChangePasswordRequest{}
-	mi := &file_proto_scoriadb_proto_msgTypes[27]
+	mi := &file_proto_scoriadb_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1355,7 +1275,7 @@ func (x *ChangePasswordRequest) String() string {
 func (*ChangePasswordRequest) ProtoMessage() {}
 
 func (x *ChangePasswordRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_scoriadb_proto_msgTypes[27]
+	mi := &file_proto_scoriadb_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1368,7 +1288,7 @@ func (x *ChangePasswordRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ChangePasswordRequest.ProtoReflect.Descriptor instead.
 func (*ChangePasswordRequest) Descriptor() ([]byte, []int) {
-	return file_proto_scoriadb_proto_rawDescGZIP(), []int{27}
+	return file_proto_scoriadb_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *ChangePasswordRequest) GetUsername() string {
@@ -1393,7 +1313,7 @@ type ChangePasswordResponse struct {
 
 func (x *ChangePasswordResponse) Reset() {
 	*x = ChangePasswordResponse{}
-	mi := &file_proto_scoriadb_proto_msgTypes[28]
+	mi := &file_proto_scoriadb_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1405,7 +1325,7 @@ func (x *ChangePasswordResponse) String() string {
 func (*ChangePasswordResponse) ProtoMessage() {}
 
 func (x *ChangePasswordResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_scoriadb_proto_msgTypes[28]
+	mi := &file_proto_scoriadb_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1418,7 +1338,139 @@ func (x *ChangePasswordResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ChangePasswordResponse.ProtoReflect.Descriptor instead.
 func (*ChangePasswordResponse) Descriptor() ([]byte, []int) {
+	return file_proto_scoriadb_proto_rawDescGZIP(), []int{26}
+}
+
+type ListUsersRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListUsersRequest) Reset() {
+	*x = ListUsersRequest{}
+	mi := &file_proto_scoriadb_proto_msgTypes[27]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListUsersRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListUsersRequest) ProtoMessage() {}
+
+func (x *ListUsersRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_scoriadb_proto_msgTypes[27]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListUsersRequest.ProtoReflect.Descriptor instead.
+func (*ListUsersRequest) Descriptor() ([]byte, []int) {
+	return file_proto_scoriadb_proto_rawDescGZIP(), []int{27}
+}
+
+type ListUsersResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Users         []*UserInfo            `protobuf:"bytes,1,rep,name=users,proto3" json:"users,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListUsersResponse) Reset() {
+	*x = ListUsersResponse{}
+	mi := &file_proto_scoriadb_proto_msgTypes[28]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListUsersResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListUsersResponse) ProtoMessage() {}
+
+func (x *ListUsersResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_scoriadb_proto_msgTypes[28]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListUsersResponse.ProtoReflect.Descriptor instead.
+func (*ListUsersResponse) Descriptor() ([]byte, []int) {
 	return file_proto_scoriadb_proto_rawDescGZIP(), []int{28}
+}
+
+func (x *ListUsersResponse) GetUsers() []*UserInfo {
+	if x != nil {
+		return x.Users
+	}
+	return nil
+}
+
+type UserInfo struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Username      string                 `protobuf:"bytes,1,opt,name=username,proto3" json:"username,omitempty"`
+	Roles         []string               `protobuf:"bytes,2,rep,name=roles,proto3" json:"roles,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *UserInfo) Reset() {
+	*x = UserInfo{}
+	mi := &file_proto_scoriadb_proto_msgTypes[29]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UserInfo) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UserInfo) ProtoMessage() {}
+
+func (x *UserInfo) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_scoriadb_proto_msgTypes[29]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UserInfo.ProtoReflect.Descriptor instead.
+func (*UserInfo) Descriptor() ([]byte, []int) {
+	return file_proto_scoriadb_proto_rawDescGZIP(), []int{29}
+}
+
+func (x *UserInfo) GetUsername() string {
+	if x != nil {
+		return x.Username
+	}
+	return ""
+}
+
+func (x *UserInfo) GetRoles() []string {
+	if x != nil {
+		return x.Roles
+	}
+	return nil
 }
 
 var File_proto_scoriadb_proto protoreflect.FileDescriptor
@@ -1452,19 +1504,16 @@ const file_proto_scoriadb_proto_rawDesc = "" +
 	"\acf_name\x18\x02 \x01(\tR\x06cfName\"6\n" +
 	"\fScanResponse\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\fR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\fR\x05value\"\x10\n" +
-	"\x0eListCFsRequest\",\n" +
-	"\x0fListCFsResponse\x12\x19\n" +
+	"\x05value\x18\x02 \x01(\fR\x05value\"\x0f\n" +
+	"\rListCFRequest\"+\n" +
+	"\x0eListCFResponse\x12\x19\n" +
 	"\bcf_names\x18\x01 \x03(\tR\acfNames\"%\n" +
 	"\x0fCreateCFRequest\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\"\x12\n" +
 	"\x10CreateCFResponse\"%\n" +
 	"\x0fDeleteCFRequest\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\"\x12\n" +
-	"\x10DeleteCFResponse\"\"\n" +
-	"\fUseCFRequest\x12\x12\n" +
-	"\x04name\x18\x01 \x01(\tR\x04name\"\x0f\n" +
-	"\rUseCFResponse\"\x11\n" +
+	"\x10DeleteCFResponse\"\x11\n" +
 	"\x0fBeginTxnRequest\"D\n" +
 	"\x10BeginTxnResponse\x12\x15\n" +
 	"\x06txn_id\x18\x01 \x01(\tR\x05txnId\x12\x19\n" +
@@ -1498,23 +1547,29 @@ const file_proto_scoriadb_proto_rawDesc = "" +
 	"\x15ChangePasswordRequest\x12\x1a\n" +
 	"\busername\x18\x01 \x01(\tR\busername\x12!\n" +
 	"\fnew_password\x18\x02 \x01(\tR\vnewPassword\"\x18\n" +
-	"\x16ChangePasswordResponse2\x9a\a\n" +
+	"\x16ChangePasswordResponse\"\x12\n" +
+	"\x10ListUsersRequest\"=\n" +
+	"\x11ListUsersResponse\x12(\n" +
+	"\x05users\x18\x01 \x03(\v2\x12.scoriadb.UserInfoR\x05users\"<\n" +
+	"\bUserInfo\x12\x1a\n" +
+	"\busername\x18\x01 \x01(\tR\busername\x12\x14\n" +
+	"\x05roles\x18\x02 \x03(\tR\x05roles2\xa3\a\n" +
 	"\bScoriaDB\x122\n" +
 	"\x03Get\x12\x14.scoriadb.GetRequest\x1a\x15.scoriadb.GetResponse\x122\n" +
 	"\x03Put\x12\x14.scoriadb.PutRequest\x1a\x15.scoriadb.PutResponse\x12;\n" +
 	"\x06Delete\x12\x17.scoriadb.DeleteRequest\x1a\x18.scoriadb.DeleteResponse\x127\n" +
-	"\x04Scan\x12\x15.scoriadb.ScanRequest\x1a\x16.scoriadb.ScanResponse0\x01\x12>\n" +
-	"\aListCFs\x12\x18.scoriadb.ListCFsRequest\x1a\x19.scoriadb.ListCFsResponse\x12A\n" +
+	"\x04Scan\x12\x15.scoriadb.ScanRequest\x1a\x16.scoriadb.ScanResponse0\x01\x12;\n" +
+	"\x06ListCF\x12\x17.scoriadb.ListCFRequest\x1a\x18.scoriadb.ListCFResponse\x12A\n" +
 	"\bCreateCF\x12\x19.scoriadb.CreateCFRequest\x1a\x1a.scoriadb.CreateCFResponse\x12A\n" +
-	"\bDeleteCF\x12\x19.scoriadb.DeleteCFRequest\x1a\x1a.scoriadb.DeleteCFResponse\x128\n" +
-	"\x05UseCF\x12\x16.scoriadb.UseCFRequest\x1a\x17.scoriadb.UseCFResponse\x12A\n" +
+	"\bDeleteCF\x12\x19.scoriadb.DeleteCFRequest\x1a\x1a.scoriadb.DeleteCFResponse\x12A\n" +
 	"\bBeginTxn\x12\x19.scoriadb.BeginTxnRequest\x1a\x1a.scoriadb.BeginTxnResponse\x12D\n" +
 	"\tCommitTxn\x12\x1a.scoriadb.CommitTxnRequest\x1a\x1b.scoriadb.CommitTxnResponse\x12J\n" +
 	"\vRollbackTxn\x12\x1c.scoriadb.RollbackTxnRequest\x1a\x1d.scoriadb.RollbackTxnResponse\x12G\n" +
 	"\n" +
 	"CreateUser\x12\x1b.scoriadb.CreateUserRequest\x1a\x1c.scoriadb.CreateUserResponse\x12=\n" +
 	"\fAuthenticate\x12\x15.scoriadb.AuthRequest\x1a\x16.scoriadb.AuthResponse\x12S\n" +
-	"\x0eChangePassword\x12\x1f.scoriadb.ChangePasswordRequest\x1a .scoriadb.ChangePasswordResponseB\x10Z\x0escoriadb/protob\x06proto3"
+	"\x0eChangePassword\x12\x1f.scoriadb.ChangePasswordRequest\x1a .scoriadb.ChangePasswordResponse\x12D\n" +
+	"\tListUsers\x12\x1a.scoriadb.ListUsersRequest\x1a\x1b.scoriadb.ListUsersResponseB\x10Z\x0escoriadb/protob\x06proto3"
 
 var (
 	file_proto_scoriadb_proto_rawDescOnce sync.Once
@@ -1529,7 +1584,7 @@ func file_proto_scoriadb_proto_rawDescGZIP() []byte {
 }
 
 var file_proto_scoriadb_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_proto_scoriadb_proto_msgTypes = make([]protoimpl.MessageInfo, 29)
+var file_proto_scoriadb_proto_msgTypes = make([]protoimpl.MessageInfo, 30)
 var file_proto_scoriadb_proto_goTypes = []any{
 	(TxnOp_OpType)(0),              // 0: scoriadb.TxnOp.OpType
 	(*GetRequest)(nil),             // 1: scoriadb.GetRequest
@@ -1540,64 +1595,66 @@ var file_proto_scoriadb_proto_goTypes = []any{
 	(*DeleteResponse)(nil),         // 6: scoriadb.DeleteResponse
 	(*ScanRequest)(nil),            // 7: scoriadb.ScanRequest
 	(*ScanResponse)(nil),           // 8: scoriadb.ScanResponse
-	(*ListCFsRequest)(nil),         // 9: scoriadb.ListCFsRequest
-	(*ListCFsResponse)(nil),        // 10: scoriadb.ListCFsResponse
+	(*ListCFRequest)(nil),          // 9: scoriadb.ListCFRequest
+	(*ListCFResponse)(nil),         // 10: scoriadb.ListCFResponse
 	(*CreateCFRequest)(nil),        // 11: scoriadb.CreateCFRequest
 	(*CreateCFResponse)(nil),       // 12: scoriadb.CreateCFResponse
 	(*DeleteCFRequest)(nil),        // 13: scoriadb.DeleteCFRequest
 	(*DeleteCFResponse)(nil),       // 14: scoriadb.DeleteCFResponse
-	(*UseCFRequest)(nil),           // 15: scoriadb.UseCFRequest
-	(*UseCFResponse)(nil),          // 16: scoriadb.UseCFResponse
-	(*BeginTxnRequest)(nil),        // 17: scoriadb.BeginTxnRequest
-	(*BeginTxnResponse)(nil),       // 18: scoriadb.BeginTxnResponse
-	(*TxnOp)(nil),                  // 19: scoriadb.TxnOp
-	(*CommitTxnRequest)(nil),       // 20: scoriadb.CommitTxnRequest
-	(*CommitTxnResponse)(nil),      // 21: scoriadb.CommitTxnResponse
-	(*RollbackTxnRequest)(nil),     // 22: scoriadb.RollbackTxnRequest
-	(*RollbackTxnResponse)(nil),    // 23: scoriadb.RollbackTxnResponse
-	(*CreateUserRequest)(nil),      // 24: scoriadb.CreateUserRequest
-	(*CreateUserResponse)(nil),     // 25: scoriadb.CreateUserResponse
-	(*AuthRequest)(nil),            // 26: scoriadb.AuthRequest
-	(*AuthResponse)(nil),           // 27: scoriadb.AuthResponse
-	(*ChangePasswordRequest)(nil),  // 28: scoriadb.ChangePasswordRequest
-	(*ChangePasswordResponse)(nil), // 29: scoriadb.ChangePasswordResponse
+	(*BeginTxnRequest)(nil),        // 15: scoriadb.BeginTxnRequest
+	(*BeginTxnResponse)(nil),       // 16: scoriadb.BeginTxnResponse
+	(*TxnOp)(nil),                  // 17: scoriadb.TxnOp
+	(*CommitTxnRequest)(nil),       // 18: scoriadb.CommitTxnRequest
+	(*CommitTxnResponse)(nil),      // 19: scoriadb.CommitTxnResponse
+	(*RollbackTxnRequest)(nil),     // 20: scoriadb.RollbackTxnRequest
+	(*RollbackTxnResponse)(nil),    // 21: scoriadb.RollbackTxnResponse
+	(*CreateUserRequest)(nil),      // 22: scoriadb.CreateUserRequest
+	(*CreateUserResponse)(nil),     // 23: scoriadb.CreateUserResponse
+	(*AuthRequest)(nil),            // 24: scoriadb.AuthRequest
+	(*AuthResponse)(nil),           // 25: scoriadb.AuthResponse
+	(*ChangePasswordRequest)(nil),  // 26: scoriadb.ChangePasswordRequest
+	(*ChangePasswordResponse)(nil), // 27: scoriadb.ChangePasswordResponse
+	(*ListUsersRequest)(nil),       // 28: scoriadb.ListUsersRequest
+	(*ListUsersResponse)(nil),      // 29: scoriadb.ListUsersResponse
+	(*UserInfo)(nil),               // 30: scoriadb.UserInfo
 }
 var file_proto_scoriadb_proto_depIdxs = []int32{
 	0,  // 0: scoriadb.TxnOp.op:type_name -> scoriadb.TxnOp.OpType
-	19, // 1: scoriadb.CommitTxnRequest.ops:type_name -> scoriadb.TxnOp
-	1,  // 2: scoriadb.ScoriaDB.Get:input_type -> scoriadb.GetRequest
-	3,  // 3: scoriadb.ScoriaDB.Put:input_type -> scoriadb.PutRequest
-	5,  // 4: scoriadb.ScoriaDB.Delete:input_type -> scoriadb.DeleteRequest
-	7,  // 5: scoriadb.ScoriaDB.Scan:input_type -> scoriadb.ScanRequest
-	9,  // 6: scoriadb.ScoriaDB.ListCFs:input_type -> scoriadb.ListCFsRequest
-	11, // 7: scoriadb.ScoriaDB.CreateCF:input_type -> scoriadb.CreateCFRequest
-	13, // 8: scoriadb.ScoriaDB.DeleteCF:input_type -> scoriadb.DeleteCFRequest
-	15, // 9: scoriadb.ScoriaDB.UseCF:input_type -> scoriadb.UseCFRequest
-	17, // 10: scoriadb.ScoriaDB.BeginTxn:input_type -> scoriadb.BeginTxnRequest
-	20, // 11: scoriadb.ScoriaDB.CommitTxn:input_type -> scoriadb.CommitTxnRequest
-	22, // 12: scoriadb.ScoriaDB.RollbackTxn:input_type -> scoriadb.RollbackTxnRequest
-	24, // 13: scoriadb.ScoriaDB.CreateUser:input_type -> scoriadb.CreateUserRequest
-	26, // 14: scoriadb.ScoriaDB.Authenticate:input_type -> scoriadb.AuthRequest
-	28, // 15: scoriadb.ScoriaDB.ChangePassword:input_type -> scoriadb.ChangePasswordRequest
-	2,  // 16: scoriadb.ScoriaDB.Get:output_type -> scoriadb.GetResponse
-	4,  // 17: scoriadb.ScoriaDB.Put:output_type -> scoriadb.PutResponse
-	6,  // 18: scoriadb.ScoriaDB.Delete:output_type -> scoriadb.DeleteResponse
-	8,  // 19: scoriadb.ScoriaDB.Scan:output_type -> scoriadb.ScanResponse
-	10, // 20: scoriadb.ScoriaDB.ListCFs:output_type -> scoriadb.ListCFsResponse
-	12, // 21: scoriadb.ScoriaDB.CreateCF:output_type -> scoriadb.CreateCFResponse
-	14, // 22: scoriadb.ScoriaDB.DeleteCF:output_type -> scoriadb.DeleteCFResponse
-	16, // 23: scoriadb.ScoriaDB.UseCF:output_type -> scoriadb.UseCFResponse
-	18, // 24: scoriadb.ScoriaDB.BeginTxn:output_type -> scoriadb.BeginTxnResponse
-	21, // 25: scoriadb.ScoriaDB.CommitTxn:output_type -> scoriadb.CommitTxnResponse
-	23, // 26: scoriadb.ScoriaDB.RollbackTxn:output_type -> scoriadb.RollbackTxnResponse
-	25, // 27: scoriadb.ScoriaDB.CreateUser:output_type -> scoriadb.CreateUserResponse
-	27, // 28: scoriadb.ScoriaDB.Authenticate:output_type -> scoriadb.AuthResponse
-	29, // 29: scoriadb.ScoriaDB.ChangePassword:output_type -> scoriadb.ChangePasswordResponse
-	16, // [16:30] is the sub-list for method output_type
-	2,  // [2:16] is the sub-list for method input_type
-	2,  // [2:2] is the sub-list for extension type_name
-	2,  // [2:2] is the sub-list for extension extendee
-	0,  // [0:2] is the sub-list for field type_name
+	17, // 1: scoriadb.CommitTxnRequest.ops:type_name -> scoriadb.TxnOp
+	30, // 2: scoriadb.ListUsersResponse.users:type_name -> scoriadb.UserInfo
+	1,  // 3: scoriadb.ScoriaDB.Get:input_type -> scoriadb.GetRequest
+	3,  // 4: scoriadb.ScoriaDB.Put:input_type -> scoriadb.PutRequest
+	5,  // 5: scoriadb.ScoriaDB.Delete:input_type -> scoriadb.DeleteRequest
+	7,  // 6: scoriadb.ScoriaDB.Scan:input_type -> scoriadb.ScanRequest
+	9,  // 7: scoriadb.ScoriaDB.ListCF:input_type -> scoriadb.ListCFRequest
+	11, // 8: scoriadb.ScoriaDB.CreateCF:input_type -> scoriadb.CreateCFRequest
+	13, // 9: scoriadb.ScoriaDB.DeleteCF:input_type -> scoriadb.DeleteCFRequest
+	15, // 10: scoriadb.ScoriaDB.BeginTxn:input_type -> scoriadb.BeginTxnRequest
+	18, // 11: scoriadb.ScoriaDB.CommitTxn:input_type -> scoriadb.CommitTxnRequest
+	20, // 12: scoriadb.ScoriaDB.RollbackTxn:input_type -> scoriadb.RollbackTxnRequest
+	22, // 13: scoriadb.ScoriaDB.CreateUser:input_type -> scoriadb.CreateUserRequest
+	24, // 14: scoriadb.ScoriaDB.Authenticate:input_type -> scoriadb.AuthRequest
+	26, // 15: scoriadb.ScoriaDB.ChangePassword:input_type -> scoriadb.ChangePasswordRequest
+	28, // 16: scoriadb.ScoriaDB.ListUsers:input_type -> scoriadb.ListUsersRequest
+	2,  // 17: scoriadb.ScoriaDB.Get:output_type -> scoriadb.GetResponse
+	4,  // 18: scoriadb.ScoriaDB.Put:output_type -> scoriadb.PutResponse
+	6,  // 19: scoriadb.ScoriaDB.Delete:output_type -> scoriadb.DeleteResponse
+	8,  // 20: scoriadb.ScoriaDB.Scan:output_type -> scoriadb.ScanResponse
+	10, // 21: scoriadb.ScoriaDB.ListCF:output_type -> scoriadb.ListCFResponse
+	12, // 22: scoriadb.ScoriaDB.CreateCF:output_type -> scoriadb.CreateCFResponse
+	14, // 23: scoriadb.ScoriaDB.DeleteCF:output_type -> scoriadb.DeleteCFResponse
+	16, // 24: scoriadb.ScoriaDB.BeginTxn:output_type -> scoriadb.BeginTxnResponse
+	19, // 25: scoriadb.ScoriaDB.CommitTxn:output_type -> scoriadb.CommitTxnResponse
+	21, // 26: scoriadb.ScoriaDB.RollbackTxn:output_type -> scoriadb.RollbackTxnResponse
+	23, // 27: scoriadb.ScoriaDB.CreateUser:output_type -> scoriadb.CreateUserResponse
+	25, // 28: scoriadb.ScoriaDB.Authenticate:output_type -> scoriadb.AuthResponse
+	27, // 29: scoriadb.ScoriaDB.ChangePassword:output_type -> scoriadb.ChangePasswordResponse
+	29, // 30: scoriadb.ScoriaDB.ListUsers:output_type -> scoriadb.ListUsersResponse
+	17, // [17:31] is the sub-list for method output_type
+	3,  // [3:17] is the sub-list for method input_type
+	3,  // [3:3] is the sub-list for extension type_name
+	3,  // [3:3] is the sub-list for extension extendee
+	0,  // [0:3] is the sub-list for field type_name
 }
 
 func init() { file_proto_scoriadb_proto_init() }
@@ -1611,7 +1668,7 @@ func file_proto_scoriadb_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proto_scoriadb_proto_rawDesc), len(file_proto_scoriadb_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   29,
+			NumMessages:   30,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

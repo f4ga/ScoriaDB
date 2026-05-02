@@ -39,6 +39,7 @@ service ScoriaDB {
   rpc CreateUser(CreateUserRequest) returns (CreateUserResponse);
   rpc Authenticate(AuthRequest) returns (AuthResponse);
   rpc ChangePassword(ChangePasswordRequest) returns (ChangePasswordResponse);
+  rpc ListUsers(ListUsersRequest) returns (ListUsersResponse);
 }
 
 // ============================================
@@ -183,4 +184,16 @@ message ChangePasswordRequest {
 
 message ChangePasswordResponse {
   // empty for success
+}
+message ListUsersRequest {
+  // empty
+}
+
+message ListUsersResponse {
+  repeated UserInfo users = 1;
+}
+
+message UserInfo {
+  string username = 1;
+  repeated string roles = 2;
 }
