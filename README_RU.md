@@ -20,7 +20,7 @@
 
   <!-- Ссылка на документацию -->
   <br><br>
-  <a href="docs/README.md"><img src="https://img.shields.io/badge/📖-Полная%20документация-blue?style=for-the-badge" alt="Документация"></a>
+  <a href="https://f4ga.github.io/ScoriaDB/"><img src="https://img.shields.io/badge/📖-Полная%20документация-blue?style=for-the-badge" alt="Документация"></a>
 
   <!-- Оглавление -->
   <br>
