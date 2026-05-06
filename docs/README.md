@@ -3,12 +3,6 @@
 
 **Quick links:** [GitHub](https://github.com/f4ga/ScoriaDB)
 
-<div align="center">
-  <a href="README.md"><img src="https://img.shields.io/badge/🇬🇧-English-blue?style=for-the-badge" alt="English"></a>
-  &nbsp;&nbsp;
-  <a href="../README_RU.md"><img src="https://img.shields.io/badge/🇷🇺-Русский-red?style=for-the-badge" alt="Русский"></a>
-</div>
-
 ---
 
 ## Table of Contents
