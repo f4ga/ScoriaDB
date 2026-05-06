@@ -1,7 +1,7 @@
 
 # ScoriaDB Documentation (v0.1.0)
 
-**Quick links:** [GitHub](https://github.com/f4ga/ScoriaDB) | [GoDoc](https://pkg.go.dev/github.com/f4ga/ScoriaDB/pkg/scoria)
+**Quick links:** [GitHub](https://github.com/f4ga/ScoriaDB)
 
 <div align="center">
   <a href="README.md"><img src="https://img.shields.io/badge/🇬🇧-English-blue?style=for-the-badge" alt="English"></a>
