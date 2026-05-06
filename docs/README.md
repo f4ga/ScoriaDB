@@ -1,4 +1,4 @@
-```markdown
+
 # ScoriaDB Documentation (v0.1.0)
 
 **Quick links:** [GitHub](https://github.com/f4ga/ScoriaDB) | [GoDoc](https://pkg.go.dev/github.com/f4ga/ScoriaDB/pkg/scoria)
@@ -153,12 +153,11 @@ Start the interactive shell:
 | `admin user-add <user> <pass> [--roles=...]` | Create new user | `admin user-add john 123 --roles=readwrite` |
 | `admin list-users` | List all users | `admin list-users` |
 
-
-### Demo: CLI 
+#### Demo: CLI
 
 ![ScoriaDB CLI demo](cli-demo.png)
 
-### Example Session
+#### Example Session
 
 ```bash
 scoria> whoami
@@ -189,19 +188,7 @@ scoria> exit
 Goodbye!
 ```
 
-### gRPC
-
-Proto file: [`proto/scoriadb.proto`](https://github.com/f4ga/ScoriaDB/blob/main/proto/scoriadb.proto)
-
-Go client example:
-
-```go
-conn, _ := grpc.NewClient("localhost:50051", grpc.WithTransportCredentials(insecure.NewCredentials()))
-client := proto.NewScoriaDBClient(conn)
-resp, _ := client.Get(ctx, &proto.GetRequest{Key: []byte("hello")})
-```
-
-### REST
+### REST API
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
@@ -225,6 +212,18 @@ curl -X POST http://localhost:8080/api/v1/kv/scan -d '{"prefix":"user"}'
 
 # Login
 curl -X POST http://localhost:8080/api/v1/auth/login -d '{"username":"admin","password":"admin"}'
+```
+
+### gRPC API
+
+Proto file: [`proto/scoriadb.proto`](https://github.com/f4ga/ScoriaDB/blob/main/proto/scoriadb.proto)
+
+Go client example:
+
+```go
+conn, _ := grpc.NewClient("localhost:50051", grpc.WithTransportCredentials(insecure.NewCredentials()))
+client := proto.NewScoriaDBClient(conn)
+resp, _ := client.Get(ctx, &proto.GetRequest{Key: []byte("hello")})
 ```
 
 **When to use server mode:**  
@@ -258,7 +257,7 @@ TOKEN=$(./scoria-cli admin auth admin admin)
 **When to use authentication:**  
 When the server is exposed over a network and you need access control.
 
-> **⚠️ Important:** On first start, the database creates an `admin/admin` user. **Change the password immediately in production.**
+> ⚠️ **Important:** On first start, the database creates an `admin/admin` user. **Change the password immediately in production.**
 
 ---
 
