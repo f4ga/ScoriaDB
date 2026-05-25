@@ -557,19 +557,18 @@ func (s *shellState) userAdd(username, password string, roles []string) {
 
 // listUsers lists all users.
 func (s *shellState) listUsers() {
-    ctx, cancel := defaultContext()
-    defer cancel()
-    users, err := s.client.ListUsers(ctx)
-    if err != nil {
-        s.lastError = err
-        fmt.Printf("Error: %v\n", err)
-        return
-    }
-    for _, u := range users {
-        fmt.Printf("%s %v\n", u.Username, u.Roles)
-    }
+	ctx, cancel := defaultContext()
+	defer cancel()
+	users, err := s.client.ListUsers(ctx)
+	if err != nil {
+		s.lastError = err
+		fmt.Printf("Error: %v\n", err)
+		return
+	}
+	for _, u := range users {
+		fmt.Printf("%s %v\n", u.Username, u.Roles)
+	}
 }
-
 
 // newShellCmd creates the `shell` command.
 func newShellCmd() *cobra.Command {

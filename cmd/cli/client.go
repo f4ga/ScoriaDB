@@ -204,22 +204,23 @@ func (c *Client) DeleteCF(ctx context.Context, name string) error {
 	_, err := c.client.DeleteCF(ctx, req, grpc.PerRPCCredentials(jwtCredentials{c.token}))
 	return err
 }
+
 // ListUsers returns all users
 func (c *Client) ListUsers(ctx context.Context) ([]User, error) {
-    req := &proto.ListUsersRequest{}
-    resp, err := c.client.ListUsers(ctx, req, grpc.PerRPCCredentials(jwtCredentials{c.token}))
-    if err != nil {
-        return nil, err
-    }
-    users := make([]User, len(resp.Users))
-    for i, u := range resp.Users {
-        users[i] = User{Username: u.Username, Roles: u.Roles}
-    }
-    return users, nil
+	req := &proto.ListUsersRequest{}
+	resp, err := c.client.ListUsers(ctx, req, grpc.PerRPCCredentials(jwtCredentials{c.token}))
+	if err != nil {
+		return nil, err
+	}
+	users := make([]User, len(resp.Users))
+	for i, u := range resp.Users {
+		users[i] = User{Username: u.Username, Roles: u.Roles}
+	}
+	return users, nil
 }
 
 // User represents a user in the system
 type User struct {
-    Username string
-    Roles    []string
+	Username string
+	Roles    []string
 }

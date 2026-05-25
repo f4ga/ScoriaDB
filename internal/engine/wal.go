@@ -45,10 +45,23 @@ type WAL struct {
 	mu     sync.Mutex
 	file   *os.File
 	offset int64 // текущая позиция записи
+	opts   WALOptions
+	group  *groupCommitWriter // nil если group commit отключён
 }
 
-// OpenWAL открывает или создает WAL файл.
+// OpenWAL открывает или создает WAL файл с настройками по умолчанию.
 func OpenWAL(path string) (*WAL, error) {
+	return OpenWALWithOptions(path, DefaultWALOptions())
+}
+
+// OpenWALWithOptions открывает или создает WAL файл с указанными настройками.
+// При включённом групповом коммите (GroupCommitEnabled = true) записи буферизуются
+// и периодически сбрасываются на диск с интервалом GroupCommitInterval.
+// Это значительно повышает пропускную способность, но снижает durability:
+// записи, сделанные после последнего сброса, могут быть потеряны при краше процесса.
+// Для критичных к durability workload'ов оставьте GroupCommitEnabled = false
+// (режим по умолчанию), где каждая запись немедленно синхронизируется с диском.
+func OpenWALWithOptions(path string, opts WALOptions) (*WAL, error) {
 	file, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0644)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open wal file: %w", err)
@@ -64,7 +77,14 @@ func OpenWAL(path string) (*WAL, error) {
 	wal := &WAL{
 		file:   file,
 		offset: stat.Size(),
+		opts:   opts,
 	}
+
+	// Инициализируем групповой коммит, если включён
+	if opts.GroupCommitEnabled {
+		wal.group = newGroupCommitWriter(file, opts.GroupCommitInterval)
+	}
+
 	return wal, nil
 }
 
@@ -79,7 +99,18 @@ func (w *WAL) Write(entry *WalEntry) error {
 		return fmt.Errorf("failed to encode wal entry: %w", err)
 	}
 
-	// Записываем в файл
+	// Если включён групповой коммит, пишем в буфер
+	if w.group != nil {
+		err = w.group.Write(buf)
+		if err != nil {
+			return fmt.Errorf("failed to write to group commit buffer: %w", err)
+		}
+		// Обновляем offset на основе размера данных (даже если они ещё не на диске)
+		w.offset += int64(len(buf))
+		return nil
+	}
+
+	// Синхронный режим: пишем и синхронизируем сразу
 	n, err := w.file.Write(buf)
 	if err != nil {
 		return fmt.Errorf("failed to write wal entry: %w", err)
@@ -90,6 +121,17 @@ func (w *WAL) Write(entry *WalEntry) error {
 	}
 
 	w.offset += int64(n)
+	return nil
+}
+
+// Flush принудительно сбрасывает буферизованные данные на диск.
+// Если групповой коммит отключён, метод ничего не делает (данные уже на диске).
+func (w *WAL) Flush() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.group != nil {
+		return w.group.Flush()
+	}
 	return nil
 }
 
@@ -123,6 +165,16 @@ func (w *WAL) Recover(cb func(*WalEntry) error) error {
 func (w *WAL) Close() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+
+	// Закрываем групповой коммит, если он был инициализирован
+	if w.group != nil {
+		if err := w.group.Close(); err != nil {
+			// Пытаемся закрыть файл даже при ошибке в group.Close()
+			_ = w.file.Close()
+			return fmt.Errorf("failed to close group commit writer: %w", err)
+		}
+	}
+
 	return w.file.Close()
 }
 

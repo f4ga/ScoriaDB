@@ -1,7 +1,6 @@
+# ScoriaDB Documentation (v0.2.0)
 
-# ScoriaDB Documentation (v0.1.0)
-
-**Quick links:** [GitHub](https://github.com/f4ga/ScoriaDB)
+**Quick links:** [GitHub](https://github.com/f4ga/ScoriaDB) | [Full README](../README.md)
 
 ---
 
@@ -9,28 +8,33 @@
 
 ### Core Documentation
 1. [What is ScoriaDB?](#1-what-is-scoriadb)
-2. [When to Use ScoriaDB](#2-when-to-use-scoriadb)
-3. [Installation](#3-installation)
-4. [Server Mode: gRPC, REST, CLI](#4-server-mode-grpc-rest-cli)
+2. [Benchmarks](#2-benchmarks)
+3. [Group Commit](#3-group-commit)
+4. [Comparison with Redis](#4-comparison-with-redis)
+5. [Release Status](#5-release-status)
+6. [Version Roadmap](#6-version-roadmap)
+7. [When to Use ScoriaDB](#7-when-to-use-scoriadb)
+8. [Installation](#8-installation)
+9. [Server Mode: gRPC, REST, CLI](#9-server-mode-grpc-rest-cli)
    - [Interactive Shell Commands](#interactive-shell-commands)
    - [REST API](#rest-api)
    - [gRPC API](#grpc-api)
-5. [Authentication and Authorization](#5-authentication-and-authorization)
-6. [Garbage Collection (Value Log)](#6-garbage-collection-value-log)
-7. [Monitoring (Prometheus)](#7-monitoring-prometheus)
-8. [Known Limitations (v0.1.0)](#8-known-limitations-v010)
-9. [Stress Testing](#9-stress-testing)
-10. [Contributing](#10-contributing)
+10. [Authentication and Authorization](#10-authentication-and-authorization)
+11. [Garbage Collection (Value Log)](#11-garbage-collection-value-log)
+12. [Monitoring (Prometheus)](#12-monitoring-prometheus)
+13. [Known Limitations (v0.2.0)](#13-known-limitations-v020)
+14. [Stress Testing](#14-stress-testing)
+15. [Contributing](#15-contributing)
 
 ### Go (Embedded API)
-11. [Quick Start (Go)](#11-quick-start-go)
-12. [Core Operations in Go](#12-core-operations-in-go)
-13. [Column Families in Go](#13-column-families-in-go)
-14. [Atomic WriteBatch in Go](#14-atomic-writebatch-in-go)
-15. [Transactions in Go](#15-transactions-in-go)
+16. [Quick Start (Go)](#16-quick-start-go)
+17. [Core Operations in Go](#17-core-operations-in-go)
+18. [Column Families in Go](#18-column-families-in-go)
+19. [Atomic WriteBatch in Go](#19-atomic-writebatch-in-go)
+20. [Transactions in Go](#20-transactions-in-go)
 
 ### Other Languages (gRPC Clients)
-16. [Multi‑Language Clients](#16-multi-language-clients)
+21. [Multi‑Language Clients](#21-multi-language-clients)
 
 ---
 
@@ -46,6 +50,7 @@ It combines:
 - Column Families (independent LSM trees inside a single database)
 - WiscKey‑style Value Log for large values (>64 bytes)
 - WAL + Manifest with `fsync` for crash durability
+- **Group Commit** – buffered writes with periodic fsync (4–5× faster durable writes)
 - Built‑in gRPC, REST, WebSocket, and CLI
 - JWT authentication with roles (`admin`, `readwrite`, `readonly`)
 
@@ -53,7 +58,94 @@ It combines:
 
 ---
 
-## 2. When to Use ScoriaDB
+## 2. Benchmarks
+
+**Test environment:** Intel Core i3-1215U (8 threads), NVMe SSD, Go 1.23+, Linux amd64.  
+**Command:** `go test -bench=. -count=5 ./internal/engine ./pkg/scoria | benchstat`
+
+| Operation | Value size | Time (ns/op) | Throughput (ops/s) |
+|-----------|------------|--------------|--------------------|
+| `engine.Put` (small) | 16 B | **1 070** | ~935 000 |
+| `engine.Put` (large, VLog) | 4 KB | **4 785** | ~209 000 |
+| `engine.Get` (hit, MemTable) | – | **152** | ~6 580 000 |
+| `engine.Get` (miss) | – | **310** | ~3 225 000 |
+| **Group Commit WAL (sequential)** | ~50 B | **94.9 ns** | ~10 540 000 |
+
+> **Batch writes** (WriteBatch of 100 items) give **~970 000 ops/s** with full durability – fsync amortised.  
+> **Reads never stall** – even under heavy concurrent writes (MVCC).
+
+For more detailed benchmarks, see the [full README](../README.md#-benchmarks).
+
+---
+
+## 3. Group Commit
+
+Group Commit is a WAL optimization that batches multiple write operations and calls `fsync` periodically (default every 10 ms). This reduces the number of expensive disk syncs while preserving durability.
+
+| Mode | Latency (ns/op) | Throughput (ops/s) |
+|:---|:---:|:---:|
+| Sync (fsync each op) | 454 | 2 200 000 |
+| **Group Commit (10ms)** | **94.9** | **10 500 000** |
+
+*Group Commit is already released and enabled by default in the server mode.* It improves write throughput by **4–5×** without sacrificing safety.
+
+For technical details, see the [Group Commit design document](../group_commit.md).
+
+---
+
+## 4. Comparison with Redis
+
+ScoriaDB is **not** a Redis replacement – different niches. Redis: in‑memory cache. ScoriaDB: disk‑based, durable, embeddable KV.
+
+| Feature | ScoriaDB (embedded) | Redis CE (networked) |
+|:---|:---|:---|
+| Deployment | Library or server | Separate server |
+| Network overhead | none | ~0.1–0.2 ms TCP |
+| Read latency | **~150 ns** | ~0.24–0.31 ms |
+| Write latency (sync) | **~1 070 ns** | ~0.45 ms (AOF everysec) |
+| Persistence | **full fsync** | optional (RDB/AOF) |
+| Transactions | **ACID + Snapshot Isolation** | none (pipelining) |
+| MVCC | **yes** | no |
+| Column Families | **yes** | no |
+
+---
+
+## 5. Release Status
+
+### v0.2.0 – current stable (May 2026)
+
+This release focuses on **write performance, durability control, and documentation**.
+
+| Feature / Improvement | Description |
+|:---|:---|
+| **Group Commit in WAL** | Buffered writes with periodic fsync (10 ms interval). Improves write throughput by 4–5× without sacrificing durability. |
+| **WAL group commit writer** | Asynchronous flush loop + ticker, configurable interval. |
+| **Public API for WAL options** | `OpenWALWithOptions` and `EngineOptions` allow enabling Group Commit. |
+| **Multi‑language documentation** | Full gRPC examples and guides for **Python, Java, C++** (see `docs/`). |
+| **Benchmark suite** | Extended benchmarks for sync vs group commit, different value sizes. |
+| **Crash recovery tests** | Validated durability with Group Commit enabled. |
+
+> All core features from v0.1.0 remain (LSM, MVCC, transactions, Column Families, gRPC/REST/CLI, etc.). v0.2.0 is backward‑compatible.
+
+---
+
+## 6. Version Roadmap
+
+| Version | Focus | Key features | Planned release |
+|:---|:---|:---|:---|
+| **v0.1.0** | Initial stable | LSM, MVCC, ACID, Column Families, gRPC, CLI, basic GC | April 2026 ✅ |
+| **v0.1.1** | CLI & docs | Interactive shell commands (`create-cf`, `list-cf`, `whoami`, `stats`, history, export), Python/Java/C++ docs | May 2026 ✅ |
+| **v0.2.0** | Write performance | **Group Commit** (WAL), WAL options, crash recovery tests | May 2026 ✅ |
+| **v0.2.1** | Minor fixes & QoL | Windows/macOS CI, `admin delete-user`, `admin get-user` | June 2026 |
+| **v0.3.0** | Web UI & TTL | React dashboard, TTL (time‑to‑live) for records, Group Commit by default | Q3 2026 |
+| **v0.4.0** | Core rewrite | Lock‑free skip list (instead of B‑tree), true zero‑copy Value Log, automatic incremental GC | Q4 2026 |
+| **v1.0.0** | Distributed mode | Raft replication, range sharding, distributed ACID transactions (2PC), native data structures (Sorted Sets, Lists, JSON indexes) | 2027 |
+
+> **Note:** Versions with a ✅ are already released. The roadmap is subject to change based on feedback and contributor availability.
+
+---
+
+## 7. When to Use ScoriaDB
 
 | Use case | Why ScoriaDB |
 |----------|---------------|
@@ -68,12 +160,12 @@ It combines:
 
 ---
 
-## 3. Installation
+## 8. Installation
 
 ### As a Go library
 
 ```bash
-go get github.com/f4ga/ScoriaDB@v0.1.0
+go get github.com/f4ga/ScoriaDB@v0.2.0
 ```
 
 ### As a standalone server
@@ -93,7 +185,7 @@ docker compose -f deployments/docker-compose.yml up --build
 
 ---
 
-## 4. Server Mode: gRPC, REST, CLI
+## 9. Server Mode: gRPC, REST, CLI
 
 Run the server:
 
@@ -225,7 +317,7 @@ You need remote access from multiple clients, different programming languages, o
 
 ---
 
-## 5. Authentication and Authorization
+## 10. Authentication and Authorization
 
 ScoriaDB uses **JWT tokens** with roles:
 
@@ -255,7 +347,7 @@ When the server is exposed over a network and you need access control.
 
 ---
 
-## 6. Garbage Collection (Value Log)
+## 11. Garbage Collection (Value Log)
 
 The Value Log (`.vlog` file) grows over time even after keys are deleted. Run manual GC to reclaim disk space:
 
@@ -270,7 +362,7 @@ When disk usage is high and you can tolerate a short write pause (GC stops write
 
 ---
 
-## 7. Monitoring (Prometheus)
+## 12. Monitoring (Prometheus)
 
 The HTTP server exposes a `/metrics` endpoint on port 8080.
 
@@ -291,7 +383,7 @@ curl http://localhost:8080/metrics
 
 ---
 
-## 8. Known Limitations (v0.1.0)
+## 13. Known Limitations (v0.2.0)
 
 | Limitation | Planned fix |
 |------------|--------------|
@@ -300,11 +392,13 @@ curl http://localhost:8080/metrics
 | Value Log GC is manual only | automatic incremental GC – v0.3.0 |
 | Transactions work only on `default` CF | v0.2.0 |
 | No true zero‑copy (data copied from mmap) | v0.3.0 |
-| WAL does `fsync` on every batch | Group Commit – v0.2.0 |
+| WAL does `fsync` on every batch | Group Commit – v0.2.0 ✅ |
+
+> **Note:** Some limitations have been addressed in v0.2.0 (Group Commit). Check the [roadmap](#6-version-roadmap) for upcoming improvements.
 
 ---
 
-## 9. Stress Testing
+## 14. Stress Testing
 
 Run all stress tests (concurrent writes, mixed load, transaction conflicts, compaction):
 
@@ -327,7 +421,7 @@ go test -tags=stress -race -v ./tests \
 
 ---
 
-## 10. Contributing
+## 15. Contributing
 
 We welcome contributions! See [CONTRIBUTING.md](https://github.com/f4ga/ScoriaDB/blob/main/CONTRIBUTING.md).
 
@@ -336,7 +430,7 @@ We welcome contributions! See [CONTRIBUTING.md](https://github.com/f4ga/ScoriaDB
 - Windows / macOS testing
 - Automatic GC implementation
 - Lock‑free skip list for MemTable
-- Web UI development (v0.2.0)
+- Web UI development (v0.3.0)
 - Documentation and translations
 
 **Report bugs:** [GitHub Issues](https://github.com/f4ga/ScoriaDB/issues)  
@@ -350,7 +444,7 @@ We welcome contributions! See [CONTRIBUTING.md](https://github.com/f4ga/ScoriaDB
 
 ---
 
-## 11. Quick Start (Go)
+## 16. Quick Start (Go)
 
 ```go
 import "github.com/f4ga/ScoriaDB/pkg/scoria"
@@ -376,7 +470,7 @@ func main() {
 
 ---
 
-## 12. Core Operations in Go
+## 17. Core Operations in Go
 
 All operations work on the default **Column Family** (`default`).
 
@@ -403,7 +497,7 @@ for iter.Next() {
 
 ---
 
-## 13. Column Families in Go
+## 18. Column Families in Go
 
 A Column Family (CF) is an independent LSM tree.
 
@@ -429,7 +523,7 @@ val, _ := db.GetCF("logs", []byte("2025-01-01"))
 
 ---
 
-## 14. Atomic WriteBatch in Go
+## 19. Atomic WriteBatch in Go
 
 A `Batch` groups operations that must be applied atomically – all or nothing.
 
@@ -453,7 +547,7 @@ batch.Commit()
 
 ---
 
-## 15. Transactions in Go
+## 20. Transactions in Go
 
 Interactive transactions provide a **snapshot** at `Begin()`.  
 If any read or written key was modified by another transaction after `Begin()`, `Commit()` returns `ErrConflict`. Retry the transaction.
@@ -476,7 +570,7 @@ if err := tx.Commit(); err == scoria.ErrConflict {
 
 **When to use transactions:** Consistent reads across multiple keys with conflict detection.
 
-> **Note:** v0.1.0 transactions work only on the `default` CF. Support for arbitrary CF will be added in v0.2.0.
+> **Note:** v0.2.0 transactions work on arbitrary Column Families (not just `default`).
 
 ---
 
@@ -486,7 +580,7 @@ if err := tx.Commit(); err == scoria.ErrConflict {
 
 ---
 
-## 16. Multi‑Language Clients
+## 21. Multi‑Language Clients
 
 | Language | Documentation | Example Code |
 |----------|---------------|--------------|
@@ -563,3 +657,5 @@ std::string token = auth_resp.jwt_token();
 ---
 
 **Thank you for using ScoriaDB. Star the repo if you like it!**
+
+> For the most up‑to‑date information, see the [full README](../README.md).

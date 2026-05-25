@@ -289,25 +289,25 @@ func (s *server) DeleteCF(ctx context.Context, req *proto.DeleteCFRequest) (*pro
 
 // ListUsers returns all users (admin only)
 func (s *server) ListUsers(ctx context.Context, req *proto.ListUsersRequest) (*proto.ListUsersResponse, error) {
-    claims, ok := auth.GetClaimsFromContext(ctx)
-    if !ok {
-        return nil, status.Error(codes.Unauthenticated, "authentication required")
-    }
-    if !auth.HasAnyRole(&auth.User{Roles: claims.Roles}, []string{auth.RoleAdmin}) {
-        return nil, status.Error(codes.PermissionDenied, "admin role required")
-    }
+	claims, ok := auth.GetClaimsFromContext(ctx)
+	if !ok {
+		return nil, status.Error(codes.Unauthenticated, "authentication required")
+	}
+	if !auth.HasAnyRole(&auth.User{Roles: claims.Roles}, []string{auth.RoleAdmin}) {
+		return nil, status.Error(codes.PermissionDenied, "admin role required")
+	}
 
-    users, err := auth.ListUsers(s.db)
-    if err != nil {
-        return nil, status.Error(codes.Internal, err.Error())
-    }
+	users, err := auth.ListUsers(s.db)
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
 
-    resp := &proto.ListUsersResponse{}
-    for _, u := range users {
-        resp.Users = append(resp.Users, &proto.UserInfo{
-            Username: u.Username,
-            Roles:    u.Roles,
-        })
-    }
-    return resp, nil
+	resp := &proto.ListUsersResponse{}
+	for _, u := range users {
+		resp.Users = append(resp.Users, &proto.UserInfo{
+			Username: u.Username,
+			Roles:    u.Roles,
+		})
+	}
+	return resp, nil
 }
