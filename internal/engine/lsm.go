@@ -20,9 +20,9 @@ import (
 	"fmt"
 	"log"
 	"path/filepath"
-	"scoriadb/internal/engine/sstable"
-	"scoriadb/internal/engine/vfs"
-	"scoriadb/internal/mvcc"
+	"github.com/f4ga/ScoriaDB/internal/engine/sstable"
+	"github.com/f4ga/ScoriaDB/internal/engine/vfs"
+	"github.com/f4ga/ScoriaDB/internal/mvcc"
 	"sync"
 	"sync/atomic"
 )

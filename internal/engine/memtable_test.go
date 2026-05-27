@@ -15,7 +15,7 @@
 package engine
 
 import (
-	"scoriadb/internal/mvcc"
+	"github.com/f4ga/ScoriaDB/internal/mvcc"
 	"testing"
 )
 

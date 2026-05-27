@@ -21,8 +21,8 @@ import (
 	"net/http"
 	"strings"
 
-	"scoriadb/internal/auth"
-	"scoriadb/pkg/scoria"
+	"github.com/f4ga/ScoriaDB/internal/auth"
+	"github.com/f4ga/ScoriaDB/pkg/scoria"
 )
 
 // Server представляет HTTP‑сервер REST API для ScoriaDB.

@@ -20,7 +20,7 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
-	"scoriadb/pkg/scoria"
+	"github.com/f4ga/ScoriaDB/pkg/scoria"
 )
 
 func TestCreateUserAndLogin(t *testing.T) {

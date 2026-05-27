@@ -20,7 +20,7 @@ import (
 	"hash/crc32"
 	"log"
 	"os"
-	"scoriadb/internal/engine/vfs"
+	"github.com/f4ga/ScoriaDB/internal/engine/vfs"
 	"sort"
 	"sync"
 	"syscall"

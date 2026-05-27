@@ -17,7 +17,7 @@ package sstable
 import (
 	"encoding/binary"
 	"errors"
-	"scoriadb/internal/mvcc"
+	"github.com/f4ga/ScoriaDB/internal/mvcc"
 )
 
 // encodeMVCCKey кодирует MVCCKey в байты для хранения в SSTable.

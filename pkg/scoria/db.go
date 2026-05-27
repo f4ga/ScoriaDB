@@ -16,7 +16,7 @@ package scoria
 
 import (
 	"math"
-	"scoriadb/internal/engine"
+	"github.com/f4ga/ScoriaDB/internal/engine"
 	"sync/atomic"
 )
 

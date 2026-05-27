@@ -22,9 +22,9 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"scoriadb/internal/auth"
-	"scoriadb/pkg/scoria"
-	"scoriadb/scoriadb/proto"
+	"github.com/f4ga/ScoriaDB/internal/auth"
+	"github.com/f4ga/ScoriaDB/pkg/scoria"
+	"github.com/f4ga/ScoriaDB/scoriadb/proto"
 )
 
 // server implements the ScoriaDB gRPC service.

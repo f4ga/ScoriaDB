@@ -20,8 +20,8 @@ import (
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"scoriadb/pkg/scoria"
-	"scoriadb/scoriadb/proto"
+	"github.com/f4ga/ScoriaDB/pkg/scoria"
+	"github.com/f4ga/ScoriaDB/scoriadb/proto"
 )
 
 func TestServer_GetPut(t *testing.T) {

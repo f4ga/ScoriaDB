@@ -17,7 +17,7 @@ package engine
 import (
 	"os"
 	"path/filepath"
-	"scoriadb/internal/engine/vfs"
+	"github.com/f4ga/ScoriaDB/internal/engine/vfs"
 	"testing"
 )
 

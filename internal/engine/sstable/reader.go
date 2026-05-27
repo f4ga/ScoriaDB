@@ -20,7 +20,7 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"scoriadb/internal/mvcc"
+	"github.com/f4ga/ScoriaDB/internal/mvcc"
 )
 
 // Reader читает SSTable из файла.

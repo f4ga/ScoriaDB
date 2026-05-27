@@ -22,7 +22,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"scoriadb/pkg/scoria"
+	"github.com/f4ga/ScoriaDB/pkg/scoria"
 )
 
 func TestRestServer_GetPutDelete(t *testing.T) {

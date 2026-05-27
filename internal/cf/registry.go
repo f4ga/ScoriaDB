@@ -20,7 +20,7 @@ import (
 	"path/filepath"
 	"sync"
 
-	"scoriadb/internal/engine"
+	"github.com/f4ga/ScoriaDB/internal/engine"
 )
 
 // Registry manages multiple Column Families.

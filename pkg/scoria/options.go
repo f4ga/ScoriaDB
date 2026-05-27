@@ -15,7 +15,7 @@
 package scoria
 
 import (
-	"scoriadb/internal/engine/vfs"
+	"github.com/f4ga/ScoriaDB/internal/engine/vfs"
 )
 
 // Options содержит настройки для открытия/создания базы данных.

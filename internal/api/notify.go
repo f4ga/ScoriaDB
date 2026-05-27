@@ -15,8 +15,8 @@
 package api
 
 import (
-	"scoriadb/internal/api/ws"
-	"scoriadb/pkg/scoria"
+	"github.com/f4ga/ScoriaDB/internal/api/ws"
+	"github.com/f4ga/ScoriaDB/pkg/scoria"
 )
 
 // NotifyingDB оборачивает CFDB и отправляет уведомления в WebSocket‑хаб при записи/удалении.

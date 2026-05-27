@@ -15,7 +15,7 @@
 package tests
 
 import (
-	"scoriadb/pkg/scoria"
+	"github.com/f4ga/ScoriaDB/pkg/scoria"
 	"testing"
 )
 

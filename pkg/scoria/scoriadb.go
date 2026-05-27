@@ -22,10 +22,10 @@ import (
 	"sort"
 	"sync/atomic"
 
-	"scoriadb/internal/cf"
-	"scoriadb/internal/engine"
-	"scoriadb/internal/mvcc"
-	"scoriadb/internal/txn"
+	"github.com/f4ga/ScoriaDB/internal/cf"
+	"github.com/f4ga/ScoriaDB/internal/engine"
+	"github.com/f4ga/ScoriaDB/internal/mvcc"
+	"github.com/f4ga/ScoriaDB/internal/txn"
 )
 
 // CFDB представляет публичный интерфейс базы данных ScoriaDB с поддержкой

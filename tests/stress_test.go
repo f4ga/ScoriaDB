@@ -26,7 +26,7 @@ import (
 	"testing"
 	"time"
 
-	"scoriadb/pkg/scoria"
+	"github.com/f4ga/ScoriaDB/pkg/scoria"
 )
 
 // setupTestCFDB creates a temporary database with full CFDB interface.

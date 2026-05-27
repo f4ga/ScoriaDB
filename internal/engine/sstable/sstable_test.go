@@ -17,7 +17,7 @@ package sstable
 import (
 	"os"
 	"path/filepath"
-	"scoriadb/internal/mvcc"
+	"github.com/f4ga/ScoriaDB/internal/mvcc"
 	"testing"
 )
 

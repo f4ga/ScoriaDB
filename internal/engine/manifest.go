@@ -23,7 +23,7 @@ import (
 	"sort"
 	"sync"
 
-	"scoriadb/internal/engine/vfs"
+	"github.com/f4ga/ScoriaDB/internal/engine/vfs"
 )
 
 // SSTableInfo содержит метаданные одного SSTable файла.

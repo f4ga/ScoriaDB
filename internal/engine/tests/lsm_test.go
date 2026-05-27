@@ -15,8 +15,8 @@
 package engine_test
 
 import (
-	"scoriadb/internal/engine"
-	"scoriadb/internal/txn"
+	"github.com/f4ga/ScoriaDB/internal/engine"
+	"github.com/f4ga/ScoriaDB/internal/txn"
 	"testing"
 )
 

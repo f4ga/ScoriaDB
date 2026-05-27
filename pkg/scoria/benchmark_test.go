@@ -19,7 +19,7 @@ import (
 	"testing"
 	"time"
 
-	"scoriadb/internal/engine"
+	"github.com/f4ga/ScoriaDB/internal/engine"
 )
 
 // -----------------------------------------------------------------------------

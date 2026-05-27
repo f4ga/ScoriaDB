@@ -16,8 +16,8 @@ package cf
 
 import (
 	"fmt"
-	"scoriadb/internal/engine"
-	"scoriadb/internal/txn"
+	"github.com/f4ga/ScoriaDB/internal/engine"
+	"github.com/f4ga/ScoriaDB/internal/txn"
 )
 
 // CFBatchOp represents a batch operation with a Column Family specification.

@@ -23,7 +23,7 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 	"golang.org/x/crypto/bcrypt"
-	"scoriadb/pkg/scoria"
+	"github.com/f4ga/ScoriaDB/pkg/scoria"
 )
 
 // User представляет пользователя системы.

@@ -16,7 +16,7 @@ package sstable
 
 import (
 	"container/heap"
-	"scoriadb/internal/mvcc"
+	"github.com/f4ga/ScoriaDB/internal/mvcc"
 )
 
 // Iterator is a generic interface for iterating over key-value pairs.

@@ -19,7 +19,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"os"
-	"scoriadb/internal/mvcc"
+	"github.com/f4ga/ScoriaDB/internal/mvcc"
 )
 
 const (

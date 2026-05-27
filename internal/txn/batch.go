@@ -17,7 +17,7 @@ package txn
 import (
 	"encoding/binary"
 	"fmt"
-	"scoriadb/internal/engine"
+	"github.com/f4ga/ScoriaDB/internal/engine"
 )
 
 // OpType представляет тип операции в батче.

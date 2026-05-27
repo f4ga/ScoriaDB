@@ -21,8 +21,8 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
-	"scoriadb/internal/engine"
-	"scoriadb/internal/engine/vfs"
+	"github.com/f4ga/ScoriaDB/internal/engine"
+	"github.com/f4ga/ScoriaDB/internal/engine/vfs"
 )
 
 // inspectCmd is the actual implementation of the inspect command.

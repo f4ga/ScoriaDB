@@ -19,8 +19,8 @@ import (
 	"fmt"
 	"log"
 	"path/filepath"
-	"scoriadb/internal/engine/sstable"
-	// "scoriadb/internal/mvcc"  implement or decide where to do it
+	"github.com/f4ga/ScoriaDB/internal/engine/sstable"
+	// "github.com/f4ga/ScoriaDB/internal/mvcc"  implement or decide where to do it
 )
 
 const (

@@ -15,7 +15,7 @@
 package txn
 
 import (
-	"scoriadb/internal/engine"
+	"github.com/f4ga/ScoriaDB/internal/engine"
 	"testing"
 )
 

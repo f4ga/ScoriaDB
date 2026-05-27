@@ -28,13 +28,13 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"
-	"scoriadb/internal/api"
-	scoriagrpc "scoriadb/internal/api/grpc"
-	"scoriadb/internal/api/rest"
-	"scoriadb/internal/api/ws"
-	"scoriadb/internal/auth"
-	"scoriadb/pkg/scoria"
-	"scoriadb/scoriadb/proto"
+	"github.com/f4ga/ScoriaDB/internal/api"
+	scoriagrpc "github.com/f4ga/ScoriaDB/internal/api/grpc"
+	"github.com/f4ga/ScoriaDB/internal/api/rest"
+	"github.com/f4ga/ScoriaDB/internal/api/ws"
+	"github.com/f4ga/ScoriaDB/internal/auth"
+	"github.com/f4ga/ScoriaDB/pkg/scoria"
+	"github.com/f4ga/ScoriaDB/scoriadb/proto"
 )
 
 var (

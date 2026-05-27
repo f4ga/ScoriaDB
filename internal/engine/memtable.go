@@ -19,7 +19,7 @@ import (
 	"sync"
 
 	"github.com/google/btree"
-	"scoriadb/internal/mvcc"
+	"github.com/f4ga/ScoriaDB/internal/mvcc"
 )
 
 // MemTable is implemented using B-tree (google/btree) as a learning compromise.

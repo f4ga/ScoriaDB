@@ -17,7 +17,7 @@ package txn
 import (
 	"errors"
 	"fmt"
-	"scoriadb/internal/engine"
+	"github.com/f4ga/ScoriaDB/internal/engine"
 )
 
 var (
