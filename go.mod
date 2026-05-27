@@ -26,3 +26,5 @@ require (
 	golang.org/x/text v0.36.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260120221211-b8f7ae30c516 // indirect
 )
+
+replace github.com/f4ga/ScoriaDB => ./ScoriaDB
