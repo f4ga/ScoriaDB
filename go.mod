@@ -1,4 +1,4 @@
-module scoriadb
+module github.com/f4ga/ScoriaDB
 
 go 1.25.0
 
