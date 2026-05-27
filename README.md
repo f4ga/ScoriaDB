@@ -1,3 +1,4 @@
+```markdown
 <div align="center">
   <img src="https://capsule-render.vercel.app/api?type=waving&color=gradient&customColorList=12&height=200&section=header&text=🪨%20ScoriaDB&fontSize=70&fontAlignY=40&animation=fadeIn">
   <br>
@@ -23,14 +24,14 @@
   <br><br>
   <table align="center" style="font-size: 1.2em; line-height: 1.8;">
     <tr><td align="center">📖</td><td><a href="#-what-is-scoriadb">What is ScoriaDB</a></td>
-      <td align="center">👥</td><td><a href="#-who-is-it-for">Who Is It For</a></td>
+      <td align="center">👥</td><td><a href="#-who-is-it-for">Who is it for</a></td>
       <td align="center">✨</td><td><a href="#-why-scoriadb">Why ScoriaDB</a></td>
     </tr>
     <tr><td align="center">📊</td><td><a href="#-benchmarks">Benchmarks</a></td>
       <td align="center">📊</td><td><a href="#-comparison-with-redis">Comparison with Redis</a></td>
-      <td align="center">🧩</td><td><a href="#-features--capabilities">Features & Capabilities</a></td>
+      <td align="center">🧩</td><td><a href="#-features--capabilities">Features &amp; Capabilities</a></td>
     </tr>
-    <tr><td align="center">🛡️</td><td><a href="#-durability-and-crash-recovery">Durability & Crash Recovery</a></td>
+    <tr><td align="center">🛡️</td><td><a href="#-durability-and-crash-recovery">Durability &amp; Crash Recovery</a></td>
       <td align="center">🕰️</td><td><a href="#-how-mvcc-works">How MVCC Works</a></td>
       <td align="center">📚</td><td><a href="#-documentation">Documentation</a></td>
     </tr>
@@ -50,30 +51,30 @@
 ## 📖 What is ScoriaDB?
 
 **ScoriaDB** is an embeddable key‑value database written in pure Go.  
-It combines **LSM‑tree performance**, **MVCC with ACID transactions**, **Column Families**, **WAL + Manifest crash recovery**, and a **WiscKey‑style Value Log** — all in a single binary with zero external dependencies.
+It combines **LSM‑tree performance**, **MVCC with ACID transactions**, **Column Families**, **WAL + Manifest for crash recovery**, and **WiscKey‑style Value Log** — all in a single binary with no external dependencies.
 
-- **As a library** – `import "github.com/f4ga/ScoriaDB/pkg/scoria"`. You get a production‑ready LSM engine inside your Go process. No cgo, no external services.
-- **As a server** – run `scoria-server`, and it immediately speaks gRPC (providing access from **13 languages**), REST, WebSocket, and a CLI with rich administration features.
+- **As a library** – `import "github.com/f4ga/ScoriaDB/pkg/scoria"`. You get a ready‑to‑use LSM engine inside your Go process. No cgo, no external services.
+- **As a server** – run `scoria-server` and it immediately speaks gRPC (accessible from **13 languages**), REST, WebSocket, and a feature‑rich administrative CLI.
 
 **What makes ScoriaDB unique**  
 - **Pure Go without cgo** – easy to build, cross‑platform, fully debuggable.  
-- **The first Go‑native LSM with MVCC + Snapshot Isolation** – writers never block readers.  
-- **Column Families** – independent LSM trees inside one database, atomic cross‑CF writes.  
-- **Group Commit in WAL** – 4–5× faster durable writes without sacrificing safety.  
-- **Ready‑to‑use server** – gRPC, REST, CLI, WebSocket (Web UI coming).  
-- **Multi‑language clients** – ready‑to‑use gRPC examples for Python, Java, C++.
+- **First Go‑native LSM with MVCC + Snapshot Isolation** – writers never block readers.  
+- **Column Families** – independent LSM trees inside one database, atomic writes across CFs.  
+- **Group Commit in WAL** – 4–5x faster durable writes without sacrificing reliability.  
+- **Ready‑to‑use server** – gRPC, REST, CLI, WebSocket (Web UI planned).  
+- **Multi‑language clients** – ready‑made gRPC examples for Python, Java, C++.
 
-> Current stable version – **v0.2.0** (Group Commit released). All core components are tested and documented.
+> Current stable version: **v0.2.0** (Group Commit released). All core components are tested and documented.
+
 ---
 
 ## 👥 Who is it for?
 
-| User type | Why ScoriaDB |
+| User type | Use case |
 |:---|:---|
-| **Go developer** | Embed a fast KV store into your service, CLI, or agent – no separate database process. |
-| **IoT / Edge engineer** | Local storage with remote access via gRPC/REST on constrained devices. |
-| **Microservice team** | One server, many language clients (gRPC). |
-| **Log analyst** | The demo tool **Scorix** shows how to index and search logs efficiently. |
+| **Go developer** | Embed a fast KV store into your service, CLI, or agent – no separate database process needed. |
+| **IoT / Edge engineer** | Local storage with remote access via gRPC/REST on resource‑constrained devices. |
+| **Microservice team** | One server, clients in many languages (gRPC). |
 | **Student / hobbyist** | Learn LSM, MVCC, compaction from clean, readable source code. |
 
 ---
@@ -87,9 +88,9 @@ It combines **LSM‑tree performance**, **MVCC with ACID transactions**, **Colum
 | **ACID transactions** | Snapshot Isolation, interactive transactions, atomic WriteBatch. |
 | **Column Families** | Isolated LSM trees – separate compaction per data type. |
 | **MVCC** | Readers never block writers. |
-| **Cross‑language** | gRPC clients for 12+ languages. |
-| **Reliability** | WAL + Manifest with fsync, CRC32 checksums, fail‑safe VLog. |
-| **Performance** | **Reads: ~150 ns, writes: ~1 µs** (small keys). |
+| **Cross‑language access** | gRPC clients for 13 languages. |
+| **Reliability** | WAL + Manifest with fsync, CRC32, fail‑safe VLog. |
+| **Performance** | Read ~150 ns, write ~1 µs (small keys). |
 
 ---
 
@@ -99,24 +100,24 @@ It combines **LSM‑tree performance**, **MVCC with ACID transactions**, **Colum
 **Command:** `go test -bench=. -count=5 ./internal/engine ./pkg/scoria | benchstat`
 
 | Operation | Value size | Time (ns/op) | Throughput (ops/s) |
-|-----------|------------|--------------|--------------------|
-| `engine.Put` (small) | 16 B | **1 070** | ~935 000 |
-| `engine.Put` (large, VLog) | 4 KB | **4 785** | ~209 000 |
-| `engine.Get` (hit, MemTable) | – | **152** | ~6 580 000 |
-| `engine.Get` (miss) | – | **310** | ~3 225 000 |
-| **Group Commit WAL (sequential)** | ~50 B | **94.9 ns** | ~10 540 000 |
+|----------|------------|--------------|-------------------|
+| Put (small) | 16 B | **1 070** | ~935 000 |
+| Put (large, VLog) | 4 KB | **4 785** | ~209 000 |
+| Get (hit, MemTable) | – | **152** | ~6 580 000 |
+| Get (miss) | – | **310** | ~3 225 000 |
+| **Group Commit WAL (sequential)** | ~50 B | **94.9** | ~10 540 000 |
 
-> **Batch writes** (WriteBatch of 100 items) give **~970 000 ops/s** with full durability – fsync amortised.  
+> **Batch write** (WriteBatch of 100 operations) delivers **~970 000 ops/s** with full durability – fsync overhead is amortized.  
 > **Reads never stall** – even under heavy concurrent writes (MVCC).
 
-### Group Commit effect on WAL
+### Group Commit Impact on WAL
 
 | Mode | Latency (ns/op) | Throughput (ops/s) |
 |:---|:---:|:---:|
-| Sync (fsync each op) | 454 | 2 200 000 |
-| **Group Commit (10ms)** | **94.9** | **10 500 000** |
+| Sync (fsync per write) | 454 | 2 200 000 |
+| Group Commit (10 ms) | 94.9 | 10 500 000 |
 
-*Group Commit is already released and enabled by default in the server mode.*
+*Group Commit is released and enabled by default in server mode.*
 
 ---
 
@@ -124,14 +125,14 @@ It combines **LSM‑tree performance**, **MVCC with ACID transactions**, **Colum
 
 ScoriaDB is **not** a Redis replacement – different niches. Redis: in‑memory cache. ScoriaDB: disk‑based, durable, embeddable KV.
 
-| Feature | ScoriaDB (embedded) | Redis CE (networked) |
+| Feature | ScoriaDB (embedded) | Redis CE (network) |
 |:---|:---|:---|
 | Deployment | Library or server | Separate server |
 | Network overhead | none | ~0.1–0.2 ms TCP |
 | Read latency | **~150 ns** | ~0.24–0.31 ms |
 | Write latency (sync) | **~1 070 ns** | ~0.45 ms (AOF everysec) |
 | Persistence | **full fsync** | optional (RDB/AOF) |
-| Transactions | **ACID + Snapshot Isolation** | none (pipelining) |
+| Transactions | **ACID + Snapshot Isolation** | none (pipelining only) |
 | MVCC | **yes** | no |
 | Column Families | **yes** | no |
 
@@ -174,11 +175,11 @@ ScoriaDB is **not** a Redis replacement – different niches. Redis: in‑memory
 ### APIs & Tools
 | Interface | Status |
 |:---|:---:|
-| Embedded Go API (`DB`, `CFDB`) | ✅ |
+| Embeddable Go API (`DB`, `CFDB`) | ✅ |
 | gRPC (streaming Scan, transactions) | ✅ |
 | REST + WebSocket | ✅ |
 | CLI (`scoria`) with interactive shell | ✅ |
-| JWT authentication (roles: admin/readwrite/readonly) | ✅ |
+| JWT authentication (admin/readwrite/readonly roles) | ✅ |
 | Prometheus metrics, health/ready endpoints | ✅ |
 | Docker & docker‑compose | ✅ |
 
@@ -186,40 +187,41 @@ ScoriaDB is **not** a Redis replacement – different niches. Redis: in‑memory
 
 ## 🛡️ Durability and Crash Recovery
 
-1. **WAL** – every operation is appended with CRC32 and `fsync` called after each batch (or group flush). On restart, the WAL is replayed.
-2. **Manifest** – a JSON journal that records every SSTable change, `fsync` after each entry. On startup, it restores the exact file set.
+1. **WAL** – every operation is appended with CRC32, `fsync` is called after each batch (or after group flush). On restart, the WAL is replayed.
+2. **Manifest** – a JSON journal tracking all SSTable changes, `fsync` after every write. On startup, it reconstructs the exact file set.
 3. **Value Log** – if the magic number is corrupted, the file is renamed to `.corrupt`, a new one is created, and data is recovered from the WAL.
 
-**The price** – `fsync` is expensive, but **Group Commit** reduces its impact by 4–5×. For write‑heavy workloads, use WriteBatch.
+**Price** – `fsync` slows writes by ~5x, but **Group Commit** fully amortizes the cost, providing a 5x speedup. For high write loads, use WriteBatch.
 
 ---
 
 ## 🕰️ How MVCC Works
 
 - Every `Put` creates a new version with a `commitTS` (uint64).
-- A transaction `Begin()` receives a `startTS` – a snapshot timestamp.
+- A transaction calls `Begin()` and receives `startTS` – a snapshot timestamp.
 - Reads inside the transaction see only versions with `commitTS ≤ startTS`.
-- On `Commit()`, the engine checks if any written key was modified after `startTS` (using a **lastCommitCache** for O(1) fast path). If a conflict is found → `ErrConflict`, the transaction must be retried.
+- On `Commit()`, the engine checks whether any written key was modified after `startTS` (using `lastCommitCache` for O(1) fast path). If a conflict is found → `ErrConflict`, the transaction must be retried.
 
-**Inverted timestamp trick** – keys are stored as `[user_key][^commitTS]`. Because `^commitTS` decreases when `commitTS` increases, the newest version appears first in iteration order.
+**Inverted timestamp trick** – keys are stored as `[user_key][^commitTS]`. Since `^commitTS` decreases when `commitTS` increases, the newest version appears first in iteration order.
 
 ```go
 db.Put("user:1", "alice")   // commitTS = 100
 db.Put("user:1", "bob")     // commitTS = 101
-// Scan → first "bob", then "alice"
+// Scan → shows "bob" first, then "alice"
 ```
 
-**Result:** Writers never block readers. Snapshot Isolation is guaranteed.
+**Result:** writers never block readers. Snapshot Isolation is guaranteed.
 
 ---
 
 ## 📚 Documentation
 
-Full documentation lives in the [`docs/`](docs/) directory and is also served at [f4ga.github.io/ScoriaDB](https://f4ga.github.io/ScoriaDB/).
+Full documentation is in the [`docs/`](docs/) folder and also available at [f4ga.github.io/ScoriaDB](https://f4ga.github.io/ScoriaDB/).
 
 | Language | Documentation | Example |
 |:---|:---|:---|
-| **Go (embedded)** | [GoDoc](https://pkg.go.dev/github.com/f4ga/ScoriaDB/pkg/scoria) | `pkg/scoria` |
+| **Go (API)** | [GoDoc](https://pkg.go.dev/github.com/f4ga/ScoriaDB/pkg/scoria) | `pkg/scoria` |
+| **Go (API)** | [GitHub Pages](https://f4ga.github.io/ScoriaDB/#go-embedded-api) | |
 | **Python** | [python-doc.md](docs/python/python-doc.md) | [example.py](docs/python/example.py) |
 | **Java** | [java-doc.md](docs/java/java-doc.md) | [example.java](docs/java/example.java) |
 | **C++** | [cpp-doc.md](docs/c++/cpp-doc.md) | [example.cpp](docs/c++/example.cpp) |
@@ -257,18 +259,18 @@ db.Put([]byte("hello"), []byte("world"))
 
 ### v0.2.0 – current stable (May 2026)
 
-This release focuses on **write performance, durability control, and documentation**.
+This release focuses on **write performance**, durability management, and documentation.
 
 | Feature / Improvement | Description |
 |:---|:---|
-| **Group Commit in WAL** | Buffered writes with periodic fsync (10 ms interval). Improves write throughput by 4–5× without sacrificing durability. |
-| **WAL group commit writer** | Asynchronous flush loop + ticker, configurable interval. |
-| **Public API for WAL options** | `OpenWALWithOptions` and `EngineOptions` allow enabling Group Commit. |
+| **Group Commit in WAL** | Buffered writes with periodic fsync (10 ms interval). Increases write throughput by 4–5x without losing durability. |
+| **groupCommitWriter** | Asynchronous flush loop + ticker, configurable interval. |
+| **Public WAL options API** | `OpenWALWithOptions` and `EngineOptions` allow enabling Group Commit. |
 | **Multi‑language documentation** | Full gRPC examples and guides for **Python, Java, C++** (see `docs/`). |
-| **Benchmark suite** | Extended benchmarks for sync vs group commit, different value sizes. |
-| **Crash recovery tests** | Validated durability with Group Commit enabled. |
+| **Extended benchmark suite** | Sync vs Group Commit comparison, different value sizes. |
+| **Crash recovery tests** | Durability verified with Group Commit enabled. |
 
-> All core features from v0.1.0 remain (LSM, MVCC, transactions, Column Families, gRPC/REST/CLI, etc.). v0.2.0 is backward‑compatible.
+> All core features from v0.1.0 remain (LSM, MVCC, transactions, Column Families, gRPC/REST/CLI, etc.). v0.2.0 is backward compatible.
 
 ---
 
@@ -276,11 +278,11 @@ This release focuses on **write performance, durability control, and documentati
 
 ```
 scoriadb/
-├── cmd/                     # server & cli entry points
+├── cmd/                     # server and CLI entry points
 ├── internal/                # engine, mvcc, txn, cf, api
 ├── pkg/scoria/              # public embeddable API
 ├── proto/                   # gRPC protobuf definitions
-├── tests/                   # integration & stress tests
+├── tests/                   # integration and stress tests
 ├── deployments/             # Docker files
 └── docs/                    # multi‑language documentation
 ```
@@ -289,23 +291,22 @@ scoriadb/
 
 ## 🗺️ Version Roadmap
 
-| Version | Focus | Key features | Planned release |
+| Version | Focus | Key Features | Target Release |
 |:---|:---|:---|:---|
-| **v0.1.0** | Initial stable | LSM, MVCC, ACID, Column Families, gRPC, CLI, basic GC | April 2026 ✅ |
-| **v0.1.1** | CLI & docs | Interactive shell commands (`create-cf`, `list-cf`, `whoami`, `stats`, history, export), Python/Java/C++ docs | May 2026 ✅ |
-| **v0.2.0** | Write performance | **Group Commit** (WAL), WAL options, crash recovery tests | May 2026 ✅ |
-| **v0.2.1** | Minor fixes & QoL | Windows/macOS CI, `admin delete-user`, `admin get-user` | June 2026 |
-| **v0.3.0** | Web UI & TTL | React dashboard, TTL (time‑to‑live) for records, Group Commit by default | Q3 2026 |
-| **v0.4.0** | Core rewrite | Lock‑free skip list (instead of B‑tree), true zero‑copy Value Log, automatic incremental GC | Q4 2026 |
+| **v0.1.0** | First stable | LSM, MVCC, ACID, Column Families, gRPC, CLI, basic GC | April 2026 ✅ |
+| **v0.1.1** | CLI & documentation | Interactive commands (`create-cf`, `list-cf`, `whoami`, `stats`, history, export), Python/Java/C++ docs | May 2026 ✅ |
+| **v0.2.0** | Write performance | Group Commit (WAL), WAL options, crash recovery tests | May 2026 ✅ |
+| **v0.3.0** | Web UI & TTL | React dashboard, TTL (time‑to‑live) for records | June 2026 |
+| **v0.4.0** | Core rewrite | Lock‑free skip list (replace B‑tree), true zero‑copy Value Log, automatic incremental GC | Q4 2026 |
 | **v1.0.0** | Distributed mode | Raft replication, range sharding, distributed ACID transactions (2PC), native data structures (Sorted Sets, Lists, JSON indexes) | 2027 |
 
-> **Note:** Versions with a ✅ are already released. The roadmap is subject to change based on feedback and contributor availability.
+> **Note:** Versions marked ✅ are already released. The roadmap may change based on feedback and contributor activity.
 
 ---
 
 ## 📄 License
 
-**Apache License 2.0** – see [LICENSE](LICENSE).  
+**Apache License 2.0** – see the [LICENSE](LICENSE) file.  
 You may use, modify, distribute, and sublicense. The name ScoriaDB may not be used to endorse derived products without permission.
 
 ---
@@ -313,16 +314,16 @@ You may use, modify, distribute, and sublicense. The name ScoriaDB may not be us
 ## ❓ FAQ
 
 **Is ScoriaDB production‑ready?**  
-v0.2.0 is stable and tested under stress. For 1000+ concurrent writers, wait for lock‑free skip list (v0.4.0).
+v0.2.0 is stable and tested under load. For 1000+ concurrent writers, wait for lock‑free skip list (v0.4.0).
 
 **Why are writes slower than reads?**  
-`fsync` guarantees durability. Use WriteBatch or enable Group Commit (already on by default).
+`fsync` guarantees durability. Use WriteBatch or enable Group Commit (enabled by default).
 
 **Can I use it from Python / Java / C++?**  
-Yes – see [docs/](docs/) for complete gRPC examples.
+Yes – see [`docs/`](docs/) for full gRPC examples.
 
 **How does ScoriaDB compare to BadgerDB?**  
-ScoriaDB offers **MVCC, Column Families, interactive transactions**, built‑in gRPC/REST, and significantly **faster reads** (6.6M ops/s vs ~400k). BadgerDB has a more mature Value Log GC, but ScoriaDB’s Group Commit gives better write throughput under sync.
+ScoriaDB offers **MVCC, Column Families, interactive transactions**, built‑in gRPC/REST, and significantly **faster reads** (6.6M ops/s vs ~400k). BadgerDB has a more mature Value Log GC, but ScoriaDB with Group Commit provides better synchronous write throughput.
 
 **Does zero‑copy work?**  
 Not yet – the current implementation copies from mmap to avoid SIGSEGV. True zero‑copy is planned for v0.4.0.
@@ -336,8 +337,8 @@ See [CONTRIBUTING.md](CONTRIBUTING.md). Help is especially welcome with automati
 
 - ⭐ **Star** the repository on GitHub.
 - 🐛 **Report bugs** via Issues.
-- 💻 **Submit pull requests** – every improvement counts.
-- 📣 **Share** the project in your community.
+- 💻 **Submit pull requests** – every improvement matters.
+- 📣 **Share the project** in your community.
 
 ---
 
@@ -350,3 +351,4 @@ See [CONTRIBUTING.md](CONTRIBUTING.md). Help is especially welcome with automati
   <br><br>
   <img src="https://capsule-render.vercel.app/api?type=waving&color=gradient&customColorList=12&height=120&section=footer">
 </div>
+```
