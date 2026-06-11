@@ -41,9 +41,12 @@ type WALOptions struct {
 }
 
 // DefaultWALOptions возвращает настройки WAL по умолчанию.
+// Начиная с v0.2.0, групповой коммит включён по умолчанию.
+// Это даёт ~5x прирост производительности записи (94 ns/op vs 454 ns/op).
+// Для критичных к durability workload'ов (финансы, счётчики) отключите GroupCommitEnabled.
 func DefaultWALOptions() WALOptions {
 	return WALOptions{
-		GroupCommitEnabled:  false,
+		GroupCommitEnabled:  true,
 		GroupCommitInterval: 10 * time.Millisecond,
 		MaxBufferSize:       0,
 	}

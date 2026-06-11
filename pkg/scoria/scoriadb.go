@@ -28,6 +28,14 @@ import (
 	"github.com/f4ga/ScoriaDB/internal/txn"
 )
 
+// DB — базовый интерфейс для работы без Column Families (только default CF).
+type DB interface {
+	Get(key []byte) ([]byte, error)
+	Put(key, value []byte) error
+	Delete(key []byte) error
+	Close() error
+}
+
 // CFDB представляет публичный интерфейс базы данных ScoriaDB с поддержкой
 // Column Families, транзакций, батчей и итераторов.
 // Этот интерфейс соответствует требованиям Промпта 4 (Embedded Go API).
@@ -304,7 +312,13 @@ func (b *scoriaBatch) Size() int {
 // NewScoriaDB создаёт новую базу данных ScoriaDB с поддержкой Column Families.
 // dataDir — корневая директория, где будут храниться данные всех CF.
 func NewScoriaDB(dataDir string) (*ScoriaDB, error) {
-	reg, err := cf.NewRegistry(dataDir)
+	return NewScoriaDBWithOptions(dataDir, engine.DefaultWALOptions())
+}
+
+// NewScoriaDBWithOptions создаёт новую базу данных ScoriaDB с указанными настройками WAL.
+// Если walOpts не заданы, используются DefaultWALOptions() с групповым коммитом.
+func NewScoriaDBWithOptions(dataDir string, walOpts engine.WALOptions) (*ScoriaDB, error) {
+	reg, err := cf.NewRegistryWithOptions(dataDir, walOpts)
 	if err != nil {
 		return nil, err
 	}
@@ -431,5 +445,9 @@ func EmbeddedCFDB(dataDir string) (CFDB, error) {
 // Возвращает интерфейс DB, соответствующий требованиям Промпта 4.
 func Open(opts Options) (DB, error) {
 	// Пока игнорируем все настройки кроме WorkDir
-	return NewScoriaDB(opts.WorkDir)
+	walOpts := engine.DefaultWALOptions()
+	if opts.WALOptions != nil {
+		walOpts = *opts.WALOptions
+	}
+	return NewScoriaDBWithOptions(opts.WorkDir, walOpts)
 }

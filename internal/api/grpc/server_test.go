@@ -18,10 +18,10 @@ import (
 	"context"
 	"testing"
 
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 	"github.com/f4ga/ScoriaDB/pkg/scoria"
 	"github.com/f4ga/ScoriaDB/scoriadb/proto"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 func TestServer_GetPut(t *testing.T) {

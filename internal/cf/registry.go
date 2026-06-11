@@ -29,9 +29,16 @@ type Registry struct {
 	mu      sync.RWMutex
 	rootDir string
 	cfs     map[string]*engine.LSMEngine // CF name → engine
+	walOpts engine.WALOptions            // WAL options for new CFs
 }
 
+// NewRegistry создаёт реестр Column Families с настройками WAL по умолчанию.
 func NewRegistry(rootDir string) (*Registry, error) {
+	return NewRegistryWithOptions(rootDir, engine.DefaultWALOptions())
+}
+
+// NewRegistryWithOptions создаёт реестр Column Families с указанными настройками WAL.
+func NewRegistryWithOptions(rootDir string, walOpts engine.WALOptions) (*Registry, error) {
 	if err := os.MkdirAll(rootDir, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create root directory: %w", err)
 	}
@@ -39,6 +46,7 @@ func NewRegistry(rootDir string) (*Registry, error) {
 	reg := &Registry{
 		rootDir: rootDir,
 		cfs:     make(map[string]*engine.LSMEngine),
+		walOpts: walOpts,
 	}
 
 	// Create default CF
@@ -77,8 +85,8 @@ func (r *Registry) CreateCF(name string) error {
 	// Directory for CF: <rootDir>/<name>/
 	cfDir := filepath.Join(r.rootDir, name)
 
-	// Create LSMEngine
-	eng, err := engine.NewLSMEngine(cfDir)
+	// Create LSMEngine with WAL options
+	eng, err := engine.NewLSMEngine(cfDir, r.walOpts)
 	if err != nil {
 		return fmt.Errorf("failed to create LSMEngine for CF %q: %w", name, err)
 	}

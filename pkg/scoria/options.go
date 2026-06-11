@@ -15,6 +15,7 @@
 package scoria
 
 import (
+	"github.com/f4ga/ScoriaDB/internal/engine"
 	"github.com/f4ga/ScoriaDB/internal/engine/vfs"
 )
 
@@ -31,6 +32,10 @@ type Options struct {
 	// VFS — абстракция файловой системы.
 	// Если nil, используется vfs.DefaultVFS.
 	VFS vfs.VFS
+	// WALOptions — настройки Write-Ahead Log.
+	// Если nil, используются DefaultWALOptions() с групповым коммитом.
+	// Для отключения группового коммита передайте WALOptions{GroupCommitEnabled: false}.
+	WALOptions *engine.WALOptions
 }
 
 // CompactionLevelOpts содержит настройки для одного уровня LSM-дерева.
@@ -52,5 +57,6 @@ func DefaultOptions(workDir string) Options {
 		MemTableSize: 64 * 1024 * 1024, // 64 MiB
 		Levels:       nil,              // пока используем настройки движка по умолчанию
 		VFS:          nil,              // будет использоваться vfs.DefaultVFS внутри движка
+		WALOptions:   nil,              // будет использоваться DefaultWALOptions() с групповым коммитом
 	}
 }

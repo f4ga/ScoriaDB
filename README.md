@@ -115,7 +115,11 @@ It combines **LSM‑tree performance**, **MVCC with ACID transactions**, **Colum
 | Sync (fsync per write) | 454 | 2 200 000 |
 | Group Commit (10 ms) | 94.9 | 10 500 000 |
 
+<<<<<<< HEAD
 *Group Commit is released and enabled by default in server mode.*
+=======
+*Group Commit is **enabled by default** since v0.2.0. Use `WALOptions{GroupCommitEnabled: false}` or `export WAL_GROUP_COMMIT=false` to disable.*
+>>>>>>> a74f379 (feat(wal): enable Group Commit by default, remove dead code)
 
 ---
 
@@ -261,9 +265,10 @@ This release focuses on **write performance**, durability management, and docume
 
 | Feature / Improvement | Description |
 |:---|:---|
-| **Group Commit in WAL** | Buffered writes with periodic fsync (10 ms interval). Increases write throughput by 4–5x without losing durability. |
-| **groupCommitWriter** | Asynchronous flush loop + ticker, configurable interval. |
-| **Public WAL options API** | `OpenWALWithOptions` and `EngineOptions` allow enabling Group Commit. |
+| **Group Commit in WAL (enabled by default)** | Buffered writes with periodic fsync (10 ms interval). Improves write throughput by 4–5× without sacrificing durability. **Enabled by default** — use `WALOptions{GroupCommitEnabled: false}` to disable. |
+| **WAL group commit writer** | Asynchronous flush loop + ticker, configurable interval. |
+| **Public API for WAL options** | `OpenWALWithOptions`, `EngineOptions`, `DefaultWALOptions()` with Group Commit enabled. |
+>>>>>>> a74f379 (feat(wal): enable Group Commit by default, remove dead code)
 | **Multi‑language documentation** | Full gRPC examples and guides for **Python, Java, C++** (see `docs/`). |
 | **Extended benchmark suite** | Sync vs Group Commit comparison, different value sizes. |
 | **Crash recovery tests** | Durability verified with Group Commit enabled. |

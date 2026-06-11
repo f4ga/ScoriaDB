@@ -20,11 +20,12 @@ import (
 	"fmt"
 	"log"
 	"path/filepath"
+	"sync"
+	"sync/atomic"
+
 	"github.com/f4ga/ScoriaDB/internal/engine/sstable"
 	"github.com/f4ga/ScoriaDB/internal/engine/vfs"
 	"github.com/f4ga/ScoriaDB/internal/mvcc"
-	"sync"
-	"sync/atomic"
 )
 
 type LSMEngine struct {
@@ -44,7 +45,9 @@ type LSMEngine struct {
 	lastCommitCache     sync.Map
 }
 
-// NewLSMEngine создаёт движок. Если передан параметр WALOptions, используется Group Commit.
+// NewLSMEngine создаёт движок. Если не переданы WALOptions, используются DefaultWALOptions()
+// с групповым коммитом (GroupCommitEnabled: true). Для отключения передайте
+// WALOptions{GroupCommitEnabled: false}.
 func NewLSMEngine(dataDir string, opts ...WALOptions) (*LSMEngine, error) {
 	vfs := vfs.NewDefaultVFS()
 
@@ -66,9 +69,13 @@ func NewLSMEngine(dataDir string, opts ...WALOptions) (*LSMEngine, error) {
 	}
 
 	walPath := filepath.Join(dataDir, "wal.log")
+	walOpts := DefaultWALOptions()
+	if len(opts) > 0 {
+		walOpts = opts[0]
+	}
 	var wal *WAL
-	if len(opts) > 0 && opts[0].GroupCommitEnabled {
-		wal, err = OpenWALWithOptions(walPath, opts[0])
+	if walOpts.GroupCommitEnabled {
+		wal, err = OpenWALWithOptions(walPath, walOpts)
 	} else {
 		wal, err = OpenWAL(walPath)
 	}

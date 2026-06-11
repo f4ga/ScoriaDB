@@ -24,11 +24,12 @@ import (
 // testWALMode запускает тест в двух режимах: синхронном и с групповым коммитом.
 func testWALMode(t *testing.T, name string, fn func(t *testing.T, opts WALOptions)) {
 	t.Run(name+"_sync", func(t *testing.T) {
-		fn(t, DefaultWALOptions())
+		opts := DefaultWALOptions()
+		opts.GroupCommitEnabled = false // явно отключаем групповой коммит для синхронного режима
+		fn(t, opts)
 	})
 	t.Run(name+"_groupcommit", func(t *testing.T) {
 		opts := DefaultWALOptions()
-		opts.GroupCommitEnabled = true
 		opts.GroupCommitInterval = 1 * time.Millisecond // маленький интервал для тестов
 		fn(t, opts)
 	})

@@ -17,10 +17,10 @@ package engine
 import (
 	"encoding/binary"
 	"fmt"
+	"github.com/f4ga/ScoriaDB/internal/engine/vfs"
 	"hash/crc32"
 	"log"
 	"os"
-	"github.com/f4ga/ScoriaDB/internal/engine/vfs"
 	"sort"
 	"sync"
 	"syscall"

@@ -21,9 +21,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/f4ga/ScoriaDB/pkg/scoria"
 	"github.com/golang-jwt/jwt/v5"
 	"golang.org/x/crypto/bcrypt"
-	"github.com/f4ga/ScoriaDB/pkg/scoria"
 )
 
 // User представляет пользователя системы.

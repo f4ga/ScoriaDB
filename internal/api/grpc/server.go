@@ -19,12 +19,12 @@ import (
 	"fmt"
 	"sync"
 
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 	"github.com/f4ga/ScoriaDB/internal/auth"
 	"github.com/f4ga/ScoriaDB/pkg/scoria"
 	"github.com/f4ga/ScoriaDB/scoriadb/proto"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // server implements the ScoriaDB gRPC service.

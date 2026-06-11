@@ -17,10 +17,10 @@ package engine
 import (
 	"bytes"
 	"fmt"
-	"log"
-	"path/filepath"
 	"github.com/f4ga/ScoriaDB/internal/engine/sstable"
 	"github.com/f4ga/ScoriaDB/internal/mvcc"
+	"log"
+	"path/filepath"
 	"sort"
 )
 

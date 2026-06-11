@@ -20,9 +20,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/spf13/cobra"
 	"github.com/f4ga/ScoriaDB/internal/engine"
 	"github.com/f4ga/ScoriaDB/internal/engine/vfs"
+	"github.com/spf13/cobra"
 )
 
 // inspectCmd is the actual implementation of the inspect command.

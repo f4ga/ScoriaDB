@@ -19,8 +19,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/golang-jwt/jwt/v5"
 	"github.com/f4ga/ScoriaDB/pkg/scoria"
+	"github.com/golang-jwt/jwt/v5"
 )
 
 func TestCreateUserAndLogin(t *testing.T) {

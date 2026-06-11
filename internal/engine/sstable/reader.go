@@ -18,9 +18,9 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"github.com/f4ga/ScoriaDB/internal/mvcc"
 	"io"
 	"os"
-	"github.com/f4ga/ScoriaDB/internal/mvcc"
 )
 
 // Reader читает SSTable из файла.
