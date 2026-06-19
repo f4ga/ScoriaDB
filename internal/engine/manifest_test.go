@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"github.com/f4ga/ScoriaDB/internal/engine/vfs"
+	"github.com/f4ga/ScoriaDB/internal/errors"
 )
 
 func TestNewManifest(t *testing.T) {
@@ -31,7 +32,7 @@ func TestNewManifest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create manifest: %v", err)
 	}
-	defer m.Close()
+	defer errors.CloseWithFatal(m, "manifest")
 
 	// Проверяем начальное состояние
 	levels := m.GetLevels()
@@ -57,7 +58,7 @@ func TestManifestApply(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create manifest: %v", err)
 	}
-	defer m.Close()
+	defer errors.CloseWithFatal(m, "manifest")
 
 	// Добавляем файл на уровень 0
 	edit := &VersionEdit{
@@ -157,7 +158,7 @@ func TestManifestRecover(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to reopen manifest: %v", err)
 	}
-	defer m2.Close()
+	defer errors.CloseWithFatal(m2, "manifest2")
 
 	levels := m2.GetLevels()
 	if len(levels[0]) != 1 || levels[0][0].FileNum != 1 {
@@ -180,7 +181,7 @@ func TestManifestGetLevels(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create manifest: %v", err)
 	}
-	defer m.Close()
+	defer errors.CloseWithFatal(m, "manifest")
 
 	// Добавляем файлы на разные уровни
 	edit := &VersionEdit{
@@ -221,13 +222,13 @@ func TestManifestEmptyFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	file.Close()
+	errors.CloseWithFatal(file, "manifest-file")
 
 	m, err := NewManifest(vfs, path)
 	if err != nil {
 		t.Fatalf("failed to open empty manifest: %v", err)
 	}
-	defer m.Close()
+	defer errors.CloseWithFatal(m, "manifest")
 
 	// Должен быть дефолтное состояние
 	if m.NextFileNum() != 1 {
@@ -246,7 +247,7 @@ func TestManifestCorruptedFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = file.Write([]byte("{invalid json\n"))
-	file.Close()
+	errors.CloseWithFatal(file, "manifest-file")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -256,7 +257,7 @@ func TestManifestCorruptedFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to open corrupted manifest: %v", err)
 	}
-	defer m.Close()
+	defer errors.CloseWithFatal(m, "manifest")
 
 	// Состояние должно быть дефолтным
 	if m.NextFileNum() != 1 {
@@ -275,7 +276,7 @@ func TestManifestFsync(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create manifest: %v", err)
 	}
-	defer m.Close()
+	defer errors.CloseWithFatal(m, "manifest")
 
 	// Применяем несколько VersionEdit
 	edit1 := &VersionEdit{
@@ -305,7 +306,7 @@ func TestManifestFsync(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to reopen manifest: %v", err)
 	}
-	defer m2.Close()
+	defer errors.CloseWithFatal(m2, "manifest2")
 
 	// Проверяем, что все изменения восстановились
 	levels := m2.GetLevels()

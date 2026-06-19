@@ -21,6 +21,7 @@ import (
 	"path/filepath"
 
 	"github.com/f4ga/ScoriaDB/internal/engine/sstable"
+	"github.com/f4ga/ScoriaDB/internal/errors"
 	// "github.com/f4ga/ScoriaDB/internal/mvcc"  implement or decide where to do it
 )
 
@@ -99,7 +100,7 @@ func (e *LSMEngine) flushMemTable() error {
 	// Get file size
 	stat, err := e.vfs.Stat(sstPath)
 	if err != nil {
-		reader.Close()
+		errors.CloseWithLog(reader, "flush-sstable")
 		if err := e.vfs.Remove(sstPath); err != nil {
 			log.Printf("flush: failed to remove %s: %v", sstPath, err)
 		}
@@ -122,7 +123,7 @@ func (e *LSMEngine) flushMemTable() error {
 
 	// Apply edit to manifest
 	if err := e.manifest.Apply(edit); err != nil {
-		reader.Close()
+		errors.CloseWithLog(reader, "flush-sstable")
 		if err := e.vfs.Remove(sstPath); err != nil {
 			log.Printf("flush: failed to remove %s: %v", sstPath, err)
 		}

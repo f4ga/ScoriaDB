@@ -24,6 +24,7 @@ import (
 	"sync"
 
 	"github.com/f4ga/ScoriaDB/internal/engine/vfs"
+	"github.com/f4ga/ScoriaDB/internal/errors"
 )
 
 // SSTableInfo содержит метаданные одного SSTable файла.
@@ -74,7 +75,7 @@ func NewManifest(vfs vfs.VFS, path string) (*Manifest, error) {
 
 	// Восстанавливаем состояние из существующего файла
 	if err := m.recover(); err != nil {
-		file.Close()
+		errors.CloseWithLog(file, "manifest-file")
 		return nil, fmt.Errorf("failed to recover manifest: %w", err)
 	}
 

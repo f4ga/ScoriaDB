@@ -19,6 +19,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/f4ga/ScoriaDB/internal/errors"
 	"github.com/spf13/cobra"
 )
 
@@ -35,7 +36,7 @@ func newGetCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer client.Close()
+			defer errors.CloseWithLog(client, "gRPC client")
 
 			ctx, cancel := defaultContext()
 			defer cancel()
@@ -70,7 +71,7 @@ func newSetCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer client.Close()
+			defer errors.CloseWithLog(client, "gRPC client")
 
 			ctx, cancel := defaultContext()
 			defer cancel()
@@ -100,7 +101,7 @@ func newDelCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer client.Close()
+			defer errors.CloseWithLog(client, "gRPC client")
 
 			ctx, cancel := defaultContext()
 			defer cancel()
@@ -133,7 +134,7 @@ func newScanCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer client.Close()
+			defer errors.CloseWithLog(client, "gRPC client")
 
 			ctx, cancel := defaultContext()
 			defer cancel()
@@ -176,7 +177,7 @@ func newTxnBeginCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer client.Close()
+			defer errors.CloseWithLog(client, "gRPC client")
 
 			ctx, cancel := defaultContext()
 			defer cancel()
@@ -220,7 +221,7 @@ func newTxnRollbackCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer client.Close()
+			defer errors.CloseWithLog(client, "gRPC client")
 
 			ctx, cancel := defaultContext()
 			defer cancel()
@@ -266,7 +267,7 @@ func newAdminUserAddCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer client.Close()
+			defer errors.CloseWithLog(client, "gRPC client")
 
 			ctx, cancel := defaultContext()
 			defer cancel()
@@ -295,7 +296,7 @@ func newAdminChangePasswordCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer client.Close()
+			defer errors.CloseWithLog(client, "gRPC client")
 
 			ctx, cancel := defaultContext()
 			defer cancel()
@@ -322,7 +323,7 @@ func newAdminAuthCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer client.Close()
+			defer errors.CloseWithLog(client, "gRPC client")
 
 			ctx, cancel := defaultContext()
 			defer cancel()
@@ -348,7 +349,7 @@ func newAdminGCCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer client.Close()
+			defer errors.CloseWithLog(client, "gRPC client")
 
 			// TODO: Implement gRPC GC method
 			// For now, just print a message

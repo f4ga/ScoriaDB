@@ -25,6 +25,7 @@ import (
 	"syscall"
 
 	"github.com/f4ga/ScoriaDB/internal/engine/vfs"
+	"github.com/f4ga/ScoriaDB/internal/errors"
 )
 
 const (
@@ -62,14 +63,14 @@ func OpenVLog(vfs vfs.VFS, path string) (*VLog, error) {
 	// Для mmap нужен *os.File (реальный файловый дескриптор)
 	osFile, ok := file.(*os.File)
 	if !ok {
-		file.Close()
+		errors.CloseWithLog(file, "vlog-file")
 		return nil, fmt.Errorf("vlog mmap requires real os.File, got %T", file)
 	}
 
 	// Получаем размер файла
 	stat, err := osFile.Stat()
 	if err != nil {
-		osFile.Close()
+		errors.CloseWithLog(osFile, "vlog-osfile")
 		return nil, fmt.Errorf("failed to stat vlog file: %w", err)
 	}
 	size := stat.Size()
@@ -80,7 +81,7 @@ func OpenVLog(vfs vfs.VFS, path string) (*VLog, error) {
 		binary.BigEndian.PutUint32(header[0:4], VLogMagic)
 		binary.BigEndian.PutUint32(header[4:8], VLogVersion)
 		if _, err := osFile.Write(header); err != nil {
-			osFile.Close()
+			errors.CloseWithLog(osFile, "vlog-osfile")
 			return nil, fmt.Errorf("failed to write vlog header: %w", err)
 		}
 		size = 8
@@ -88,7 +89,7 @@ func OpenVLog(vfs vfs.VFS, path string) (*VLog, error) {
 		// Проверяем заголовок
 		header := make([]byte, 8)
 		if _, err := osFile.ReadAt(header, 0); err != nil {
-			osFile.Close()
+			errors.CloseWithLog(osFile, "vlog-osfile")
 			return nil, fmt.Errorf("failed to read vlog header: %w", err)
 		}
 		magic := binary.BigEndian.Uint32(header[0:4])
@@ -96,7 +97,7 @@ func OpenVLog(vfs vfs.VFS, path string) (*VLog, error) {
 		if magic != VLogMagic {
 			// Повреждённый VLog: логируем, удаляем файл и создаём новый
 			log.Printf("vlog: magic mismatch, removing corrupted file %s", path)
-			osFile.Close()
+			errors.CloseWithLog(osFile, "vlog-osfile")
 			if err := vfs.Remove(path); err != nil {
 				// Попробуем переименовать файл как запасной вариант
 				backupPath := path + ".corrupted"
@@ -111,7 +112,7 @@ func OpenVLog(vfs vfs.VFS, path string) (*VLog, error) {
 		if version != VLogVersion {
 			// Повреждённый VLog: логируем, удаляем файл и создаём новый
 			log.Printf("vlog: version mismatch (got %d, expected %d), removing corrupted file %s", version, VLogVersion, path)
-			osFile.Close()
+			errors.CloseWithLog(osFile, "vlog-osfile")
 			if err := vfs.Remove(path); err != nil {
 				// Попробуем переименовать файл как запасной вариант
 				backupPath := path + ".corrupted"
@@ -128,7 +129,7 @@ func OpenVLog(vfs vfs.VFS, path string) (*VLog, error) {
 	// Отображаем файл в память
 	data, err := syscall.Mmap(int(osFile.Fd()), 0, int(size), syscall.PROT_READ, syscall.MAP_SHARED)
 	if err != nil {
-		osFile.Close()
+		errors.CloseWithLog(osFile, "vlog-osfile")
 		return nil, fmt.Errorf("failed to mmap vlog file: %w", err)
 	}
 
@@ -272,8 +273,8 @@ func (v *VLog) GC(livePointers map[ValuePointer]struct{}) (map[ValuePointer]Valu
 	}
 	defer func() {
 		if file != nil {
-			file.Close()
-			os.Remove(tempPath)
+			errors.CloseWithLog(file, "vlog-gc-temp")
+			errors.RemoveWithLog(tempPath)
 		}
 	}()
 
@@ -358,7 +359,7 @@ func (v *VLog) GC(livePointers map[ValuePointer]struct{}) (map[ValuePointer]Valu
 	}
 	stat, err := newFile.Stat()
 	if err != nil {
-		newFile.Close()
+		errors.CloseWithLog(newFile, "vlog-gc-newfile")
 		return nil, fmt.Errorf("failed to stat new vlog: %w", err)
 	}
 	size := stat.Size()
@@ -366,7 +367,7 @@ func (v *VLog) GC(livePointers map[ValuePointer]struct{}) (map[ValuePointer]Valu
 	// Remap
 	data, err := syscall.Mmap(int(newFile.Fd()), 0, int(size), syscall.PROT_READ, syscall.MAP_SHARED)
 	if err != nil {
-		newFile.Close()
+		errors.CloseWithLog(newFile, "vlog-gc-newfile")
 		return nil, fmt.Errorf("failed to mmap new vlog: %w", err)
 	}
 

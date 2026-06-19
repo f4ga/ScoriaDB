@@ -18,6 +18,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/f4ga/ScoriaDB/internal/errors"
 )
 
 func TestRegistryCreateAndGet(t *testing.T) {
@@ -27,7 +29,7 @@ func TestRegistryCreateAndGet(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create registry: %v", err)
 	}
-	defer reg.Close()
+	defer errors.CloseWithFatal(reg, "cf-registry")
 
 	// Проверяем, что CF "default" создан автоматически
 	eng, err := reg.GetCF("default")
@@ -86,7 +88,7 @@ func TestRegistryDuplicateCF(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create registry: %v", err)
 	}
-	defer reg.Close()
+	defer errors.CloseWithFatal(reg, "cf-registry")
 
 	err = reg.CreateCF("mycf")
 	if err != nil {
@@ -106,7 +108,7 @@ func TestRegistryDropCF(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create registry: %v", err)
 	}
-	defer reg.Close()
+	defer errors.CloseWithFatal(reg, "cf-registry")
 
 	err = reg.CreateCF("todelete")
 	if err != nil {
@@ -132,7 +134,7 @@ func TestRegistryDropSystemCF(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create registry: %v", err)
 	}
-	defer reg.Close()
+	defer errors.CloseWithFatal(reg, "cf-registry")
 
 	// Попытка удалить системный CF должна вернуть ошибку
 	err = reg.DropCF("__auth__")

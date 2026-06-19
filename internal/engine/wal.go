@@ -21,6 +21,8 @@ import (
 	"io"
 	"os"
 	"sync"
+
+	"github.com/f4ga/ScoriaDB/internal/errors"
 )
 
 // OpType тип операции в WAL.
@@ -70,7 +72,7 @@ func OpenWALWithOptions(path string, opts WALOptions) (*WAL, error) {
 	// Получаем текущий размер файла
 	stat, err := file.Stat()
 	if err != nil {
-		file.Close()
+		errors.CloseWithLog(file, "wal-file")
 		return nil, fmt.Errorf("failed to stat wal file: %w", err)
 	}
 
@@ -170,7 +172,7 @@ func (w *WAL) Close() error {
 	if w.group != nil {
 		if err := w.group.Close(); err != nil {
 			// Пытаемся закрыть файл даже при ошибке в group.Close()
-			_ = w.file.Close()
+			errors.CloseWithLog(w.file, "wal-file")
 			return fmt.Errorf("failed to close group commit writer: %w", err)
 		}
 	}

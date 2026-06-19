@@ -15,10 +15,10 @@
 package sstable
 
 import (
-	"os"
 	"path/filepath"
 	"testing"
 
+	"github.com/f4ga/ScoriaDB/internal/errors"
 	"github.com/f4ga/ScoriaDB/internal/mvcc"
 )
 
@@ -58,7 +58,7 @@ func TestWriterAndReader(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to open reader: %v", err)
 	}
-	defer reader.Close()
+	defer errors.CloseWithFatal(reader, "sstable-reader")
 
 	// Проверяем поиск ключей
 	for i, key := range keys {
@@ -108,7 +108,7 @@ func TestBloomFilterSkip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to open reader: %v", err)
 	}
-	defer reader.Close()
+	defer errors.CloseWithFatal(reader, "sstable-reader")
 
 	// Ключ, которого нет в фильтре Блума (с высокой вероятностью)
 	// Поскольку фильтр Блума может дать ложноположительный результат, тест может быть неустойчивым.
@@ -163,8 +163,8 @@ func TestCompactionSimple(t *testing.T) {
 	// Открываем оба SSTable
 	reader1, _ := Open(path1)
 	reader2, _ := Open(path2)
-	defer reader1.Close()
-	defer reader2.Close()
+	defer errors.CloseWithFatal(reader1, "sstable-reader1")
+	defer errors.CloseWithFatal(reader2, "sstable-reader2")
 
 	// Создаем объединенный SSTable (симуляция compaction)
 	writerMerged, err := NewWriter(mergedPath)
@@ -195,7 +195,7 @@ func TestCompactionSimple(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to open merged reader: %v", err)
 	}
-	defer readerMerged.Close()
+	defer errors.CloseWithFatal(readerMerged, "sstable-merged")
 
 	// Проверяем ключ b (должна быть новая версия)
 	val, found := readerMerged.Lookup(mvcc.NewMVCCKey([]byte("b"), 200))
@@ -204,7 +204,7 @@ func TestCompactionSimple(t *testing.T) {
 	}
 
 	// Удаляем временные файлы
-	os.Remove(path1)
-	os.Remove(path2)
-	os.Remove(mergedPath)
+	errors.RemoveWithLog(path1)
+	errors.RemoveWithLog(path2)
+	errors.RemoveWithLog(mergedPath)
 }

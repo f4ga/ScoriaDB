@@ -22,6 +22,7 @@ import (
 
 	"github.com/f4ga/ScoriaDB/internal/engine"
 	"github.com/f4ga/ScoriaDB/internal/engine/vfs"
+	"github.com/f4ga/ScoriaDB/internal/errors"
 	"github.com/spf13/cobra"
 )
 
@@ -52,7 +53,7 @@ func inspectCmd(cmd *cobra.Command, args []string) error {
 		fmt.Println("Assuming empty database.")
 		return nil
 	}
-	defer manifest.Close()
+	defer errors.CloseWithLog(manifest, "manifest")
 
 	// Get levels
 	levels := manifest.GetLevels()

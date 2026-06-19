@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	"github.com/f4ga/ScoriaDB/internal/engine"
+	"github.com/f4ga/ScoriaDB/internal/errors"
 )
 
 func TestWriteBatchBasic(t *testing.T) {
@@ -26,7 +27,7 @@ func TestWriteBatchBasic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create engine: %v", err)
 	}
-	defer db.Close()
+	defer errors.CloseWithFatal(db, "txn-db")
 
 	batch := NewWriteBatch()
 	batch.AddPut([]byte("key1"), []byte("value1"))
@@ -79,7 +80,7 @@ func TestWriteBatchEmpty(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create engine: %v", err)
 	}
-	defer db.Close()
+	defer errors.CloseWithFatal(db, "txn-db")
 
 	batch := NewWriteBatch()
 	commitTS, err := ApplyBatch(db, batch)

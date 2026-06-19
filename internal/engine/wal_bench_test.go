@@ -18,6 +18,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/f4ga/ScoriaDB/internal/errors"
 )
 
 func BenchmarkWALWrite_Sync(b *testing.B) {
@@ -42,7 +44,7 @@ func benchmarkWALWrite(b *testing.B, groupCommit bool) {
 	if err != nil {
 		b.Fatalf("failed to open wal: %v", err)
 	}
-	defer wal.Close()
+	defer errors.CloseWithFatal(wal, "wal")
 
 	entry := &WalEntry{
 		Op:        OpPut,
@@ -91,7 +93,7 @@ func benchmarkWALWriteParallel(b *testing.B, groupCommit bool) {
 	if err != nil {
 		b.Fatalf("failed to open wal: %v", err)
 	}
-	defer wal.Close()
+	defer errors.CloseWithFatal(wal, "wal")
 
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {

@@ -22,6 +22,7 @@ import (
 	"sort"
 
 	"github.com/f4ga/ScoriaDB/internal/engine/sstable"
+	"github.com/f4ga/ScoriaDB/internal/errors"
 	"github.com/f4ga/ScoriaDB/internal/mvcc"
 )
 
@@ -197,7 +198,7 @@ func (e *LSMEngine) compactLevel0() error {
 	}
 	defer func() {
 		if err != nil {
-			reader.Close()
+			errors.CloseWithLog(reader, "compaction-new-sstable")
 		}
 	}()
 
@@ -248,7 +249,7 @@ func (e *LSMEngine) compactLevel0() error {
 
 	// Close old readers and delete old files from disk
 	for i, reader := range e.levels[0] {
-		reader.Close()
+		errors.CloseWithLog(reader, "compaction-old-sstable")
 		if i < len(deletedFiles) && deletedFiles[i].FileNum != 0 {
 			oldPath := filepath.Join(e.dataDir, fmt.Sprintf("%06d.sst", deletedFiles[i].FileNum))
 			if err := e.vfs.Remove(oldPath); err != nil {

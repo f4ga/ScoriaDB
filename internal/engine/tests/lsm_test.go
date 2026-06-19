@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	"github.com/f4ga/ScoriaDB/internal/engine"
+	"github.com/f4ga/ScoriaDB/internal/errors"
 	"github.com/f4ga/ScoriaDB/internal/txn"
 )
 
@@ -28,7 +29,7 @@ func TestLSMEnginePutGet(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create engine: %v", err)
 	}
-	defer eng.Close()
+	defer errors.CloseWithFatal(eng, "engine")
 
 	// Простая запись и чтение
 	key := []byte("test_key")
@@ -62,7 +63,7 @@ func TestLSMEngineMultipleVersions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create engine: %v", err)
 	}
-	defer eng.Close()
+	defer errors.CloseWithFatal(eng, "engine")
 
 	key := []byte("key")
 	v1 := []byte("value1")
@@ -101,7 +102,7 @@ func TestLSMEngineDelete(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create engine: %v", err)
 	}
-	defer eng.Close()
+	defer errors.CloseWithFatal(eng, "engine")
 
 	key := []byte("key")
 	value := []byte("value")
@@ -145,14 +146,14 @@ func TestLSMEngineRecovery(t *testing.T) {
 	if err := engine1.PutWithTS(key, value, 42); err != nil {
 		t.Fatalf("failed to put: %v", err)
 	}
-	engine1.Close()
+	errors.CloseWithFatal(engine1, "engine1")
 
 	// Создаем новый движок в той же директории (должен восстановить данные)
 	engine2, err := engine.NewLSMEngine(dir)
 	if err != nil {
 		t.Fatalf("failed to create engine2: %v", err)
 	}
-	defer engine2.Close()
+	defer errors.CloseWithFatal(engine2, "engine2")
 
 	got, err := engine2.GetWithTS(key, 42)
 	if err != nil {
@@ -170,7 +171,7 @@ func TestLSMEngineVLogLargeValue(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create engine: %v", err)
 	}
-	defer eng.Close()
+	defer errors.CloseWithFatal(eng, "engine")
 
 	// Значение больше MaxInlineSize (64 байта)
 	largeValue := make([]byte, 100)
@@ -203,7 +204,7 @@ func TestCompactionRespectsSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create engine: %v", err)
 	}
-	defer eng.Close()
+	defer errors.CloseWithFatal(eng, "engine")
 
 	// Write initial version at timestamp 10
 	key := []byte("key")
@@ -251,7 +252,7 @@ func TestCompactionRemovesOnlyOldVersions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create engine: %v", err)
 	}
-	defer eng.Close()
+	defer errors.CloseWithFatal(eng, "engine")
 
 	// Write multiple versions
 	key := []byte("key")

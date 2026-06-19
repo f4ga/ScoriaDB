@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"github.com/f4ga/ScoriaDB/internal/engine/vfs"
+	"github.com/f4ga/ScoriaDB/internal/errors"
 )
 
 func TestVLogWriteRead(t *testing.T) {
@@ -30,7 +31,7 @@ func TestVLogWriteRead(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to open vlog: %v", err)
 	}
-	defer vlog.Close()
+	defer errors.CloseWithFatal(vlog, "vlog")
 
 	// Маленькое значение (inline)
 	small := []byte("small")
@@ -78,7 +79,7 @@ func TestBasicGC(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to open vlog: %v", err)
 	}
-	defer vlog.Close()
+	defer errors.CloseWithFatal(vlog, "vlog")
 
 	// Write some large values
 	value1 := make([]byte, 100)
@@ -159,7 +160,7 @@ func TestGCPreservesLatestVersions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to open vlog: %v", err)
 	}
-	defer vlog.Close()
+	defer errors.CloseWithFatal(vlog, "vlog")
 
 	// Write a value
 	value1 := make([]byte, 100)
@@ -231,7 +232,7 @@ func TestVLogCRCError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to open vlog: %v", err)
 	}
-	defer vlog.Close()
+	defer errors.CloseWithFatal(vlog, "vlog")
 
 	// Записываем значение
 	value := []byte("test value")
@@ -248,14 +249,14 @@ func TestVLogCRCError(t *testing.T) {
 	// Смещаемся за заголовок и CRC (8 байт) + offset
 	corruptPos := vp.Offset + 8 + 5 // 5-й байт значения
 	if _, err := file.Seek(corruptPos, 0); err != nil {
-		file.Close()
+		errors.CloseWithFatal(file, "vlog-corrupt-file")
 		t.Fatalf("failed to seek: %v", err)
 	}
 	if _, err := file.Write([]byte{0xFF}); err != nil {
-		file.Close()
+		errors.CloseWithFatal(file, "vlog-corrupt-file")
 		t.Fatalf("failed to write corruption: %v", err)
 	}
-	file.Close()
+	errors.CloseWithFatal(file, "vlog-corrupt-file")
 
 	// Попытка чтения должна вернуть ошибку CRC
 	_, err = vlog.Read(vp)
@@ -285,14 +286,14 @@ func TestVLogReopen(t *testing.T) {
 	if vp.Size == 0 {
 		t.Fatal("expected non-zero size for large value")
 	}
-	vlog1.Close()
+	errors.CloseWithFatal(vlog1, "vlog1")
 
 	// Открываем заново
 	vlog2, err := OpenVLog(vfs.Default, path)
 	if err != nil {
 		t.Fatalf("failed to open vlog2: %v", err)
 	}
-	defer vlog2.Close()
+	defer errors.CloseWithFatal(vlog2, "vlog2")
 
 	// Читаем
 	read, err := vlog2.Read(vp)
@@ -324,7 +325,7 @@ func TestVLogRecoveryAfterCrash(t *testing.T) {
 	if vp.Size == 0 {
 		t.Fatal("expected non-zero size for large value")
 	}
-	vlog.Close()
+	errors.CloseWithFatal(vlog, "vlog")
 
 	// 2. Corrupt the magic number in the file
 	f, err := os.OpenFile(path, os.O_RDWR, 0644)
@@ -334,17 +335,17 @@ func TestVLogRecoveryAfterCrash(t *testing.T) {
 	// Write invalid magic at offset 0
 	invalidMagic := []byte{0xFF, 0xFF, 0xFF, 0xFF}
 	if _, err := f.WriteAt(invalidMagic, 0); err != nil {
-		f.Close()
+		errors.CloseWithFatal(f, "vlog-corrupt-file")
 		t.Fatalf("failed to corrupt magic: %v", err)
 	}
-	f.Close()
+	errors.CloseWithFatal(f, "vlog-corrupt-file")
 
 	// 3. Reopen VLog - should recover automatically (delete corrupted file and create new)
 	vlog2, err := OpenVLog(vfs.Default, path)
 	if err != nil {
 		t.Fatalf("failed to reopen vlog after corruption: %v", err)
 	}
-	defer vlog2.Close()
+	defer errors.CloseWithFatal(vlog2, "vlog2")
 
 	// 4. The previous value pointer is no longer valid because the file was recreated.
 	// Attempting to read should fail (out of range). We can test that.

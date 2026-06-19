@@ -231,7 +231,10 @@ func (w *Writer) Finish() error {
 	if err := w.writer.Flush(); err != nil {
 		return fmt.Errorf("failed to flush writer: %w", err)
 	}
-	return w.file.Close()
+	if err := w.file.Close(); err != nil {
+		return fmt.Errorf("failed to close sstable file: %w", err)
+	}
+	return nil
 }
 
 // encodeEntry кодирует пару ключ-значение в байты.

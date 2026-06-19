@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	"github.com/f4ga/ScoriaDB/internal/engine"
+	"github.com/f4ga/ScoriaDB/internal/errors"
 )
 
 func TestTransactionBasic(t *testing.T) {
@@ -26,7 +27,7 @@ func TestTransactionBasic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create engine: %v", err)
 	}
-	defer db.Close()
+	defer errors.CloseWithFatal(db, "txn-db")
 
 	// Write some initial data
 	if err := db.PutWithTS([]byte("key1"), []byte("initial"), 1); err != nil {
@@ -81,7 +82,7 @@ func TestTransactionRollback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create engine: %v", err)
 	}
-	defer db.Close()
+	defer errors.CloseWithFatal(db, "txn-db")
 
 	tx := Begin(db, 1)
 	if err := tx.Put([]byte("key"), []byte("value")); err != nil {
@@ -113,7 +114,7 @@ func TestTransactionDelete(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create engine: %v", err)
 	}
-	defer db.Close()
+	defer errors.CloseWithFatal(db, "txn-db")
 
 	// Write initial
 	if err := db.PutWithTS([]byte("key"), []byte("value"), 1); err != nil {
@@ -150,7 +151,7 @@ func TestTransactionClosed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create engine: %v", err)
 	}
-	defer db.Close()
+	defer errors.CloseWithFatal(db, "txn-db")
 
 	tx := Begin(db, 1)
 	if err := tx.Commit(); err != nil {
@@ -186,7 +187,7 @@ func TestTransactionConflict(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create engine: %v", err)
 	}
-	defer db.Close()
+	defer errors.CloseWithFatal(db, "txn-db")
 
 	// Запись начального значения
 	if err := db.PutWithTS([]byte("key"), []byte("initial"), 1); err != nil {

@@ -18,6 +18,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+
+	"github.com/f4ga/ScoriaDB/internal/errors"
 )
 
 // VFS определяет абстрактный интерфейс файловой системы.
@@ -113,7 +115,7 @@ func ReadFile(vfs VFS, name string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
+	defer errors.CloseWithLog(f, "vfs-read-file")
 	return io.ReadAll(f)
 }
 
@@ -123,7 +125,7 @@ func WriteFile(vfs VFS, name string, data []byte, perm os.FileMode) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer errors.CloseWithLog(f, "vfs-write-file")
 	_, err = f.Write(data)
 	if err != nil {
 		return err

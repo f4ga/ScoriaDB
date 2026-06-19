@@ -19,6 +19,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/f4ga/ScoriaDB/internal/errors"
 )
 
 // testWALMode запускает тест в двух режимах: синхронном и с групповым коммитом.
@@ -44,7 +46,7 @@ func TestWALWriteRecover(t *testing.T) {
 		if err != nil {
 			t.Fatalf("failed to open wal: %v", err)
 		}
-		defer wal.Close()
+		defer errors.CloseWithFatal(wal, "wal")
 
 		// Записываем несколько операций
 		entries := []*WalEntry{
@@ -105,7 +107,7 @@ func TestWALCRCError(t *testing.T) {
 		if err != nil {
 			t.Fatalf("failed to open wal: %v", err)
 		}
-		defer wal.Close()
+		defer errors.CloseWithFatal(wal, "wal")
 
 		// Записываем корректную запись
 		entry := &WalEntry{Op: OpPut, Key: []byte("key"), Value: []byte("value"), Timestamp: 1}
@@ -127,14 +129,14 @@ func TestWALCRCError(t *testing.T) {
 		}
 		// Смещаемся на позицию после заголовка (например, 20 байт)
 		if _, err := file.Seek(20, 0); err != nil {
-			file.Close()
+			errors.CloseWithFatal(file, "wal-corrupt-file")
 			t.Fatalf("failed to seek: %v", err)
 		}
 		if _, err := file.Write([]byte{0xFF}); err != nil {
-			file.Close()
+			errors.CloseWithFatal(file, "wal-corrupt-file")
 			t.Fatalf("failed to write corruption: %v", err)
 		}
-		file.Close()
+		errors.CloseWithFatal(file, "wal-corrupt-file")
 
 		// Восстановление должно вернуть ошибку CRC
 		err = wal.Recover(func(entry *WalEntry) error {
@@ -155,7 +157,7 @@ func TestWALEmpty(t *testing.T) {
 		if err != nil {
 			t.Fatalf("failed to open wal: %v", err)
 		}
-		defer wal.Close()
+		defer errors.CloseWithFatal(wal, "wal")
 
 		// Восстановление из пустого WAL не должно вызывать ошибок
 		var count int
@@ -185,7 +187,7 @@ func TestWALFlush(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to open wal: %v", err)
 	}
-	defer wal.Close()
+	defer errors.CloseWithFatal(wal, "wal")
 
 	// Записываем запись
 	entry := &WalEntry{Op: OpPut, Key: []byte("key"), Value: []byte("value"), Timestamp: 1}
@@ -250,7 +252,7 @@ func TestWALCrashRecovery(t *testing.T) {
 	// Для этого получаем файл из wal и закрываем его, затем закрываем wal (без flush).
 	// Это не совсем реалистично, но демонстрирует, что данные в буфере не записаны.
 	// Вместо этого мы просто откроем новый WAL на том же файле и проверим, что запись отсутствует.
-	wal.Close() // Close вызовет flush (так как group.Close() вызывает flush). Чтобы избежать этого, нам нужно убить процесс, что невозможно в тесте.
+	errors.CloseWithFatal(wal, "wal") // Close вызовет flush (так как group.Close() вызывает flush). Чтобы избежать этого, нам нужно убить процесс, что невозможно в тесте.
 	// Поэтому мы просто тестируем, что flush работает, а не краш.
 
 	// Вместо теста краша мы просто убедимся, что после Close данные сохраняются (потому что Close вызывает flush).
@@ -260,7 +262,7 @@ func TestWALCrashRecovery(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to reopen wal: %v", err)
 	}
-	defer wal2.Close()
+	defer errors.CloseWithFatal(wal2, "wal2")
 
 	var count int
 	err = wal2.Recover(func(entry *WalEntry) error {

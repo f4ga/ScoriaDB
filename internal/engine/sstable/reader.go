@@ -21,6 +21,7 @@ import (
 	"io"
 	"os"
 
+	"github.com/f4ga/ScoriaDB/internal/errors"
 	"github.com/f4ga/ScoriaDB/internal/mvcc"
 )
 
@@ -53,22 +54,22 @@ func Open(path string) (*Reader, error) {
 
 	// Читаем футер (последние 80 байт)
 	if _, err := file.Seek(-80, io.SeekEnd); err != nil {
-		file.Close()
+		errors.CloseWithLog(file, "sstable-file")
 		return nil, fmt.Errorf("failed to seek to footer: %w", err)
 	}
 	var footer Footer
 	if err := binary.Read(file, binary.LittleEndian, &footer); err != nil {
-		file.Close()
+		errors.CloseWithLog(file, "sstable-file")
 		return nil, fmt.Errorf("failed to read footer: %w", err)
 	}
 	if footer.Magic != MagicNumber {
-		file.Close()
+		errors.CloseWithLog(file, "sstable-file")
 		return nil, fmt.Errorf("invalid SSTable magic number")
 	}
 
 	// Читаем индекс блоков
 	if _, err := file.Seek(int64(footer.IndexOffset), io.SeekStart); err != nil {
-		file.Close()
+		errors.CloseWithLog(file, "sstable-file")
 		return nil, fmt.Errorf("failed to seek to index: %w", err)
 	}
 	indexEntries := make([]IndexEntry, 0)
@@ -77,21 +78,21 @@ func Open(path string) (*Reader, error) {
 		// Читаем длину ключа
 		var keyLen uint32
 		if err := binary.Read(file, binary.LittleEndian, &keyLen); err != nil {
-			file.Close()
+			errors.CloseWithLog(file, "sstable-file")
 			return nil, fmt.Errorf("failed to read key length: %w", err)
 		}
 		remaining -= 4
 		// Читаем ключ
 		key := make([]byte, keyLen)
 		if _, err := io.ReadFull(file, key); err != nil {
-			file.Close()
+			errors.CloseWithLog(file, "sstable-file")
 			return nil, fmt.Errorf("failed to read key: %w", err)
 		}
 		remaining -= uint64(keyLen)
 		// Читаем смещение блока
 		var offset uint64
 		if err := binary.Read(file, binary.LittleEndian, &offset); err != nil {
-			file.Close()
+			errors.CloseWithLog(file, "sstable-file")
 			return nil, fmt.Errorf("failed to read block offset: %w", err)
 		}
 		remaining -= 8
@@ -100,17 +101,17 @@ func Open(path string) (*Reader, error) {
 
 	// Читаем фильтр Блума
 	if _, err := file.Seek(int64(footer.BloomOffset), io.SeekStart); err != nil {
-		file.Close()
+		errors.CloseWithLog(file, "sstable-file")
 		return nil, fmt.Errorf("failed to seek to bloom filter: %w", err)
 	}
 	var bloomSize uint32
 	if err := binary.Read(file, binary.LittleEndian, &bloomSize); err != nil {
-		file.Close()
+		errors.CloseWithLog(file, "sstable-file")
 		return nil, fmt.Errorf("failed to read bloom filter size: %w", err)
 	}
 	bloomBytes := make([]byte, bloomSize)
 	if _, err := io.ReadFull(file, bloomBytes); err != nil {
-		file.Close()
+		errors.CloseWithLog(file, "sstable-file")
 		return nil, fmt.Errorf("failed to read bloom filter: %w", err)
 	}
 	bloomFilter := DecodeBloomFilter(bloomBytes, 3) // k = 3
@@ -119,17 +120,17 @@ func Open(path string) (*Reader, error) {
 	var minKey []byte
 	if footer.MinKeyLength > 0 {
 		if _, err := file.Seek(int64(footer.MinKeyOffset), io.SeekStart); err != nil {
-			file.Close()
+			errors.CloseWithLog(file, "sstable-file")
 			return nil, fmt.Errorf("failed to seek to min key: %w", err)
 		}
 		var keyLen uint32
 		if err := binary.Read(file, binary.LittleEndian, &keyLen); err != nil {
-			file.Close()
+			errors.CloseWithLog(file, "sstable-file")
 			return nil, fmt.Errorf("failed to read min key length: %w", err)
 		}
 		minKey = make([]byte, keyLen)
 		if _, err := io.ReadFull(file, minKey); err != nil {
-			file.Close()
+			errors.CloseWithLog(file, "sstable-file")
 			return nil, fmt.Errorf("failed to read min key: %w", err)
 		}
 	}
@@ -138,17 +139,17 @@ func Open(path string) (*Reader, error) {
 	var maxKey []byte
 	if footer.MaxKeyLength > 0 {
 		if _, err := file.Seek(int64(footer.MaxKeyOffset), io.SeekStart); err != nil {
-			file.Close()
+			errors.CloseWithLog(file, "sstable-file")
 			return nil, fmt.Errorf("failed to seek to max key: %w", err)
 		}
 		var keyLen uint32
 		if err := binary.Read(file, binary.LittleEndian, &keyLen); err != nil {
-			file.Close()
+			errors.CloseWithLog(file, "sstable-file")
 			return nil, fmt.Errorf("failed to read max key length: %w", err)
 		}
 		maxKey = make([]byte, keyLen)
 		if _, err := io.ReadFull(file, maxKey); err != nil {
-			file.Close()
+			errors.CloseWithLog(file, "sstable-file")
 			return nil, fmt.Errorf("failed to read max key: %w", err)
 		}
 	}

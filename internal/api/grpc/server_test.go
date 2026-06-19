@@ -18,6 +18,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/f4ga/ScoriaDB/internal/errors"
 	"github.com/f4ga/ScoriaDB/pkg/scoria"
 	"github.com/f4ga/ScoriaDB/scoriadb/proto"
 	"google.golang.org/grpc/codes"
@@ -31,7 +32,7 @@ func TestServer_GetPut(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create database: %v", err)
 	}
-	defer db.Close()
+	defer errors.CloseWithFatal(db, "grpc-test-db")
 
 	// Create server
 	srv := NewServer(db, []byte("test-secret"))
@@ -87,7 +88,7 @@ func TestServer_Delete(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create database: %v", err)
 	}
-	defer db.Close()
+	defer errors.CloseWithFatal(db, "grpc-test-db")
 
 	srv := NewServer(db, []byte("test-secret"))
 	ctx := context.Background()
@@ -130,7 +131,7 @@ func TestServer_BeginCommitTxn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create database: %v", err)
 	}
-	defer db.Close()
+	defer errors.CloseWithFatal(db, "grpc-test-db")
 
 	srv := NewServer(db, []byte("test-secret"))
 	ctx := context.Background()

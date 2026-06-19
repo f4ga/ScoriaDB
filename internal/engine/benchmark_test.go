@@ -21,6 +21,8 @@ import (
 	"math"
 	"os"
 	"testing"
+
+	"github.com/f4ga/ScoriaDB/internal/errors"
 )
 
 // openBenchDB — вспомогательная функция, создающая временную БД для бенчмарков
@@ -44,7 +46,7 @@ func openBenchDB(b *testing.B) *LSMEngine {
 // ------------------------------------------------------------
 func BenchmarkPutSmallValue(b *testing.B) {
 	db := openBenchDB(b)
-	defer db.Close()
+	defer errors.CloseWithFatal(db, "bench-db")
 
 	key := []byte("bench:key")
 	value := []byte("small-value")
@@ -63,7 +65,7 @@ func BenchmarkPutSmallValue(b *testing.B) {
 // ------------------------------------------------------------
 func BenchmarkPutLargeValue(b *testing.B) {
 	db := openBenchDB(b)
-	defer db.Close()
+	defer errors.CloseWithFatal(db, "bench-db")
 
 	key := []byte("bench:key")
 	value := make([]byte, 4096)
@@ -83,7 +85,7 @@ func BenchmarkPutLargeValue(b *testing.B) {
 // ------------------------------------------------------------
 func BenchmarkPutSmallValue_Sync(b *testing.B) {
 	db := openBenchDB(b)
-	defer db.Close()
+	defer errors.CloseWithFatal(db, "bench-db")
 
 	// Создаём WAL с синхронным режимом (без group commit)
 	// В текущей реализации это достигается передачей опций
@@ -112,7 +114,7 @@ func BenchmarkPutSmallValue_Sync(b *testing.B) {
 // ------------------------------------------------------------
 func BenchmarkPutLargeValue_Sync(b *testing.B) {
 	db := openBenchDB(b)
-	defer db.Close()
+	defer errors.CloseWithFatal(db, "bench-db")
 
 	key := []byte("bench:key")
 	value := make([]byte, 4096)
@@ -132,7 +134,7 @@ func BenchmarkPutLargeValue_Sync(b *testing.B) {
 // ------------------------------------------------------------
 func BenchmarkGetExisting(b *testing.B) {
 	db := openBenchDB(b)
-	defer db.Close()
+	defer errors.CloseWithFatal(db, "bench-db")
 
 	key := []byte("get:key")
 	value := []byte("some-data")
@@ -155,7 +157,7 @@ func BenchmarkGetExisting(b *testing.B) {
 // ------------------------------------------------------------
 func BenchmarkGetMissing(b *testing.B) {
 	db := openBenchDB(b)
-	defer db.Close()
+	defer errors.CloseWithFatal(db, "bench-db")
 
 	key := []byte("missing:key")
 
@@ -173,7 +175,7 @@ func BenchmarkGetMissing(b *testing.B) {
 // ------------------------------------------------------------
 func BenchmarkScan(b *testing.B) {
 	db := openBenchDB(b)
-	defer db.Close()
+	defer errors.CloseWithFatal(db, "bench-db")
 
 	// Заполняем 10 000 ключей с префиксом "scan:"
 	for i := 0; i < 10000; i++ {

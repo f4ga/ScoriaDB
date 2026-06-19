@@ -16,6 +16,8 @@ package cf
 
 import (
 	"testing"
+
+	"github.com/f4ga/ScoriaDB/internal/errors"
 )
 
 func TestCFWriteBatchBasic(t *testing.T) {
@@ -24,7 +26,7 @@ func TestCFWriteBatchBasic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create registry: %v", err)
 	}
-	defer reg.Close()
+	defer errors.CloseWithFatal(reg, "cf-registry")
 
 	// Создаём два CF
 	err = reg.CreateCF("cf1")
@@ -89,7 +91,7 @@ func TestCFWriteBatchEmpty(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create registry: %v", err)
 	}
-	defer reg.Close()
+	defer errors.CloseWithFatal(reg, "cf-registry")
 
 	batch := NewCFWriteBatch()
 	commitTS, err := ApplyCFBatch(reg, batch)
@@ -119,7 +121,7 @@ func TestCFWriteBatchNonExistentCF(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create registry: %v", err)
 	}
-	defer reg.Close()
+	defer errors.CloseWithFatal(reg, "cf-registry")
 
 	batch := NewCFWriteBatch()
 	batch.AddPut("nonexistent", []byte("key"), []byte("value"))
