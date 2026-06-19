@@ -6,27 +6,34 @@ __pycache__/
 # ScoriaDB runtime artifacts
 wal.log
 *.log
+*.test
+*.out
+*.prof
+*.pprof
+trace.out
+cpu.prof
+mem.prof
 
 # Temporary files
 *.md.tmp
 functz.md
-plan.md   # если не хочешь коммитить план
-wal.log
-*.log
-data/ 
+*.md
+!README.md
+group_commit.md
+TECHDEBT.md
+NOLINT.md
+
+# Build artifacts
 scoria
 scoria-server
 scoria-cli
 server
-plan1.md
-functz.md
-NOLINT.md
-TECHDEBT.md
 cli
 sstable.test
-
-# C extensions
+engine.test
 *.so
+*.manifest
+*.spec
 
 # Distribution / packaging
 .Python
@@ -48,14 +55,6 @@ share/python-wheels/
 *.egg
 MANIFEST
 
-# PyInstaller
-*.manifest
-*.spec
-
-# Installer logs
-pip-log.txt
-pip-delete-this-directory.txt
-
 # Unit test / coverage reports
 htmlcov/
 .tox/
@@ -75,13 +74,11 @@ cover/
 *.mo
 *.pot
 
-# Django stuff:
+# Django / Flask stuff:
 *.log
 local_settings.py
 db.sqlite3
 db.sqlite3-journal
-
-# Flask stuff:
 instance/
 .webassets-cache
 
@@ -107,16 +104,12 @@ ipython_config.py
 # pyenv
 .python-version
 
-# pipenv
+# pipenv / poetry / pdm
 Pipfile.lock
-
-# poetry
 poetry.lock
-
-# pdm
 .pdm.toml
 
-# PEP 582; used by e.g. github.com/DmytroLitvinov/awesome-flake8-extensions
+# PEP 582
 __pypackages__/
 
 # Celery stuff
@@ -195,20 +188,20 @@ cython_debug/
 *.ckpt
 *.safetensors
 
-# Data directories (if you store data locally)
+# Data directories
 data/
 datasets/
 models/
 outputs/
 logs/
 mlruns/
+benchmarks/
 
-# Frontend build (if applicable)
+# Frontend build
 node_modules/
 bower_components/
 dist/
 build/
-*.log
 
 # Environment variables
 .env
@@ -236,3 +229,15 @@ Thumbs.db
 *.swp
 *.swo
 *~
+
+# Go specific
+go.sum
+*.mod
+vendor/
+
+# CI / linting
+.golangci.bck.yml
+.golangci.yml.old
+
+# Temporary benchmark outputs
+bench_*.txt
