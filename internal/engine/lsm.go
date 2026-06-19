@@ -329,6 +329,122 @@ func (e *LSMEngine) DeleteWithTS(key []byte, commitTS uint64) error {
 	return nil
 }
 
+// Iterator — интерфейс для итерации по ключам.
+type Iterator interface {
+	Next() bool
+	Key() []byte
+	Value() []byte
+	Err() error
+	Close() error
+}
+
+// engineIteratorAdapter адаптирует sstable.Iterator к engine.Iterator.
+// Преобразует mvcc.MVCCKey → []byte (берёт только .Key),
+// добавляет Err() (всегда nil) и преобразует Close() в Close() error.
+type engineIteratorAdapter struct {
+	inner  sstable.Iterator
+	prefix []byte
+}
+
+func (it *engineIteratorAdapter) Next() bool {
+	for it.inner.Next() {
+		if bytes.HasPrefix(it.inner.Key().Key, it.prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func (it *engineIteratorAdapter) Key() []byte {
+	return it.inner.Key().Key
+}
+
+func (it *engineIteratorAdapter) Value() []byte {
+	return it.inner.Value()
+}
+
+func (it *engineIteratorAdapter) Err() error {
+	return nil
+}
+
+func (it *engineIteratorAdapter) Close() error {
+	it.inner.Close()
+	return nil
+}
+
+// memTableIteratorAdapter адаптирует MemTableIterator к sstable.Iterator.
+// Проксирует все вызовы к MemTableIterator.
+type memTableIteratorAdapter struct {
+	inner *MemTableIterator
+}
+
+func (it *memTableIteratorAdapter) Next() bool {
+	return it.inner.Next()
+}
+
+func (it *memTableIteratorAdapter) Key() mvcc.MVCCKey {
+	return it.inner.Key()
+}
+
+func (it *memTableIteratorAdapter) Value() []byte {
+	return it.inner.Value()
+}
+
+func (it *memTableIteratorAdapter) Close() {
+	it.inner.Close()
+}
+
+// emptyIterator — пустой итератор, который сразу возвращает false.
+type emptyIterator struct{}
+
+func (it *emptyIterator) Next() bool    { return false }
+func (it *emptyIterator) Key() []byte   { return nil }
+func (it *emptyIterator) Value() []byte { return nil }
+func (it *emptyIterator) Err() error    { return nil }
+func (it *emptyIterator) Close() error  { return nil }
+
+// Scan возвращает итератор по ключам с префиксом.
+// Собирает данные из активной MemTable, frozen MemTable и SSTable,
+// объединяя их через sstable.NewMergeIterator.
+func (e *LSMEngine) Scan(prefix []byte) Iterator {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+
+	var iters []sstable.Iterator
+
+	// Активная MemTable
+	if e.memTable != nil {
+		iters = append(iters, &memTableIteratorAdapter{inner: e.memTable.NewIterator()})
+	}
+
+	// Frozen MemTable
+	if e.frozenMemTable != nil {
+		iters = append(iters, &memTableIteratorAdapter{inner: e.frozenMemTable.NewIterator()})
+	}
+
+	// SSTable из всех уровней
+	for _, level := range e.levels {
+		for _, sst := range level {
+			sstIter, err := sst.NewIterator()
+			if err == nil {
+				iters = append(iters, sstIter)
+			} else {
+				log.Printf("[Scan] failed to create iterator for SSTable: %v", err)
+			}
+		}
+	}
+
+	if len(iters) == 0 {
+		return &emptyIterator{}
+	}
+
+	mergeIter := sstable.NewMergeIterator(iters)
+	return &engineIteratorAdapter{
+		inner:  mergeIter,
+		prefix: prefix,
+	}
+}
+
 func (e *LSMEngine) WriteAtomicBatch(data []byte, commitTS uint64) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
