@@ -15,8 +15,9 @@
 package txn
 
 import (
-	"github.com/f4ga/ScoriaDB/internal/engine"
 	"testing"
+
+	"github.com/f4ga/ScoriaDB/internal/engine"
 )
 
 func TestWriteBatchBasic(t *testing.T) {

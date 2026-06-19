@@ -15,8 +15,9 @@
 package engine
 
 import (
-	"github.com/f4ga/ScoriaDB/internal/mvcc"
 	"testing"
+
+	"github.com/f4ga/ScoriaDB/internal/mvcc"
 )
 
 func TestMemTablePutGet(t *testing.T) {

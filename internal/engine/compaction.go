@@ -17,11 +17,12 @@ package engine
 import (
 	"bytes"
 	"fmt"
-	"github.com/f4ga/ScoriaDB/internal/engine/sstable"
-	"github.com/f4ga/ScoriaDB/internal/mvcc"
 	"log"
 	"path/filepath"
 	"sort"
+
+	"github.com/f4ga/ScoriaDB/internal/engine/sstable"
+	"github.com/f4ga/ScoriaDB/internal/mvcc"
 )
 
 // compactLevel0 performs compaction from level 0 to level 1.

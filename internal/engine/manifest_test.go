@@ -15,10 +15,11 @@
 package engine
 
 import (
-	"github.com/f4ga/ScoriaDB/internal/engine/vfs"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/f4ga/ScoriaDB/internal/engine/vfs"
 )
 
 func TestNewManifest(t *testing.T) {

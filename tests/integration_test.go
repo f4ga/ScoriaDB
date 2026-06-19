@@ -15,8 +15,9 @@
 package tests
 
 import (
-	"github.com/f4ga/ScoriaDB/pkg/scoria"
 	"testing"
+
+	"github.com/f4ga/ScoriaDB/pkg/scoria"
 )
 
 func TestIntegration(t *testing.T) {

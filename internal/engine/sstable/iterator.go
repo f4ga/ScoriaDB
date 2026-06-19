@@ -16,8 +16,9 @@ package sstable
 
 import (
 	"encoding/binary"
-	"github.com/f4ga/ScoriaDB/internal/mvcc"
 	"io"
+
+	"github.com/f4ga/ScoriaDB/internal/mvcc"
 )
 
 // SSTableIterator iterates over all key-value pairs in an SSTable.

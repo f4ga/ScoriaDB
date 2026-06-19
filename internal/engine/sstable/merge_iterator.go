@@ -16,6 +16,7 @@ package sstable
 
 import (
 	"container/heap"
+
 	"github.com/f4ga/ScoriaDB/internal/mvcc"
 )
 

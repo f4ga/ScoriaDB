@@ -15,8 +15,9 @@
 package scoria_test
 
 import (
-	"github.com/f4ga/ScoriaDB/pkg/scoria"
 	"testing"
+
+	"github.com/f4ga/ScoriaDB/pkg/scoria"
 )
 
 func TestScoriaDBCF(t *testing.T) {

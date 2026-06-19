@@ -17,6 +17,7 @@ package sstable
 import (
 	"encoding/binary"
 	"errors"
+
 	"github.com/f4ga/ScoriaDB/internal/mvcc"
 )
 

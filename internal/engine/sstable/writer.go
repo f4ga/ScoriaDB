@@ -18,8 +18,9 @@ import (
 	"bufio"
 	"encoding/binary"
 	"fmt"
-	"github.com/f4ga/ScoriaDB/internal/mvcc"
 	"os"
+
+	"github.com/f4ga/ScoriaDB/internal/mvcc"
 )
 
 const (

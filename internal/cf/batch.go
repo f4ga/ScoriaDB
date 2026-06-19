@@ -16,6 +16,7 @@ package cf
 
 import (
 	"fmt"
+
 	"github.com/f4ga/ScoriaDB/internal/engine"
 	"github.com/f4ga/ScoriaDB/internal/txn"
 )

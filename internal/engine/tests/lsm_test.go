@@ -15,9 +15,10 @@
 package engine_test
 
 import (
+	"testing"
+
 	"github.com/f4ga/ScoriaDB/internal/engine"
 	"github.com/f4ga/ScoriaDB/internal/txn"
-	"testing"
 )
 
 func TestLSMEnginePutGet(t *testing.T) {

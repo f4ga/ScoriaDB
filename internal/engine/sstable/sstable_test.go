@@ -15,10 +15,11 @@
 package sstable
 
 import (
-	"github.com/f4ga/ScoriaDB/internal/mvcc"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/f4ga/ScoriaDB/internal/mvcc"
 )
 
 func TestWriterAndReader(t *testing.T) {
