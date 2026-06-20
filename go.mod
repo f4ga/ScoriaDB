@@ -6,7 +6,6 @@ require (
 	github.com/c-bata/go-prompt v0.2.6
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/btree v1.1.3
-	github.com/gorilla/websocket v1.5.3
 	github.com/spf13/cobra v1.10.2
 	golang.org/x/crypto v0.53.0
 	google.golang.org/grpc v1.81.1
