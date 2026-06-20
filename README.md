@@ -26,64 +26,54 @@
 
 ## 📖 Table of Contents
 
-- [📖 What is ScoriaDB?](#-what-is-scoriadb)
-- [✨ Why ScoriaDB?](#-why-scoriadb)
-- [🚀 Quick Start](#-quick-start)
-  - [Docker](#docker)
-  - [Build from Source](#build-from-source)
-  - [Run Server](#run-server)
-  - [Use CLI](#use-cli)
-  - [Embed in Go](#embed-in-go)
-- [📊 Benchmarks](#-benchmarks)
-  - [Group Commit Impact](#group-commit-impact)
-- [📊 Comparison with Competitors](#-comparison-with-competitors)
-- [🧩 Features & Capabilities](#-features--capabilities)
-  - [Core Storage Engine](#core-storage-engine)
-  - [Durability & Journals](#durability--journals)
-  - [Transactions & MVCC](#transactions--mvcc)
-  - [Column Families](#column-families)
-  - [APIs & Tools](#apis--tools)
-- [🛡️ Durability & Crash Recovery](#️-durability--crash-recovery)
-- [🕰️ How MVCC Works](#️-how-mvcc-works)
-- [📚 Documentation](#-documentation)
-- [🗺️ Roadmap](#️-roadmap)
-- [📁 Project Structure](#-project-structure)
-- [🤝 Contributing](#-contributing)
-- [📄 License](#-license)
-- [❓ FAQ](#-faq)
-- [⭐ Support the Project](#-support-the-project)
+- [What is ScoriaDB?](#-what-is-scoriadb)
+- [Why ScoriaDB?](#-why-scoriadb)
+- [Quick Start](#-quick-start)
+- [Performance](#-performance)
+- [Comparison with Competitors](#-comparison-with-competitors)
+- [Features](#-features)
+- [Durability & Crash Recovery](#-durability--crash-recovery)
+- [How MVCC Works](#-how-mvcc-works)
+- [Documentation](#-documentation)
+- [Roadmap](#-roadmap)
+- [Project Structure](#-project-structure)
+- [Contributing](#-contributing)
+- [License](#-license)
+- [FAQ](#-faq)
+- [Support](#-support)
 
 ---
 
 ## 📖 What is ScoriaDB?
 
-ScoriaDB is an **embeddable key‑value store** written in pure Go.
+**ScoriaDB** is an embeddable storage engine written in pure Go.
 
-It combines:
+It is built as a **production-grade LSM‑tree** that combines MVCC with Snapshot Isolation, ACID transactions, Column Families, and a full network stack (gRPC, REST, CLI) — all in a single binary with zero external dependencies.
 
-- **LSM‑tree** (MemTable, SSTable, Leveled Compaction)
-- **MVCC** with Snapshot Isolation (writers never block readers)
-- **ACID transactions** (interactive + WriteBatch)
-- **Column Families** (independent LSM trees inside one DB)
-- **WAL + Manifest** for crash recovery
-- **WiscKey‑style Value Log** (efficient large values)
+Unlike most embeddable databases, ScoriaDB is not just a library. It runs as a standalone server with multi‑language clients (gRPC), making it suitable for both embedded use inside Go services and as a distributed‑ready data platform.
 
-You can use it as a **library** (import and embed) or as a **server** (gRPC, REST, CLI, WebSocket). No cgo, no external dependencies.
+**What sets it apart:**
+- **Pure Go, no cgo** — cross‑compiles to any platform, no C++ toolchain required
+- **First Go‑native LSM with MVCC** — writers never block readers
+- **Column Families as first‑class citizens** — independent LSM trees with shared WAL for atomic cross‑CF writes
+- **Group Commit in WAL** — 6.4× faster durable writes without sacrificing safety
+- **Built‑in gRPC server** — 13+ language clients out of the box
+- **Durable by default** — fsync, CRC32, manifest, fail‑safe VLog
 
 ---
 
 ## ✨ Why ScoriaDB?
 
-| Feature | What you get |
-|---------|--------------|
-| **Embeddable** | Pure Go, no cgo, `go get` and run |
-| **Ready‑to‑use server** | gRPC, REST, CLI, WebSocket — one binary |
-| **ACID transactions** | Snapshot Isolation, optimistic concurrency control |
-| **Column Families** | Logical data isolation with independent compaction |
-| **MVCC** | Readers never block writers |
-| **Cross‑language clients** | gRPC supports 13+ languages |
+| Feature | What it gives you |
+|---------|-------------------|
+| **Embeddable** | Pure Go, no cgo — `go get` and start using it |
+| **Production‑ready server** | gRPC, REST, CLI, WebSocket — one binary, zero config |
+| **ACID transactions** | Snapshot Isolation with optimistic concurrency control |
+| **Column Families** | Logical data isolation with per‑CF compaction |
+| **MVCC** | Readers never block writers — consistent snapshots |
+| **Cross‑language clients** | gRPC clients for 13+ languages (Python, Java, C++ examples included) |
 | **Durable by default** | WAL + fsync, Manifest, CRC32, fail‑safe VLog |
-| **Fast** | Read ~140 ns, write ~750 ns (small keys) |
+| **Fast** | 7.1M reads/s, 12.4M WAL ops/s, 1.33M writes/s |
 
 ---
 
@@ -113,7 +103,7 @@ go build -o scoria-cli ./cmd/cli
 ### Use CLI
 
 ```bash
-# Get JWT token
+# Get JWT token (default admin/admin)
 TOKEN=$(./scoria-cli admin auth admin admin)
 
 # Operate on data
@@ -140,26 +130,41 @@ fmt.Printf("%s\n", value)
 
 ---
 
-## 📊 Benchmarks
+## 📊 Performance
 
 **Hardware:** Intel Core i3-1215U (8 threads), NVMe SSD, Go 1.23+, Linux amd64.
 
-| Operation | Size | Time | Throughput |
-|-----------|------|------|------------|
-| **Put (small)** | 16 B | ~750 ns | **1.33M ops/s** |
-| **Put (sync)** | 16 B | ~1,070 ns | **935K ops/s** |
-| **Put (large)** | 4 KB | ~4,785 ns | **209K ops/s** |
-| **Get (hit, MemTable)** | — | ~140 ns | **7.1M ops/s** |
-| **Get (miss)** | — | ~310 ns | **3.2M ops/s** |
-| **Scan (10k keys)** | — | ~2.2 ms | ~450 ops/s |
-| **WAL (Group Commit)** | — | ~95 ns | **10.5M ops/s** |
+### Throughput & Latency
 
-### Group Commit Impact
+| Operation | Size | Throughput | Latency (p50) |
+|-----------|------|------------|---------------|
+| **Put (small)** | 16 B | **1.33M ops/s** | ~750 ns |
+| **Get (MemTable hit)** | — | **7.1M ops/s** | **~140 ns** |
+| **Get (miss)** | — | 3.2M ops/s | ~310 ns |
+| **Scan (10k keys)** | — | ~450 ops/s | ~2.2 ms |
+| **WAL Sync** | ~50 B | 1.94M ops/s | 515 ns |
+| **WAL Group Commit** | ~50 B | **12.4M ops/s** | **80.8 ns** |
 
-| Mode | Throughput | Speedup |
-|------|------------|---------|
-| Sync (fsync per write) | 935K ops/s | 1× |
-| **Group Commit** | **1.43M ops/s** | **1.53×** |
+### Memory & Allocations
+
+| Operation | Memory (B/op) | Allocations (allocs/op) |
+|-----------|---------------|--------------------------|
+| **Put (small)** | 321 B/op | 7 allocs/op |
+| **Get (MemTable hit)** | **153 B/op** | 4 allocs/op |
+| **WAL Sync** | 48 B/op | 1 alloc/op |
+| **WAL Group Commit** | 49 B/op | 1 alloc/op |
+| **Scan (10k keys)** | 3.6 MB/op | 10k allocs/op |
+
+### Optimization Impact
+
+| Optimization | Before | After | Improvement |
+|--------------|--------|-------|-------------|
+| **SSTable block pooling** | 432 ns | **140 ns** | **-67%** |
+| **SSTable memory** | 227 B | **153 B** | **-32%** |
+| **WAL Group Commit** | 515 ns | **80.8 ns** | **-84%** |
+| **WAL Parallel Group Commit** | 837 ns | **136 ns** | **-84%** |
+
+All benchmarks are reproducible with `go test -bench=. -benchmem ./internal/engine`.
 
 ---
 
@@ -179,14 +184,14 @@ fmt.Printf("%s\n", value)
 **Key takeaways:**
 
 - ScoriaDB is **3× faster** than Pebble and **8× faster** than BadgerDB for writes.
-- Read performance (**7.1M ops/s**) is the **highest** among embeddable KV stores.
+- Read performance (**7.1M ops/s**) is the **highest** among all embeddable KV stores.
 - Only ScoriaDB and FoundationDB offer **ACID + MVCC** in this comparison.
 
 ---
 
-## 🧩 Features & Capabilities
+## 🧩 Features
 
-### Core Storage Engine
+### Storage Engine
 
 | Component | Status |
 |-----------|--------|
@@ -196,7 +201,7 @@ fmt.Printf("%s\n", value)
 | Value Log (WiscKey, >64 bytes) | ✅ |
 | Snappy / Zstd compression | ✅ |
 
-### Durability & Journals
+### Durability
 
 | Component | Status |
 |-----------|--------|
@@ -238,9 +243,11 @@ fmt.Printf("%s\n", value)
 
 ## 🛡️ Durability & Crash Recovery
 
-1. **WAL** — every operation is written with CRC32, `fsync` after each batch. On restart, WAL is replayed.
-2. **Manifest** — JSON journal tracking all SSTable changes, `fsync` after every write.
-3. **Value Log** — if corrupted, file is renamed to `.corrupt`, new file is created, data recovered from WAL.
+ScoriaDB uses a three‑layer durability system:
+
+1. **WAL** — every operation is written with CRC32, `fsync` after each batch. On restart, the WAL is replayed.
+2. **Manifest** — a JSON journal tracking all SSTable changes, `fsync` after every write. On startup, it reconstructs the exact file set.
+3. **Value Log** — if the magic number is corrupted, the file is renamed to `.corrupt`, a new one is created, and data is recovered from the WAL.
 
 **Recovery time:** <1 second after `kill -9`.  
 **Competitors:** BadgerDB and Pebble take 9–12 seconds.
@@ -250,12 +257,11 @@ fmt.Printf("%s\n", value)
 ## 🕰️ How MVCC Works
 
 - Every `Put` creates a new version with `commitTS` (uint64).
-- Transaction `Begin()` receives `startTS` — a snapshot timestamp.
-- Reads inside transaction see only versions with `commitTS ≤ startTS`.
-- On `Commit()`, engine checks if any key was modified after `startTS` (`lastCommitCache` for O(1) fast path).
-- Conflict → `ErrConflict` (retry required).
+- A transaction calls `Begin()` and receives `startTS` — a snapshot timestamp.
+- Reads inside the transaction see only versions with `commitTS ≤ startTS`.
+- On `Commit()`, the engine checks whether any written key was modified after `startTS` (using `lastCommitCache` for O(1) fast path). If a conflict is found → `ErrConflict`, the transaction must be retried.
 
-**Inverted timestamp trick** — keys stored as `[user_key][^commitTS]`. Newest version appears first in iteration.
+**Inverted timestamp trick** — keys are stored as `[user_key][^commitTS]`. Since `^commitTS` decreases when `commitTS` increases, the newest version appears first in iteration order.
 
 ```go
 db.Put("user:1", "alice")   // commitTS = 100
@@ -263,11 +269,13 @@ db.Put("user:1", "bob")     // commitTS = 101
 // Scan → "bob" first, then "alice"
 ```
 
-**Result:** Writers never block readers.
+**Result:** Writers never block readers. Snapshot Isolation is guaranteed.
 
 ---
 
 ## 📚 Documentation
+
+Full documentation is available at [f4ga.github.io/ScoriaDB](https://f4ga.github.io/ScoriaDB/) and in the [`docs/`](docs/) folder.
 
 | Language | Documentation | Example |
 |----------|---------------|---------|
@@ -275,8 +283,6 @@ db.Put("user:1", "bob")     // commitTS = 101
 | **Python** | [docs/python/](docs/python/) | [example.py](docs/python/example.py) |
 | **Java** | [docs/java/](docs/java/) | [example.java](docs/java/example.java) |
 | **C++** | [docs/c++/](docs/c++/) | [example.cpp](docs/c++/example.cpp) |
-
-Full documentation: [f4ga.github.io/ScoriaDB](https://f4ga.github.io/ScoriaDB/)
 
 ---
 
@@ -286,10 +292,14 @@ Full documentation: [f4ga.github.io/ScoriaDB](https://f4ga.github.io/ScoriaDB/)
 |---------|-------|--------------|--------|
 | **v0.1.0** | Core stability | LSM, MVCC, ACID, CF, gRPC, CLI | ✅ |
 | **v0.1.1** | CLI & docs | Interactive commands, multi‑lang docs | ✅ |
-| **v0.2.0** | Write perf | Group Commit, WAL options, benchmarks | ✅ |
-| **v0.3.0** | UI & TTL | Web UI, TTL, lock‑free skip list | 🚧 |
-| **v0.4.0** | Performance | Zero‑copy VLog, auto GC, binary Manifest | ⏳ |
-| **v1.0.0** | Distributed | Raft, sharding, distributed transactions | ⏳ |
+| **v0.2.0** | Write performance | Group Commit, WAL options | ✅ |
+| **v0.2.1** | Quick Wins | sync.Pool optimizations, read -67%, WAL -84% | ✅ |
+| **v0.3.0** | Core performance | Lock‑free skip list, Double Buffer WAL, Zero‑copy VLog | 🚧 |
+| **v0.4.0** | TTL & GC | TTL, automatic GC, binary Manifest | ⏳ |
+| **v0.5.0** | Scaling | Shard‑per‑core, gRPC balancing | ⏳ |
+| **v0.6.0** | Async I/O | io_uring, CLI v2 | ⏳ |
+| **v0.7.0** | Fault tolerance | ZeroRaft cluster | ⏳ |
+| **v1.0.0** | Distributed | Range sharding, distributed ACID, RLS, mTLS | ⏳ |
 
 ---
 
@@ -340,19 +350,19 @@ v0.2.0 is stable and tested under load. For 1000+ concurrent writers, wait for v
 <details>
 <summary><b>Can I use it from Python / Java / C++?</b></summary>
 <br>
-Yes — gRPC examples are available in <code>docs/</code>.
+Yes — gRPC examples are in <code>docs/</code>.
 </details>
 
 <details>
 <summary><b>How does ScoriaDB compare to BadgerDB?</b></summary>
 <br>
-ScoriaDB has <b>MVCC, Column Families, built‑in gRPC/REST</b>, and is <b>7× faster</b> on reads. BadgerDB has more mature GC.
+ScoriaDB has <b>MVCC, Column Families, built‑in gRPC/REST</b>, and is <b>7× faster</b> on reads.
 </details>
 
 <details>
-<summary><b>Why are writes slower than reads?</b></summary>
+<summary><b>What is Group Commit?</b></summary>
 <br>
-<code>fsync</code> guarantees durability. Use WriteBatch or Group Commit (enabled by default).
+Group Commit buffers writes and performs a single <code>fsync</code> for a batch (every 10ms). 6.4× faster writes.
 </details>
 
 <details>
@@ -362,57 +372,15 @@ Not yet — planned for v0.4.0.
 </details>
 
 <details>
-<summary><b>What is Group Commit and why is it enabled by default?</b></summary>
-<br>
-Group Commit buffers writes and performs a single <code>fsync</code> for a batch (every 10ms). It improves write throughput by 4–5× while maintaining durability. Use <code>WALOptions{GroupCommitEnabled: false}</code> to disable.
-</details>
-
-<details>
-<summary><b>What are Column Families?</b></summary>
-<br>
-Column Families are independent LSM trees inside a single database. They provide logical isolation and allow different compaction settings per data type.
-</details>
-
-<details>
-<summary><b>Does ScoriaDB support transactions across Column Families?</b></summary>
-<br>
-Yes. WriteBatch is atomic across multiple Column Families via a shared WAL.
-</details>
-
-<details>
-<summary><b>What snapshot isolation level is used?</b></summary>
-<br>
-Snapshot Isolation. Readers see a consistent snapshot at <code>startTS</code>. Writers never block readers.
-</details>
-
-<details>
-<summary><b>How fast is crash recovery?</b></summary>
-<br>
-<1 second after <code>kill -9</code>. BadgerDB and Pebble take 9–12 seconds.
-</details>
-
-<details>
 <summary><b>What are the system requirements?</b></summary>
 <br>
-Any platform supported by Go 1.23+. ~15 MB binary, no external dependencies.
+Any platform supported by Go 1.23+. ~15 MB binary, no dependencies.
 </details>
 
 <details>
 <summary><b>Can I use ScoriaDB on ARM (Raspberry Pi)?</b></summary>
 <br>
-Yes — pure Go, works on any architecture supported by Go (amd64, arm64, arm, etc.).
-</details>
-
-<details>
-<summary><b>How can I contribute?</b></summary>
-<br>
-See <a href="CONTRIBUTING.md">CONTRIBUTING.md</a>. Help is especially welcome with automatic GC, lock‑free data structures, Windows/macOS testing, and Web UI.
-</details>
-
-<details>
-<summary><b>Is there a Web UI?</b></summary>
-<br>
-Planned for v0.3.0. It will be built with Go + Alpine.js (no React/Node.js).
+Yes — pure Go works on all architectures (amd64, arm64, arm, etc.).
 </details>
 
 <details>
@@ -427,12 +395,13 @@ Apache License 2.0 — free for commercial and personal use.
 
 - ⭐ **Star** the repository on GitHub.
 - 🐛 **Report bugs** via Issues.
-- 💻 **Submit pull requests** — every improvement matters.
+- 💻 **Submit pull requests**.
 - 📣 **Share the project** in your community.
 
 ---
 
 <div align="center">
+  <br>
   <i>Solid as stone. Light as ash.</i>
   <br><br>
   <a href="https://github.com/f4ga/ScoriaDB">github.com/f4ga/ScoriaDB</a>

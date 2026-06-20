@@ -28,9 +28,11 @@ import (
 )
 
 // blockPool is a sync.Pool for reusing block buffers during SSTable reads.
+// Stores *[]byte to satisfy staticcheck (sync.Pool with pointer types).
 var blockPool = sync.Pool{
 	New: func() interface{} {
-		return make([]byte, 0, 4096)
+		buf := make([]byte, 0, 4096)
+		return &buf
 	},
 }
 
@@ -171,7 +173,15 @@ func (r *Reader) readBlock(offset uint64) ([]byte, error) {
 		return nil, err
 	}
 
-	buf := blockPool.Get().([]byte)
+	bufPtr, ok := blockPool.Get().(*[]byte)
+	if !ok {
+		buf := make([]byte, blockSize)
+		if _, err := io.ReadFull(r.file, buf); err != nil {
+			return nil, err
+		}
+		return buf, nil
+	}
+	buf := *bufPtr
 	if cap(buf) < int(blockSize) {
 		buf = make([]byte, blockSize)
 	} else {
@@ -179,7 +189,7 @@ func (r *Reader) readBlock(offset uint64) ([]byte, error) {
 	}
 
 	if _, err := io.ReadFull(r.file, buf); err != nil {
-		blockPool.Put(buf)
+		blockPool.Put(&buf)
 		return nil, err
 	}
 	return buf, nil
@@ -187,7 +197,7 @@ func (r *Reader) readBlock(offset uint64) ([]byte, error) {
 
 // ReleaseBlock returns a buffer to the pool.
 func ReleaseBlock(buf []byte) {
-	blockPool.Put(buf)
+	blockPool.Put(&buf)
 }
 
 // Lookup searches for a key in the SSTable and returns the value if found.

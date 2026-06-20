@@ -25,6 +25,27 @@ import (
 	"github.com/f4ga/ScoriaDB/internal/errors"
 )
 
+// sync.Pool для переиспользования WalEntry.
+var walEntryPool = sync.Pool{
+	New: func() interface{} { return &WalEntry{} },
+}
+
+func newWalEntry() *WalEntry {
+	entry, ok := walEntryPool.Get().(*WalEntry)
+	if !ok {
+		return &WalEntry{}
+	}
+	return entry
+}
+
+func putWalEntry(entry *WalEntry) {
+	entry.Key = nil
+	entry.Value = nil
+	entry.Timestamp = 0
+	entry.Op = 0
+	walEntryPool.Put(entry)
+}
+
 // OpType тип операции в WAL.
 type OpType byte
 
@@ -258,10 +279,10 @@ func decodeWalEntry(r io.Reader) (*WalEntry, error) {
 		return nil, fmt.Errorf("crc mismatch: stored=%x, computed=%x", crcStored, crc)
 	}
 
-	return &WalEntry{
-		Op:        op,
-		Key:       key,
-		Value:     value,
-		Timestamp: timestamp,
-	}, nil
+	entry := newWalEntry()
+	entry.Op = op
+	entry.Key = key
+	entry.Value = value
+	entry.Timestamp = timestamp
+	return entry, nil
 }

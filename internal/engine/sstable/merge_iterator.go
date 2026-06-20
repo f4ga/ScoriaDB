@@ -16,10 +16,34 @@ package sstable
 
 import (
 	"container/heap"
+	"sync"
 
 	"github.com/f4ga/ScoriaDB/internal/keys"
 	"github.com/f4ga/ScoriaDB/internal/mvcc"
 )
+
+// sync.Pool для переиспользования heapItem.
+var heapItemPool = sync.Pool{
+	New: func() interface{} { return &heapItem{} },
+}
+
+func newHeapItem(iter Iterator, key mvcc.MVCCKey, val []byte) *heapItem {
+	item, ok := heapItemPool.Get().(*heapItem)
+	if !ok {
+		return &heapItem{iter: iter, key: key, val: val}
+	}
+	item.iter = iter
+	item.key = key
+	item.val = val
+	return item
+}
+
+func putHeapItem(item *heapItem) {
+	item.iter = nil
+	item.key = mvcc.MVCCKey{}
+	item.val = nil
+	heapItemPool.Put(item)
+}
 
 // Iterator is a generic interface for iterating over key-value pairs.
 type Iterator interface {
@@ -77,11 +101,7 @@ func NewMergeIterator(iters []Iterator) *MergeIterator {
 
 	for _, iter := range iters {
 		if iter.Next() {
-			heap.Push(h, &heapItem{
-				iter: iter,
-				key:  iter.Key(),
-				val:  iter.Value(),
-			})
+			heap.Push(h, newHeapItem(iter, iter.Key(), iter.Value()))
 		} else {
 			iter.Close()
 		}
@@ -125,11 +145,7 @@ func (mi *MergeIterator) Next() bool {
 				continue
 			}
 			if it.iter.Next() {
-				heap.Push(mi.heap, &heapItem{
-					iter: it.iter,
-					key:  it.iter.Key(),
-					val:  it.iter.Value(),
-				})
+				heap.Push(mi.heap, newHeapItem(it.iter, it.iter.Key(), it.iter.Value()))
 			} else {
 				it.iter.Close()
 			}
@@ -137,11 +153,7 @@ func (mi *MergeIterator) Next() bool {
 
 		if len(bestItem.val) == 0 {
 			if bestItem.iter.Next() {
-				heap.Push(mi.heap, &heapItem{
-					iter: bestItem.iter,
-					key:  bestItem.iter.Key(),
-					val:  bestItem.iter.Value(),
-				})
+				heap.Push(mi.heap, newHeapItem(bestItem.iter, bestItem.iter.Key(), bestItem.iter.Value()))
 			} else {
 				bestItem.iter.Close()
 			}
@@ -151,11 +163,7 @@ func (mi *MergeIterator) Next() bool {
 		mi.current = bestItem
 
 		if bestItem.iter.Next() {
-			heap.Push(mi.heap, &heapItem{
-				iter: bestItem.iter,
-				key:  bestItem.iter.Key(),
-				val:  bestItem.iter.Value(),
-			})
+			heap.Push(mi.heap, newHeapItem(bestItem.iter, bestItem.iter.Key(), bestItem.iter.Value()))
 		} else {
 			bestItem.iter.Close()
 		}
@@ -193,11 +201,13 @@ func (mi *MergeIterator) Close() {
 		popped := heap.Pop(mi.heap)
 		if it, ok := popped.(*heapItem); ok {
 			it.iter.Close()
+			putHeapItem(it)
 		}
 	}
 
 	if mi.current != nil {
 		mi.current.iter.Close()
+		putHeapItem(mi.current)
 		mi.current = nil
 	}
 }

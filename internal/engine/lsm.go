@@ -244,15 +244,16 @@ func (e *LSMEngine) PutWithTS(key, value []byte, commitTS uint64) error {
 	} else {
 		storedValue = inlineValue
 	}
-	walEntry := &WalEntry{
-		Op:        OpPut,
-		Key:       key,
-		Value:     storedValue,
-		Timestamp: commitTS,
-	}
+	walEntry := newWalEntry()
+	walEntry.Op = OpPut
+	walEntry.Key = key
+	walEntry.Value = storedValue
+	walEntry.Timestamp = commitTS
 	if err := e.wal.Write(walEntry); err != nil {
+		putWalEntry(walEntry)
 		return fmt.Errorf("failed to write to wal: %w", err)
 	}
+	putWalEntry(walEntry)
 	e.memTable.Put(mvccKey, storedValue)
 	atomic.AddInt64(&e.memSize, int64(len(key)+len(value)))
 	e.updateLastCommitCache(key, commitTS)
@@ -266,15 +267,16 @@ func (e *LSMEngine) WriteAtomicBatch(data []byte, commitTS uint64) error {
 	if e.closed {
 		return fmt.Errorf("engine closed")
 	}
-	walEntry := &WalEntry{
-		Op:        OpBatch,
-		Key:       nil,
-		Value:     data,
-		Timestamp: commitTS,
-	}
+	walEntry := newWalEntry()
+	walEntry.Op = OpBatch
+	walEntry.Key = nil
+	walEntry.Value = data
+	walEntry.Timestamp = commitTS
 	if err := e.wal.Write(walEntry); err != nil {
+		putWalEntry(walEntry)
 		return fmt.Errorf("failed to write batch to wal: %w", err)
 	}
+	putWalEntry(walEntry)
 	// Decode and apply each operation to the memtable
 	ops, err := decodeBatchLocal(data)
 	if err != nil {
@@ -411,15 +413,16 @@ func (e *LSMEngine) DeleteWithTS(key []byte, commitTS uint64) error {
 	if e.closed {
 		return fmt.Errorf("engine closed")
 	}
-	walEntry := &WalEntry{
-		Op:        OpDelete,
-		Key:       key,
-		Value:     nil,
-		Timestamp: commitTS,
-	}
+	walEntry := newWalEntry()
+	walEntry.Op = OpDelete
+	walEntry.Key = key
+	walEntry.Value = nil
+	walEntry.Timestamp = commitTS
 	if err := e.wal.Write(walEntry); err != nil {
+		putWalEntry(walEntry)
 		return fmt.Errorf("failed to write to wal: %w", err)
 	}
+	putWalEntry(walEntry)
 	mvccKey := mvcc.NewMVCCKey(key, commitTS)
 	e.memTable.DeleteWithTS(mvccKey)
 	atomic.AddInt64(&e.memSize, -int64(len(key)))
