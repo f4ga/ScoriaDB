@@ -194,3 +194,122 @@ func TestInvertRevertTimestamp(t *testing.T) {
 		t.Error("InvertTimestamp should change the value")
 	}
 }
+
+func TestMVCCKeyLess(t *testing.T) {
+	tests := []struct {
+		name     string
+		a, b     MVCCKey
+		expected bool
+	}{
+		{
+			name:     "same key and timestamp",
+			a:        NewMVCCKey([]byte("key"), 100),
+			b:        NewMVCCKey([]byte("key"), 100),
+			expected: false,
+		},
+		{
+			name:     "key a less than b",
+			a:        NewMVCCKey([]byte("apple"), 100),
+			b:        NewMVCCKey([]byte("banana"), 100),
+			expected: true,
+		},
+		{
+			name:     "key a greater than b",
+			a:        NewMVCCKey([]byte("banana"), 100),
+			b:        NewMVCCKey([]byte("apple"), 100),
+			expected: false,
+		},
+		{
+			name:     "same key, newer commitTS has smaller inverted TS, so Less returns false",
+			a:        NewMVCCKey([]byte("key"), 200),
+			b:        NewMVCCKey([]byte("key"), 100),
+			expected: false,
+		},
+		{
+			name:     "same key, older commitTS has larger inverted TS, so Less returns true",
+			a:        NewMVCCKey([]byte("key"), 100),
+			b:        NewMVCCKey([]byte("key"), 200),
+			expected: true,
+		},
+		{
+			name:     "non-MVCCKey item returns false",
+			a:        NewMVCCKey([]byte("key"), 100),
+			b:        MVCCKey{},
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := tt.a.Less(tt.b)
+			if result != tt.expected {
+				t.Errorf("Less() = %v, want %v", result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestMVCCKeyCompareEdgeCases(t *testing.T) {
+	tests := []struct {
+		name     string
+		a, b     MVCCKey
+		expected int
+	}{
+		{
+			name:     "empty keys",
+			a:        NewMVCCKey([]byte{}, 100),
+			b:        NewMVCCKey([]byte{}, 100),
+			expected: 0,
+		},
+		{
+			name:     "nil keys",
+			a:        NewMVCCKey(nil, 100),
+			b:        NewMVCCKey(nil, 100),
+			expected: 0,
+		},
+		{
+			name:     "zero timestamp",
+			a:        NewMVCCKey([]byte("key"), 0),
+			b:        NewMVCCKey([]byte("key"), 0),
+			expected: 0,
+		},
+		{
+			name:     "max uint64 timestamp",
+			a:        NewMVCCKey([]byte("key"), ^uint64(0)),
+			b:        NewMVCCKey([]byte("key"), ^uint64(0)),
+			expected: 0,
+		},
+		{
+			name:     "prefix keys",
+			a:        NewMVCCKey([]byte("key"), 100),
+			b:        NewMVCCKey([]byte("key:sub"), 100),
+			expected: -1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := tt.a.Compare(tt.b)
+			if result != tt.expected {
+				t.Errorf("Compare() = %d, want %d", result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestTimestampGeneratorSetConcurrent(t *testing.T) {
+	tg := NewTimestampGenerator()
+	var wg sync.WaitGroup
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func(val uint64) {
+			defer wg.Done()
+			tg.Set(val)
+		}(uint64(i*100 + 50))
+	}
+	wg.Wait()
+	// After concurrent sets, the value should be at least the max set
+	if v := tg.Next(); v < 950 {
+		t.Errorf("expected at least 950 after concurrent Set calls, got %d", v)
+	}
+}

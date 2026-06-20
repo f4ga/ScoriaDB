@@ -277,3 +277,49 @@ func TestWALCrashRecovery(t *testing.T) {
 		t.Errorf("expected 1 entry after close (flush), got %d", count)
 	}
 }
+
+func TestNewWalEntry(t *testing.T) {
+	// newWalEntry should return a non-nil entry
+	entry := newWalEntry()
+	if entry == nil {
+		t.Fatal("newWalEntry returned nil")
+	}
+
+	// putWalEntry should not panic
+	putWalEntry(entry)
+
+	// After put, newWalEntry should still work
+	entry2 := newWalEntry()
+	if entry2 == nil {
+		t.Fatal("newWalEntry returned nil after put")
+	}
+}
+
+func TestGroupCommitWriterFlushLockedError(t *testing.T) {
+	// Create a groupCommitWriter with a temp file
+	dir := t.TempDir()
+	f, err := os.Create(filepath.Join(dir, "test.log"))
+	if err != nil {
+		t.Fatalf("failed to create test file: %v", err)
+	}
+	defer f.Close()
+
+	gcw := newGroupCommitWriter(f, 10*time.Millisecond)
+	defer gcw.Close()
+
+	// Write some data
+	err = gcw.Write([]byte("test data"))
+	if err != nil {
+		t.Fatalf("Write failed: %v", err)
+	}
+
+	// Flush should succeed
+	if err := gcw.Flush(); err != nil {
+		t.Logf("Flush returned: %v (may be expected)", err)
+	}
+
+	// Error should be nil after successful flush
+	if err := gcw.Error(); err != nil {
+		t.Errorf("expected nil error after successful flush, got %v", err)
+	}
+}

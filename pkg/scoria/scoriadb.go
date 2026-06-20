@@ -12,9 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package scoria provides the public API for ScoriaDB, a high-performance
-// embedded LSM-based key-value store with MVCC, Column Families, and
-// transaction support.
 package scoria
 
 import (
@@ -31,7 +28,7 @@ import (
 	"github.com/f4ga/ScoriaDB/internal/txn"
 )
 
-// DB — базовый интерфейс для работы без Column Families (только default CF).
+// DB is the base interface for operations without Column Families (default CF only).
 type DB interface {
 	Get(key []byte) ([]byte, error)
 	Put(key, value []byte) error
@@ -39,85 +36,68 @@ type DB interface {
 	Close() error
 }
 
-// CFDB представляет публичный интерфейс базы данных ScoriaDB с поддержкой
-// Column Families, транзакций, батчей и итераторов.
-// Этот интерфейс соответствует требованиям Промпта 4 (Embedded Go API).
+// CFDB represents the public interface of ScoriaDB with support for
+// Column Families, transactions, batches, and iterators.
 type CFDB interface {
-	// Основные операции (по умолчанию в CF "default")
+	// Basic operations (default CF)
 	Get(key []byte) ([]byte, error)
 	Put(key, value []byte) error
 	Delete(key []byte) error
-	Scan(prefix []byte) Iterator // итератор по ключам с префиксом
+	Scan(prefix []byte) Iterator
 
-	// Операции с указанием Column Family
+	// Column Family operations
 	GetCF(cf string, key []byte) ([]byte, error)
 	PutCF(cf string, key, value []byte) error
 	DeleteCF(cf string, key []byte) error
 	ScanCF(cf string, prefix []byte) Iterator
 
-	// Транзакции
+	// Transactions and batches
 	NewTransaction() Transaction
 	NewBatch() Batch
 	NewBatchForCF(cfName string) Batch
 
-	// Администрирование Column Families
+	// Column Family administration
 	CreateCF(name string) error
 	DropCF(name string) error
 	ListCFs() []string
 
-	// Закрытие
+	// Close
 	Close() error
 }
 
-// Iterator представляет итератор по ключам и значениям.
+// Iterator iterates over keys and values.
 type Iterator interface {
-	// Next перемещает итератор к следующей записи.
-	// Возвращает false, если больше записей нет.
 	Next() bool
-	// Key возвращает ключ текущей записи.
 	Key() []byte
-	// Value возвращает значение текущей записи.
 	Value() []byte
-	// Err возвращает ошибку, возникшую при итерации.
 	Err() error
-	// Close освобождает ресурсы итератора.
 	Close()
 }
 
-// Transaction представляет интерактивную транзакцию.
+// Transaction represents an interactive transaction.
 type Transaction interface {
-	// Get возвращает значение ключа в контексте транзакции.
 	Get(key []byte) ([]byte, error)
-	// Put добавляет операцию записи в транзакцию.
 	Put(key, value []byte) error
-	// Delete добавляет операцию удаления в транзакцию.
 	Delete(key []byte) error
-	// Commit применяет все изменения атомарно.
 	Commit() error
-	// Rollback отменяет транзакцию.
 	Rollback() error
 }
 
-// Batch представляет атомарный батч операций.
+// Batch represents an atomic batch of operations.
 type Batch interface {
-	// AddPut добавляет операцию записи в батч.
 	AddPut(key, value []byte)
-	// AddDelete добавляет операцию удаления в батч.
 	AddDelete(key []byte)
-	// Commit применяет все операции батча атомарно.
 	Commit() error
-	// Clear очищает батч.
 	Clear()
-	// Size возвращает количество операций в батче.
 	Size() int
 }
 
-// ScoriaDB реализация CFDB с использованием реестра Column Families.
+// ScoriaDB implements CFDB using the Column Family registry.
 type ScoriaDB struct {
 	registry *cf.Registry
 }
 
-// errorIterator — итератор, возвращающий ошибку при проверке через Err().
+// errorIterator returns an error on Err().
 type errorIterator struct {
 	err error
 }
@@ -128,20 +108,14 @@ func (it *errorIterator) Value() []byte { return nil }
 func (it *errorIterator) Err() error    { return it.err }
 func (it *errorIterator) Close()        {}
 
-// mergeIterator — итератор, объединяющий данные из активной MemTable, frozen MemTable и SSTable.
+// mergeIterator combines data from active and frozen MemTables and SSTables.
 type mergeIterator struct {
-	// собранные ключи (userKey -> latest MVCCKey)
-	keys []mvcc.MVCCKey
-	// сырые значения (inline или указатели на VLog)
-	rawValues [][]byte
-	// разрешённые значения (кеш)
+	keys           []mvcc.MVCCKey
+	rawValues      [][]byte
 	resolvedValues [][]byte
-	// движок для чтения из VLog
-	engine *engine.LSMEngine
-	// текущий индекс
-	index int
-	// ошибка, возникшая при итерации
-	err error
+	engine         *engine.LSMEngine
+	index          int
+	err            error
 }
 
 func (it *mergeIterator) Next() bool {
@@ -161,26 +135,21 @@ func (it *mergeIterator) Value() []byte {
 		return nil
 	}
 
-	// Если значение уже разрешено, возвращаем его
 	if it.resolvedValues != nil && it.resolvedValues[it.index] != nil {
 		return it.resolvedValues[it.index]
 	}
 
 	raw := it.rawValues[it.index]
-	// Если длина 12 байт — это указатель на VLog
 	if len(raw) == 12 {
-		// Декодируем указатель: [fileID: 8 байт][offset: 4 байта]
 		fileID := binary.BigEndian.Uint64(raw[0:8])
 		offset := binary.BigEndian.Uint32(raw[8:12])
 
-		// Читаем значение из VLog
 		val, err := it.engine.ReadVLogValue(fileID, offset)
 		if err != nil {
 			it.err = err
 			return nil
 		}
 
-		// Инициализируем кеш, если нужно
 		if it.resolvedValues == nil {
 			it.resolvedValues = make([][]byte, len(it.rawValues))
 		}
@@ -188,7 +157,6 @@ func (it *mergeIterator) Value() []byte {
 		return val
 	}
 
-	// Иначе это inline значение
 	return raw
 }
 
@@ -202,17 +170,14 @@ func (it *mergeIterator) Close() {
 	it.resolvedValues = nil
 }
 
-// newMergeIterator создаёт mergeIterator для указанного движка и префикса.
+// newMergeIterator creates a mergeIterator for the given engine and prefix.
 func newMergeIterator(eng *engine.LSMEngine, prefix []byte) *mergeIterator {
-	// Собираем ключи из активной MemTable
 	active := eng.ActiveMemTable()
 	frozen := eng.FrozenMemTable()
 
-	// map userKey -> latest MVCCKey (с максимальным timestamp)
 	latestKeys := make(map[string]mvcc.MVCCKey)
 	latestValues := make(map[string][]byte)
 
-	// Функция для обработки итератора MemTable
 	processMemTable := func(mt *engine.MemTable) {
 		if mt == nil {
 			return
@@ -225,12 +190,10 @@ func newMergeIterator(eng *engine.LSMEngine, prefix []byte) *mergeIterator {
 			if !bytes.HasPrefix(userKey, prefix) {
 				continue
 			}
-			// Пропускаем tombstone (значение nil)
 			value := iter.Value()
 			if value == nil {
 				continue
 			}
-			// Проверяем, есть ли уже более новая версия
 			existing, ok := latestKeys[string(userKey)]
 			if !ok || key.Timestamp > existing.Timestamp {
 				latestKeys[string(userKey)] = key
@@ -242,16 +205,14 @@ func newMergeIterator(eng *engine.LSMEngine, prefix []byte) *mergeIterator {
 	processMemTable(active)
 	processMemTable(frozen)
 
-	// TODO: добавить SSTable
+	// TODO: add SSTable
 
-	// Сортируем ключи по userKey
 	userKeys := make([]string, 0, len(latestKeys))
 	for uk := range latestKeys {
 		userKeys = append(userKeys, uk)
 	}
 	sort.Strings(userKeys)
 
-	// Строим slices для итератора
 	keys := make([]mvcc.MVCCKey, len(userKeys))
 	rawValues := make([][]byte, len(userKeys))
 	for i, uk := range userKeys {
@@ -267,7 +228,7 @@ func newMergeIterator(eng *engine.LSMEngine, prefix []byte) *mergeIterator {
 	}
 }
 
-// errorTransaction — транзакция, которая всегда возвращает ошибку.
+// errorTransaction always returns an error.
 type errorTransaction struct {
 	err error
 }
@@ -278,7 +239,7 @@ func (tx *errorTransaction) Delete(key []byte) error        { return tx.err }
 func (tx *errorTransaction) Commit() error                  { return tx.err }
 func (tx *errorTransaction) Rollback() error                { return nil }
 
-// scoriaBatch — обёртка над txn.WriteBatch, привязанная к конкретному ScoriaDB и CF.
+// scoriaBatch wraps txn.WriteBatch bound to a specific ScoriaDB and CF.
 type scoriaBatch struct {
 	db     *ScoriaDB
 	cfName string
@@ -294,12 +255,10 @@ func (b *scoriaBatch) AddDelete(key []byte) {
 }
 
 func (b *scoriaBatch) Commit() error {
-	// Получаем движок для указанного CF
 	eng, err := b.db.registry.GetCF(b.cfName)
 	if err != nil {
 		return err
 	}
-	// Применяем батч
 	_, err = txn.ApplyBatch(eng, b.inner)
 	return err
 }
@@ -312,14 +271,12 @@ func (b *scoriaBatch) Size() int {
 	return b.inner.Size()
 }
 
-// NewScoriaDB создаёт новую базу данных ScoriaDB с поддержкой Column Families.
-// dataDir — корневая директория, где будут храниться данные всех CF.
+// NewScoriaDB creates a new ScoriaDB database with Column Family support.
 func NewScoriaDB(dataDir string) (*ScoriaDB, error) {
 	return NewScoriaDBWithOptions(dataDir, engine.DefaultWALOptions())
 }
 
-// NewScoriaDBWithOptions создаёт новую базу данных ScoriaDB с указанными настройками WAL.
-// Если walOpts не заданы, используются DefaultWALOptions() с групповым коммитом.
+// NewScoriaDBWithOptions creates a new ScoriaDB with the specified WAL options.
 func NewScoriaDBWithOptions(dataDir string, walOpts engine.WALOptions) (*ScoriaDB, error) {
 	reg, err := cf.NewRegistryWithOptions(dataDir, walOpts)
 	if err != nil {
@@ -328,32 +285,51 @@ func NewScoriaDBWithOptions(dataDir string, walOpts engine.WALOptions) (*ScoriaD
 	return &ScoriaDB{registry: reg}, nil
 }
 
-// Get возвращает значение по ключу из CF "default".
+// Get returns the value for a key from the default CF.
 func (db *ScoriaDB) Get(key []byte) ([]byte, error) {
 	return db.GetCF("default", key)
 }
 
-// Put записывает значение по ключу в CF "default".
+// Put writes a key-value pair to the default CF.
 func (db *ScoriaDB) Put(key, value []byte) error {
 	return db.PutCF("default", key, value)
 }
 
-// Delete удаляет ключ из CF "default".
+// Delete removes a key from the default CF.
 func (db *ScoriaDB) Delete(key []byte) error {
 	return db.DeleteCF("default", key)
 }
 
-// GetCF возвращает значение по ключу из указанного Column Family.
 func (db *ScoriaDB) GetCF(cfName string, key []byte) ([]byte, error) {
 	eng, err := db.registry.GetCF(cfName)
 	if err != nil {
 		return nil, err
 	}
-	// Используем максимальный timestamp для получения последней версии
-	return eng.GetWithTS(key, math.MaxUint64)
+
+	// Проверяем существование ключа через GetLatestInfo
+	_, ts, err := eng.GetLatestInfo(key)
+	if err != nil {
+		return nil, err
+	}
+	if ts == 0 {
+		// Ключ не существует
+		return nil, nil
+	}
+
+	// Ключ существует, получаем значение
+	val, err := eng.GetWithTS(key, math.MaxUint64)
+	if err != nil {
+		return nil, err
+	}
+
+	// Если val == nil — значение пустое, возвращаем []byte{}
+	if val == nil {
+		return []byte{}, nil
+	}
+	return val, nil
 }
 
-// PutCF записывает значение по ключу в указанное Column Family.
+// PutCF writes a key-value pair to the specified Column Family.
 func (db *ScoriaDB) PutCF(cfName string, key, value []byte) error {
 	eng, err := db.registry.GetCF(cfName)
 	if err != nil {
@@ -363,7 +339,7 @@ func (db *ScoriaDB) PutCF(cfName string, key, value []byte) error {
 	return eng.PutWithTS(key, value, ts)
 }
 
-// DeleteCF удаляет ключ из указанного Column Family.
+// DeleteCF removes a key from the specified Column Family.
 func (db *ScoriaDB) DeleteCF(cfName string, key []byte) error {
 	eng, err := db.registry.GetCF(cfName)
 	if err != nil {
@@ -373,50 +349,52 @@ func (db *ScoriaDB) DeleteCF(cfName string, key []byte) error {
 	return eng.DeleteWithTS(key, ts)
 }
 
-// CreateCF создаёт новое Column Family.
+// CreateCF creates a new Column Family.
 func (db *ScoriaDB) CreateCF(name string) error {
+	if name == "" {
+		return fmt.Errorf("CF name cannot be empty")
+	}
 	return db.registry.CreateCF(name)
 }
 
-// DropCF удаляет Column Family.
+// DropCF drops a Column Family. System CFs cannot be dropped.
 func (db *ScoriaDB) DropCF(name string) error {
+	if name == "default" || name == "__auth__" {
+		return fmt.Errorf("cannot drop system CF: %s", name)
+	}
 	return db.registry.DropCF(name)
 }
 
-// ListCFs возвращает список имён всех Column Families.
+// ListCFs returns a list of all Column Family names.
 func (db *ScoriaDB) ListCFs() []string {
 	return db.registry.ListCFs()
 }
 
-// Scan возвращает итератор по ключам с префиксом в CF "default".
+// Scan returns an iterator over keys with the given prefix in the default CF.
 func (db *ScoriaDB) Scan(prefix []byte) Iterator {
 	return db.ScanCF("default", prefix)
 }
 
-// ScanCF возвращает итератор по ключам с префиксом в указанном Column Family.
+// ScanCF returns an iterator over keys with the given prefix in the specified CF.
 func (db *ScoriaDB) ScanCF(cfName string, prefix []byte) Iterator {
 	eng, err := db.registry.GetCF(cfName)
 	if err != nil {
-		// Возвращаем итератор с ошибкой, чтобы вызывающий код мог понять причину.
 		return &errorIterator{err: fmt.Errorf("CF %q not found: %w", cfName, err)}
 	}
 	return newMergeIterator(eng, prefix)
 }
 
-// NewTransaction создаёт новую транзакцию.
+// NewTransaction creates a new transaction on the default CF.
 func (db *ScoriaDB) NewTransaction() Transaction {
-	// Пока создаём транзакцию на движке CF "default".
 	eng, err := db.registry.GetCF("default")
 	if err != nil {
-		// Если default CF не существует (маловероятно), возвращаем транзакцию-заглушку
 		return &errorTransaction{err: err}
 	}
-	// Используем внутренний пакет txn для создания транзакции
-	startTS := uint64(0) // временно
+	startTS := eng.NextTimestamp()
 	return txn.Begin(eng, startTS)
 }
 
-// NewBatch creates a new batch of operations bound to CF "default".
+// NewBatch creates a new batch of operations bound to the default CF.
 func (db *ScoriaDB) NewBatch() Batch {
 	return &scoriaBatch{
 		db:     db,
@@ -425,7 +403,7 @@ func (db *ScoriaDB) NewBatch() Batch {
 	}
 }
 
-// NewBatchForCF creates a new batch of operations bound to the specified CF.
+// NewBatchForCF creates a new batch bound to the specified CF.
 func (db *ScoriaDB) NewBatchForCF(cfName string) Batch {
 	return &scoriaBatch{
 		db:     db,
@@ -434,20 +412,18 @@ func (db *ScoriaDB) NewBatchForCF(cfName string) Batch {
 	}
 }
 
-// Close закрывает все Column Families и освобождает ресурсы.
+// Close closes all Column Families and releases resources.
 func (db *ScoriaDB) Close() error {
 	return db.registry.Close()
 }
 
-// EmbeddedCFDB возвращает интерфейс CFDB для встраивания.
+// EmbeddedCFDB returns a CFDB interface for embedding.
 func EmbeddedCFDB(dataDir string) (CFDB, error) {
 	return NewScoriaDB(dataDir)
 }
 
-// Open открывает (или создаёт) базу данных ScoriaDB с указанными настройками.
-// Возвращает интерфейс DB, соответствующий требованиям Промпта 4.
+// Open opens (or creates) a ScoriaDB database with the given options.
 func Open(opts Options) (DB, error) {
-	// Пока игнорируем все настройки кроме WorkDir
 	walOpts := engine.DefaultWALOptions()
 	if opts.WALOptions != nil {
 		walOpts = *opts.WALOptions

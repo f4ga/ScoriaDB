@@ -15,14 +15,48 @@
 package auth
 
 import (
-	"encoding/json"
+	"context"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
 	"github.com/f4ga/ScoriaDB/internal/errors"
 	"github.com/f4ga/ScoriaDB/pkg/scoria"
 	"github.com/golang-jwt/jwt/v5"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 )
+
+// mockServerStream implements grpc.ServerStream for testing.
+type mockServerStream struct {
+	ctx context.Context
+}
+
+func (m *mockServerStream) Context() context.Context {
+	return m.ctx
+}
+
+func (m *mockServerStream) SendMsg(msg interface{}) error {
+	return nil
+}
+
+func (m *mockServerStream) RecvMsg(msg interface{}) error {
+	return nil
+}
+
+func (m *mockServerStream) SetHeader(metadata.MD) error {
+	return nil
+}
+
+func (m *mockServerStream) SendHeader(metadata.MD) error {
+	return nil
+}
+
+func (m *mockServerStream) SetTrailer(metadata.MD) {
+}
 
 func TestCreateUserAndLogin(t *testing.T) {
 	dir := t.TempDir()
@@ -32,7 +66,6 @@ func TestCreateUserAndLogin(t *testing.T) {
 	}
 	defer errors.CloseWithFatal(db, "auth-test-db")
 
-	// Ensure auth CF exists
 	err = db.CreateCF(AuthCF)
 	if err != nil {
 		t.Fatalf("failed to create auth CF: %v", err)
@@ -40,13 +73,11 @@ func TestCreateUserAndLogin(t *testing.T) {
 
 	jwtSecret := []byte("test-secret")
 
-	// Create a user
 	err = CreateUser(db, "alice", "password123", []string{RoleReadWrite})
 	if err != nil {
 		t.Fatalf("CreateUser failed: %v", err)
 	}
 
-	// Authenticate with correct credentials
 	token, err := Authenticate(db, "alice", "password123", jwtSecret)
 	if err != nil {
 		t.Fatalf("Authenticate failed with correct credentials: %v", err)
@@ -55,7 +86,6 @@ func TestCreateUserAndLogin(t *testing.T) {
 		t.Error("expected non-empty token")
 	}
 
-	// Validate the token
 	claims, err := ValidateToken(token, jwtSecret)
 	if err != nil {
 		t.Fatalf("ValidateToken failed: %v", err)
@@ -67,13 +97,11 @@ func TestCreateUserAndLogin(t *testing.T) {
 		t.Errorf("expected role 'readwrite', got %v", claims.Roles)
 	}
 
-	// Authenticate with wrong password
 	_, err = Authenticate(db, "alice", "wrong", jwtSecret)
 	if err != ErrInvalidCredentials {
 		t.Errorf("expected ErrInvalidCredentials, got %v", err)
 	}
 
-	// Authenticate with non-existent user
 	_, err = Authenticate(db, "bob", "password", jwtSecret)
 	if err != ErrUserNotFound {
 		t.Errorf("expected ErrUserNotFound, got %v", err)
@@ -117,13 +145,11 @@ func TestGetUser(t *testing.T) {
 		t.Fatalf("failed to create auth CF: %v", err)
 	}
 
-	// Create a user
 	err = CreateUser(db, "bob", "secret", []string{RoleAdmin, RoleReadWrite})
 	if err != nil {
 		t.Fatalf("CreateUser failed: %v", err)
 	}
 
-	// Retrieve the user
 	user, err := GetUser(db, "bob")
 	if err != nil {
 		t.Fatalf("GetUser failed: %v", err)
@@ -135,7 +161,6 @@ func TestGetUser(t *testing.T) {
 		t.Errorf("expected 2 roles, got %d", len(user.Roles))
 	}
 
-	// Non-existent user
 	_, err = GetUser(db, "nonexistent")
 	if err != ErrUserNotFound {
 		t.Errorf("expected ErrUserNotFound, got %v", err)
@@ -155,7 +180,6 @@ func TestListUsers(t *testing.T) {
 		t.Fatalf("failed to create auth CF: %v", err)
 	}
 
-	// Initially empty
 	users, err := ListUsers(db)
 	if err != nil {
 		t.Fatalf("ListUsers failed: %v", err)
@@ -164,7 +188,6 @@ func TestListUsers(t *testing.T) {
 		t.Errorf("expected 0 users, got %d", len(users))
 	}
 
-	// Add two users
 	err = CreateUser(db, "user1", "pass1", []string{RoleReadOnly})
 	if err != nil {
 		t.Fatal(err)
@@ -179,25 +202,9 @@ func TestListUsers(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(users) != 2 {
-		t.Logf("DEBUG: ListUsers returned %d users", len(users))
-		// Debug: iterate and print
-		iter := db.ScanCF(AuthCF, []byte("user:"))
-		for iter.Next() {
-			val := iter.Value()
-			t.Logf("Key: %q, Value length: %d, Value hex: %x", iter.Key(), len(val), val)
-			t.Logf("Value string: %q", val)
-			// Try to unmarshal manually
-			var u User
-			if err := json.Unmarshal(val, &u); err != nil {
-				t.Logf("Unmarshal error: %v", err)
-			} else {
-				t.Logf("Unmarshaled user: %+v", u)
-			}
-		}
-		iter.Close()
 		t.Errorf("expected 2 users, got %d", len(users))
 	}
-	// Order not guaranteed
+
 	names := map[string]bool{}
 	for _, u := range users {
 		names[u.Username] = true
@@ -225,7 +232,6 @@ func TestUpdateUserRoles(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Update roles
 	err = UpdateUserRoles(db, "charlie", []string{RoleAdmin, RoleReadWrite})
 	if err != nil {
 		t.Fatalf("UpdateUserRoles failed: %v", err)
@@ -246,7 +252,6 @@ func TestUpdateUserRoles(t *testing.T) {
 		t.Errorf("missing expected roles, got %v", user.Roles)
 	}
 
-	// Invalid role
 	err = UpdateUserRoles(db, "charlie", []string{"superuser"})
 	if err == nil {
 		t.Error("expected error for invalid role")
@@ -271,13 +276,11 @@ func TestDeleteUser(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Delete user
 	err = DeleteUser(db, "dave")
 	if err != nil {
 		t.Fatalf("DeleteUser failed: %v", err)
 	}
 
-	// Should not exist
 	_, err = GetUser(db, "dave")
 	if err != ErrUserNotFound {
 		t.Errorf("expected ErrUserNotFound after deletion, got %v", err)
@@ -299,13 +302,11 @@ func TestTokenExpiration(t *testing.T) {
 
 	jwtSecret := []byte("test-secret")
 
-	// Create a user
 	err = CreateUser(db, "eva", "pass", []string{RoleReadOnly})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	// Manually create a token with expired claim
 	expiredTime := time.Now().Add(-1 * time.Hour)
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, Claims{
 		Username: "eva",
@@ -321,7 +322,6 @@ func TestTokenExpiration(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Validation should fail
 	_, err = ValidateToken(tokenStr, jwtSecret)
 	if err == nil {
 		t.Error("expected error for expired token")
@@ -368,14 +368,12 @@ func TestInvalidRoleValidation(t *testing.T) {
 		t.Fatalf("failed to create auth CF: %v", err)
 	}
 
-	// Try to create user with invalid role
 	err = CreateUser(db, "invalid", "pass", []string{"superuser"})
 	if err == nil {
 		t.Error("expected error for invalid role")
 	}
 }
 
-// TestChangePasswordSuccess проверяет успешную смену пароля
 func TestChangePasswordSuccess(t *testing.T) {
 	dir := t.TempDir()
 	db, err := scoria.NewScoriaDB(dir)
@@ -391,25 +389,21 @@ func TestChangePasswordSuccess(t *testing.T) {
 
 	jwtSecret := []byte("test-secret")
 
-	// Создаём пользователя
 	err = CreateUser(db, "alice", "oldpass", []string{RoleReadWrite})
 	if err != nil {
 		t.Fatalf("CreateUser failed: %v", err)
 	}
 
-	// Меняем пароль
 	err = ChangePassword(db, "alice", "newpass")
 	if err != nil {
 		t.Fatalf("ChangePassword failed: %v", err)
 	}
 
-	// Старый пароль не должен работать
 	_, err = Authenticate(db, "alice", "oldpass", jwtSecret)
 	if err != ErrInvalidCredentials {
 		t.Errorf("expected ErrInvalidCredentials for old password, got %v", err)
 	}
 
-	// Новый пароль должен работать
 	token, err := Authenticate(db, "alice", "newpass", jwtSecret)
 	if err != nil {
 		t.Fatalf("auth with new password failed: %v", err)
@@ -419,7 +413,6 @@ func TestChangePasswordSuccess(t *testing.T) {
 	}
 }
 
-// TestChangePasswordUserNotFound проверяет ошибку при смене пароля у несуществующего пользователя
 func TestChangePasswordUserNotFound(t *testing.T) {
 	dir := t.TempDir()
 	db, err := scoria.NewScoriaDB(dir)
@@ -439,7 +432,6 @@ func TestChangePasswordUserNotFound(t *testing.T) {
 	}
 }
 
-// TestChangePasswordPreservesRoles проверяет, что роли не сбрасываются при смене пароля
 func TestChangePasswordPreservesRoles(t *testing.T) {
 	dir := t.TempDir()
 	db, err := scoria.NewScoriaDB(dir)
@@ -455,31 +447,26 @@ func TestChangePasswordPreservesRoles(t *testing.T) {
 
 	jwtSecret := []byte("test-secret")
 
-	// Создаём пользователя с ролями
 	err = CreateUser(db, "bob", "pass123", []string{RoleAdmin, RoleReadWrite})
 	if err != nil {
 		t.Fatalf("CreateUser failed: %v", err)
 	}
 
-	// Меняем пароль
 	err = ChangePassword(db, "bob", "newpass456")
 	if err != nil {
 		t.Fatalf("ChangePassword failed: %v", err)
 	}
 
-	// Аутентифицируемся с новым паролем
 	token, err := Authenticate(db, "bob", "newpass456", jwtSecret)
 	if err != nil {
 		t.Fatalf("auth failed: %v", err)
 	}
 
-	// Проверяем, что роли сохранились (через разбор токена)
 	claims, err := ValidateToken(token, jwtSecret)
 	if err != nil {
 		t.Fatalf("ValidateToken failed: %v", err)
 	}
 
-	// Проверяем наличие ролей
 	hasAdmin := false
 	hasReadWrite := false
 	for _, role := range claims.Roles {
@@ -498,7 +485,6 @@ func TestChangePasswordPreservesRoles(t *testing.T) {
 	}
 }
 
-// TestChangePasswordEmptyNewPassword проверяет, что пустой пароль не допускается
 func TestChangePasswordEmptyNewPassword(t *testing.T) {
 	dir := t.TempDir()
 	db, err := scoria.NewScoriaDB(dir)
@@ -523,8 +509,65 @@ func TestChangePasswordEmptyNewPassword(t *testing.T) {
 	}
 }
 
-// TestChangePasswordSamePassword проверяет смену на тот же пароль (должно работать, но старый пароль перестаёт работать)
-func TestChangePasswordSamePassword(t *testing.T) {
+func TestExtractBearerToken(t *testing.T) {
+	tests := []struct {
+		name     string
+		header   string
+		expected string
+	}{
+		{"valid bearer token", "Bearer mytoken123", "mytoken123"},
+		{"bearer with extra spaces", "Bearer   token-with-spaces  ", "token-with-spaces"},
+		{"no bearer prefix", "Basic dXNlcjpwYXNz", ""},
+		{"empty header", "", ""},
+		{"bearer only no token", "Bearer ", ""},
+		{"lowercase bearer", "bearer token123", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := extractBearerToken(tt.header)
+			if result != tt.expected {
+				t.Errorf("extractBearerToken(%q) = %q, want %q", tt.header, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestValidateTokenInvalidSignature(t *testing.T) {
+	jwtSecret := []byte("test-secret")
+	wrongSecret := []byte("wrong-secret")
+
+	claims := Claims{
+		Username: "testuser",
+		Roles:    []string{RoleReadOnly},
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	tokenStr, err := token.SignedString(jwtSecret)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = ValidateToken(tokenStr, wrongSecret)
+	if err == nil {
+		t.Error("expected error when validating with wrong secret")
+	}
+}
+
+func TestValidateTokenMalformed(t *testing.T) {
+	jwtSecret := []byte("test-secret")
+
+	_, err := ValidateToken("not-a-valid-token", jwtSecret)
+	if err == nil {
+		t.Error("expected error for malformed token")
+	}
+
+	_, err = ValidateToken("", jwtSecret)
+	if err == nil {
+		t.Error("expected error for empty token")
+	}
+}
+
+func TestCreateUserEmptyFields(t *testing.T) {
 	dir := t.TempDir()
 	db, err := scoria.NewScoriaDB(dir)
 	if err != nil {
@@ -537,26 +580,729 @@ func TestChangePasswordSamePassword(t *testing.T) {
 		t.Fatalf("failed to create auth CF: %v", err)
 	}
 
+	err = CreateUser(db, "", "pass", []string{RoleReadOnly})
+	if err == nil {
+		t.Error("expected error for empty username")
+	}
+
+	err = CreateUser(db, "validuser", "", []string{RoleReadOnly})
+	if err == nil {
+		t.Error("expected error for empty password")
+	}
+}
+
+func TestGetClaimsFromContext(t *testing.T) {
+	ctx := context.Background()
+
+	_, ok := GetClaimsFromContext(ctx)
+	if ok {
+		t.Error("expected false when no claims in context")
+	}
+
+	claims := &Claims{Username: "testuser", Roles: []string{RoleAdmin}}
+	ctx = context.WithValue(ctx, ContextKeyUser, claims)
+
+	result, ok := GetClaimsFromContext(ctx)
+	if !ok {
+		t.Error("expected true when claims are in context")
+	}
+	if result.Username != "testuser" {
+		t.Errorf("expected username 'testuser', got %q", result.Username)
+	}
+}
+
+func TestGetClaimsFromHTTPRequest(t *testing.T) {
+	r := httptest.NewRequest("GET", "/", nil)
+	_, ok := GetClaimsFromHTTPRequest(r)
+	if ok {
+		t.Error("expected false when no claims in request")
+	}
+
+	claims := &Claims{Username: "testuser", Roles: []string{RoleReadWrite}}
+	ctx := context.WithValue(r.Context(), HTTPContextKeyUser, claims)
+	r = r.WithContext(ctx)
+
+	result, ok := GetClaimsFromHTTPRequest(r)
+	if !ok {
+		t.Error("expected true when claims are in request")
+	}
+	if result.Username != "testuser" {
+		t.Errorf("expected username 'testuser', got %q", result.Username)
+	}
+}
+
+func TestAuthMiddlewareValidToken(t *testing.T) {
 	jwtSecret := []byte("test-secret")
 
-	err = CreateUser(db, "dave", "samepass", []string{RoleReadOnly})
+	claims := Claims{
+		Username: "testuser",
+		Roles:    []string{RoleReadOnly},
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	tokenStr, err := token.SignedString(jwtSecret)
 	if err != nil {
-		t.Fatalf("CreateUser failed: %v", err)
+		t.Fatal(err)
 	}
 
-	// Смена на тот же пароль (должна работать)
-	err = ChangePassword(db, "dave", "samepass")
+	middleware := AuthMiddleware(jwtSecret, nil)
+	handler := middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		claims, ok := GetClaimsFromHTTPRequest(r)
+		if !ok {
+			t.Error("expected claims in context")
+		}
+		if claims.Username != "testuser" {
+			t.Errorf("expected username 'testuser', got %q", claims.Username)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("GET", "/api/v1/kv/mykey", nil)
+	r.Header.Set("Authorization", "Bearer "+tokenStr)
+	handler.ServeHTTP(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected status 200 for valid token, got %d", w.Code)
+	}
+}
+
+func TestAuthInterceptorValidToken(t *testing.T) {
+	secret := []byte("test-secret")
+
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, Claims{
+		Username: "testuser",
+		Roles:    []string{RoleAdmin},
+		RegisteredClaims: jwt.RegisteredClaims{
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(1 * time.Hour)),
+			IssuedAt:  jwt.NewNumericDate(time.Now()),
+			Subject:   "testuser",
+		},
+	})
+	tokenStr, err := token.SignedString(secret)
 	if err != nil {
-		t.Fatalf("ChangePassword with same password failed: %v", err)
+		t.Fatalf("failed to sign token: %v", err)
 	}
 
-	// Старый пароль всё ещё должен работать
-	// (потому что хеш перезаписался тем же самым паролем, но bcrypt даёт разные хеши — так что работает)
-	token, err := Authenticate(db, "dave", "samepass", jwtSecret)
-	if err != nil {
-		t.Fatalf("auth with same password failed: %v", err)
+	interceptor := AuthInterceptor(secret, nil)
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		claims, ok := GetClaimsFromContext(ctx)
+		if !ok {
+			return nil, status.Error(codes.Internal, "no claims in context")
+		}
+		return claims.Username, nil
 	}
-	if token == "" {
-		t.Error("expected non-empty token")
+
+	md := metadata.Pairs("authorization", "Bearer "+tokenStr)
+	ctx := metadata.NewIncomingContext(context.Background(), md)
+
+	resp, err := interceptor(ctx, nil, &grpc.UnaryServerInfo{FullMethod: "/test.Method"}, handler)
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if resp != "testuser" {
+		t.Errorf("expected 'testuser', got %v", resp)
+	}
+}
+
+func TestAuthInterceptorSkipMethod(t *testing.T) {
+	secret := []byte("test-secret")
+	skipMethods := map[string]bool{"/test.Method": true}
+	interceptor := AuthInterceptor(secret, skipMethods)
+
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return "ok", nil
+	}
+
+	resp, err := interceptor(context.Background(), nil, &grpc.UnaryServerInfo{FullMethod: "/test.Method"}, handler)
+	if err != nil {
+		t.Fatalf("expected no error for skipped method, got %v", err)
+	}
+	if resp != "ok" {
+		t.Errorf("expected 'ok', got %v", resp)
+	}
+}
+
+func TestAuthInterceptorMissingMetadata(t *testing.T) {
+	secret := []byte("test-secret")
+	interceptor := AuthInterceptor(secret, nil)
+
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return "ok", nil
+	}
+
+	_, err := interceptor(context.Background(), nil, &grpc.UnaryServerInfo{FullMethod: "/test.Method"}, handler)
+	if err == nil {
+		t.Fatal("expected error for missing metadata")
+	}
+	if status.Code(err) != codes.Unauthenticated {
+		t.Errorf("expected Unauthenticated, got %v", status.Code(err))
+	}
+}
+
+func TestAuthInterceptorMissingAuthHeader(t *testing.T) {
+	secret := []byte("test-secret")
+	interceptor := AuthInterceptor(secret, nil)
+
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return "ok", nil
+	}
+
+	md := metadata.Pairs("other", "value")
+	ctx := metadata.NewIncomingContext(context.Background(), md)
+
+	_, err := interceptor(ctx, nil, &grpc.UnaryServerInfo{FullMethod: "/test.Method"}, handler)
+	if err == nil {
+		t.Fatal("expected error for missing auth header")
+	}
+	if status.Code(err) != codes.Unauthenticated {
+		t.Errorf("expected Unauthenticated, got %v", status.Code(err))
+	}
+}
+
+func TestAuthInterceptorInvalidToken(t *testing.T) {
+	secret := []byte("test-secret")
+	interceptor := AuthInterceptor(secret, nil)
+
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return "ok", nil
+	}
+
+	md := metadata.Pairs("authorization", "Bearer invalid-token")
+	ctx := metadata.NewIncomingContext(context.Background(), md)
+
+	_, err := interceptor(ctx, nil, &grpc.UnaryServerInfo{FullMethod: "/test.Method"}, handler)
+	if err == nil {
+		t.Fatal("expected error for invalid token")
+	}
+	if status.Code(err) != codes.Unauthenticated {
+		t.Errorf("expected Unauthenticated, got %v", status.Code(err))
+	}
+}
+
+func TestAuthInterceptorInsufficientRole(t *testing.T) {
+	secret := []byte("test-secret")
+	interceptor := AuthInterceptor(secret, nil)
+
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return "ok", nil
+	}
+
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, Claims{
+		Username: "readonly",
+		Roles:    []string{RoleReadOnly},
+		RegisteredClaims: jwt.RegisteredClaims{
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(1 * time.Hour)),
+			IssuedAt:  jwt.NewNumericDate(time.Now()),
+			Subject:   "readonly",
+		},
+	})
+	tokenStr, err := token.SignedString(secret)
+	if err != nil {
+		t.Fatalf("failed to sign token: %v", err)
+	}
+
+	md := metadata.Pairs("authorization", "Bearer "+tokenStr)
+	ctx := metadata.NewIncomingContext(context.Background(), md)
+
+	_, err = interceptor(ctx, nil, &grpc.UnaryServerInfo{FullMethod: "/scoriadb.ScoriaDB/CreateUser"}, handler)
+	if err == nil {
+		t.Fatal("expected error for insufficient role")
+	}
+	if status.Code(err) != codes.PermissionDenied {
+		t.Errorf("expected PermissionDenied, got %v", status.Code(err))
+	}
+}
+
+func TestStreamAuthInterceptorSkipMethod(t *testing.T) {
+	secret := []byte("test-secret")
+	skipMethods := map[string]bool{"/test.Stream": true}
+	interceptor := StreamAuthInterceptor(secret, skipMethods)
+
+	handler := func(srv interface{}, ss grpc.ServerStream) error {
+		return nil
+	}
+
+	err := interceptor(nil, nil, &grpc.StreamServerInfo{FullMethod: "/test.Stream"}, handler)
+	if err != nil {
+		t.Fatalf("expected no error for skipped method, got %v", err)
+	}
+}
+
+func TestStreamAuthInterceptorMissingMetadata(t *testing.T) {
+	secret := []byte("test-secret")
+	interceptor := StreamAuthInterceptor(secret, nil)
+
+	handler := func(srv interface{}, ss grpc.ServerStream) error {
+		return nil
+	}
+
+	ss := &mockServerStream{ctx: context.Background()}
+	err := interceptor(nil, ss, &grpc.StreamServerInfo{FullMethod: "/test.Stream"}, handler)
+	if err == nil {
+		t.Fatal("expected error for missing metadata")
+	}
+	if status.Code(err) != codes.Unauthenticated {
+		t.Errorf("expected Unauthenticated, got %v", status.Code(err))
+	}
+}
+
+func TestStreamAuthInterceptorMissingAuthHeader(t *testing.T) {
+	secret := []byte("test-secret")
+	interceptor := StreamAuthInterceptor(secret, nil)
+
+	handler := func(srv interface{}, ss grpc.ServerStream) error {
+		return nil
+	}
+
+	md := metadata.Pairs("other", "value")
+	ctx := metadata.NewIncomingContext(context.Background(), md)
+	ss := &mockServerStream{ctx: ctx}
+
+	err := interceptor(nil, ss, &grpc.StreamServerInfo{FullMethod: "/test.Stream"}, handler)
+	if err == nil {
+		t.Fatal("expected error for missing auth header")
+	}
+	if status.Code(err) != codes.Unauthenticated {
+		t.Errorf("expected Unauthenticated, got %v", status.Code(err))
+	}
+}
+
+func TestStreamAuthInterceptorInvalidToken(t *testing.T) {
+	secret := []byte("test-secret")
+	interceptor := StreamAuthInterceptor(secret, nil)
+
+	handler := func(srv interface{}, ss grpc.ServerStream) error {
+		return nil
+	}
+
+	md := metadata.Pairs("authorization", "Bearer invalid-token")
+	ctx := metadata.NewIncomingContext(context.Background(), md)
+	ss := &mockServerStream{ctx: ctx}
+
+	err := interceptor(nil, ss, &grpc.StreamServerInfo{FullMethod: "/test.Stream"}, handler)
+	if err == nil {
+		t.Fatal("expected error for invalid token")
+	}
+	if status.Code(err) != codes.Unauthenticated {
+		t.Errorf("expected Unauthenticated, got %v", status.Code(err))
+	}
+}
+
+func TestStreamAuthInterceptorValidToken(t *testing.T) {
+	secret := []byte("test-secret")
+	interceptor := StreamAuthInterceptor(secret, nil)
+
+	handler := func(srv interface{}, ss grpc.ServerStream) error {
+		claims, ok := GetClaimsFromContext(ss.Context())
+		if !ok {
+			return status.Error(codes.Internal, "no claims in context")
+		}
+		if claims.Username != "testuser" {
+			return status.Error(codes.PermissionDenied, "wrong user")
+		}
+		return nil
+	}
+
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, Claims{
+		Username: "testuser",
+		Roles:    []string{RoleAdmin},
+		RegisteredClaims: jwt.RegisteredClaims{
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(1 * time.Hour)),
+			IssuedAt:  jwt.NewNumericDate(time.Now()),
+			Subject:   "testuser",
+		},
+	})
+	tokenStr, err := token.SignedString(secret)
+	if err != nil {
+		t.Fatalf("failed to sign token: %v", err)
+	}
+
+	md := metadata.Pairs("authorization", "Bearer "+tokenStr)
+	ctx := metadata.NewIncomingContext(context.Background(), md)
+	ss := &mockServerStream{ctx: ctx}
+
+	err = interceptor(nil, ss, &grpc.StreamServerInfo{FullMethod: "/test.Method"}, handler)
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+}
+
+func TestStreamAuthInterceptorInsufficientRole(t *testing.T) {
+	secret := []byte("test-secret")
+	interceptor := StreamAuthInterceptor(secret, nil)
+
+	handler := func(srv interface{}, ss grpc.ServerStream) error {
+		return nil
+	}
+
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, Claims{
+		Username: "readonly",
+		Roles:    []string{RoleReadOnly},
+		RegisteredClaims: jwt.RegisteredClaims{
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(1 * time.Hour)),
+			IssuedAt:  jwt.NewNumericDate(time.Now()),
+			Subject:   "readonly",
+		},
+	})
+	tokenStr, err := token.SignedString(secret)
+	if err != nil {
+		t.Fatalf("failed to sign token: %v", err)
+	}
+
+	md := metadata.Pairs("authorization", "Bearer "+tokenStr)
+	ctx := metadata.NewIncomingContext(context.Background(), md)
+	ss := &mockServerStream{ctx: ctx}
+
+	err = interceptor(nil, ss, &grpc.StreamServerInfo{FullMethod: "/scoriadb.ScoriaDB/CreateUser"}, handler)
+	if err == nil {
+		t.Fatal("expected error for insufficient role")
+	}
+	if status.Code(err) != codes.PermissionDenied {
+		t.Errorf("expected PermissionDenied, got %v", status.Code(err))
+	}
+}
+
+func TestHasRequiredRoleForMethod(t *testing.T) {
+	tests := []struct {
+		name     string
+		method   string
+		roles    []string
+		expected bool
+	}{
+		{
+			name:     "Get with read only",
+			method:   "/scoriadb.ScoriaDB/Get",
+			roles:    []string{RoleReadOnly},
+			expected: true,
+		},
+		{
+			name:     "Put with read only",
+			method:   "/scoriadb.ScoriaDB/Put",
+			roles:    []string{RoleReadOnly},
+			expected: false,
+		},
+		{
+			name:     "Put with read write",
+			method:   "/scoriadb.ScoriaDB/Put",
+			roles:    []string{RoleReadWrite},
+			expected: true,
+		},
+		{
+			name:     "Delete with admin",
+			method:   "/scoriadb.ScoriaDB/Delete",
+			roles:    []string{RoleAdmin},
+			expected: true,
+		},
+		{
+			name:     "CreateUser with read write",
+			method:   "/scoriadb.ScoriaDB/CreateUser",
+			roles:    []string{RoleReadWrite},
+			expected: false,
+		},
+		{
+			name:     "CreateUser with admin",
+			method:   "/scoriadb.ScoriaDB/CreateUser",
+			roles:    []string{RoleAdmin},
+			expected: true,
+		},
+		{
+			name:     "Authenticate always allowed",
+			method:   "/scoriadb.ScoriaDB/Authenticate",
+			roles:    []string{},
+			expected: true,
+		},
+		{
+			name:     "Unknown method requires admin",
+			method:   "/scoriadb.ScoriaDB/UnknownMethod",
+			roles:    []string{RoleReadOnly},
+			expected: false,
+		},
+		{
+			name:     "Unknown method with admin",
+			method:   "/scoriadb.ScoriaDB/UnknownMethod",
+			roles:    []string{RoleAdmin},
+			expected: true,
+		},
+		{
+			name:     "Scan with read only",
+			method:   "/scoriadb.ScoriaDB/Scan",
+			roles:    []string{RoleReadOnly},
+			expected: true,
+		},
+		{
+			name:     "BeginTxn with read only",
+			method:   "/scoriadb.ScoriaDB/BeginTxn",
+			roles:    []string{RoleReadOnly},
+			expected: false,
+		},
+		{
+			name:     "BeginTxn with read write",
+			method:   "/scoriadb.ScoriaDB/BeginTxn",
+			roles:    []string{RoleReadWrite},
+			expected: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := hasRequiredRoleForMethod(tt.method, tt.roles)
+			if result != tt.expected {
+				t.Errorf("hasRequiredRoleForMethod(%q, %v) = %v, want %v", tt.method, tt.roles, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestHasRequiredRoleForPath(t *testing.T) {
+	tests := []struct {
+		name     string
+		path     string
+		method   string
+		roles    []string
+		expected bool
+	}{
+		{
+			name:     "GET kv with read only",
+			path:     "/api/v1/kv/mykey",
+			method:   "GET",
+			roles:    []string{RoleReadOnly},
+			expected: true,
+		},
+		{
+			name:     "PUT kv with read only",
+			path:     "/api/v1/kv/mykey",
+			method:   "PUT",
+			roles:    []string{RoleReadOnly},
+			expected: false,
+		},
+		{
+			name:     "PUT kv with read write",
+			path:     "/api/v1/kv/mykey",
+			method:   "PUT",
+			roles:    []string{RoleReadWrite},
+			expected: true,
+		},
+		{
+			name:     "DELETE kv with admin",
+			path:     "/api/v1/kv/mykey",
+			method:   "DELETE",
+			roles:    []string{RoleAdmin},
+			expected: true,
+		},
+		{
+			name:     "POST scan with read only",
+			path:     "/api/v1/kv/scan",
+			method:   "POST",
+			roles:    []string{RoleReadOnly},
+			expected: true,
+		},
+		{
+			name:     "login always allowed",
+			path:     "/api/v1/auth/login",
+			method:   "POST",
+			roles:    []string{},
+			expected: true,
+		},
+		{
+			name:     "admin path requires admin",
+			path:     "/api/v1/admin/users",
+			method:   "GET",
+			roles:    []string{RoleReadWrite},
+			expected: false,
+		},
+		{
+			name:     "admin path with admin role",
+			path:     "/api/v1/admin/users",
+			method:   "GET",
+			roles:    []string{RoleAdmin},
+			expected: true,
+		},
+		{
+			name:     "unknown path requires admin",
+			path:     "/api/v1/unknown",
+			method:   "GET",
+			roles:    []string{RoleReadOnly},
+			expected: false,
+		},
+		{
+			name:     "POST batch with read only",
+			path:     "/api/v1/kv/batch",
+			method:   "POST",
+			roles:    []string{RoleReadOnly},
+			expected: false,
+		},
+		{
+			name:     "POST batch with read write",
+			path:     "/api/v1/kv/batch",
+			method:   "POST",
+			roles:    []string{RoleReadWrite},
+			expected: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := hasRequiredRoleForPath(tt.path, tt.method, tt.roles)
+			if result != tt.expected {
+				t.Errorf("hasRequiredRoleForPath(%q, %q, %v) = %v, want %v", tt.path, tt.method, tt.roles, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestGetErrorCode(t *testing.T) {
+	tests := []struct {
+		status   int
+		expected string
+	}{
+		{status: http.StatusUnauthorized, expected: "UNAUTHORIZED"},
+		{status: http.StatusForbidden, expected: "FORBIDDEN"},
+		{status: http.StatusInternalServerError, expected: "AUTH_ERROR"},
+		{status: http.StatusBadRequest, expected: "AUTH_ERROR"},
+	}
+
+	for _, tt := range tests {
+		t.Run("", func(t *testing.T) {
+			result := getErrorCode(tt.status)
+			if result != tt.expected {
+				t.Errorf("getErrorCode(%d) = %q, want %q", tt.status, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestWriteAuthError(t *testing.T) {
+	tests := []struct {
+		name    string
+		status  int
+		message string
+	}{
+		{
+			name:    "unauthorized",
+			status:  http.StatusUnauthorized,
+			message: "missing token",
+		},
+		{
+			name:    "forbidden",
+			status:  http.StatusForbidden,
+			message: "insufficient privileges",
+		},
+		{
+			name:    "internal error",
+			status:  http.StatusInternalServerError,
+			message: "internal error",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			writeAuthError(w, tt.status, tt.message)
+
+			if w.Code != tt.status {
+				t.Errorf("expected status %d, got %d", tt.status, w.Code)
+			}
+
+			contentType := w.Header().Get("Content-Type")
+			if contentType != "application/json" {
+				t.Errorf("expected Content-Type application/json, got %s", contentType)
+			}
+
+			body := w.Body.String()
+			if body == "" {
+				t.Error("expected non-empty body")
+			}
+		})
+	}
+}
+
+func TestAuthMiddlewareSkipPath(t *testing.T) {
+	jwtSecret := []byte("test-secret")
+	skipPaths := map[string]bool{
+		"/api/v1/auth/login": true,
+	}
+
+	middleware := AuthMiddleware(jwtSecret, skipPaths)
+	handler := middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/api/v1/auth/login", nil)
+	handler.ServeHTTP(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected status 200 for skipped path, got %d", w.Code)
+	}
+}
+
+func TestAuthMiddlewareMissingHeader(t *testing.T) {
+	jwtSecret := []byte("test-secret")
+	skipPaths := map[string]bool{}
+
+	middleware := AuthMiddleware(jwtSecret, skipPaths)
+	handler := middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("GET", "/api/v1/kv/mykey", nil)
+	handler.ServeHTTP(w, r)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("expected status 401 for missing header, got %d", w.Code)
+	}
+}
+
+func TestAuthMiddlewareInvalidToken(t *testing.T) {
+	jwtSecret := []byte("test-secret")
+	skipPaths := map[string]bool{}
+
+	middleware := AuthMiddleware(jwtSecret, skipPaths)
+	handler := middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("GET", "/api/v1/kv/mykey", nil)
+	r.Header.Set("Authorization", "Bearer invalid-token")
+	handler.ServeHTTP(w, r)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("expected status 401 for invalid token, got %d", w.Code)
+	}
+}
+
+func TestAuthMiddlewareInsufficientRole(t *testing.T) {
+	jwtSecret := []byte("test-secret")
+	skipPaths := map[string]bool{}
+
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, Claims{
+		Username: "readonly",
+		Roles:    []string{RoleReadOnly},
+		RegisteredClaims: jwt.RegisteredClaims{
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(1 * time.Hour)),
+			IssuedAt:  jwt.NewNumericDate(time.Now()),
+			Subject:   "readonly",
+		},
+	})
+	tokenStr, err := token.SignedString(jwtSecret)
+	if err != nil {
+		t.Fatalf("failed to sign token: %v", err)
+	}
+
+	middleware := AuthMiddleware(jwtSecret, skipPaths)
+	handler := middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	// Try to access admin-only path with readonly role
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("PUT", "/api/v1/kv/mykey", nil)
+	r.Header.Set("Authorization", "Bearer "+tokenStr)
+	handler.ServeHTTP(w, r)
+
+	if w.Code != http.StatusForbidden {
+		t.Errorf("expected status 403 for insufficient role, got %d", w.Code)
 	}
 }

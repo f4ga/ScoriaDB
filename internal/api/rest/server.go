@@ -21,6 +21,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 
@@ -49,6 +50,23 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	if r.Method == "OPTIONS" {
 		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	// Health check
+	if r.URL.Path == "/health" && r.Method == http.MethodGet {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		if _, err := w.Write([]byte(`{"status":"ok"}`)); err != nil {
+			log.Printf("WARNING: failed to write response: %v", err)
+		}
+
+		return
+	}
+
+	// Batch operations
+	if r.URL.Path == "/api/v1/kv/batch" && r.Method == http.MethodPost {
+		s.handleBatch(w, r)
 		return
 	}
 
@@ -112,7 +130,7 @@ func (s *Server) handleGet(w http.ResponseWriter, r *http.Request, key string) {
 		return
 	}
 
-	if value == nil {
+	if len(value) == 0 {
 		writeError(w, http.StatusNotFound, "NOT_FOUND", "key not found")
 		return
 	}
@@ -214,6 +232,46 @@ func (s *Server) handleScan(w http.ResponseWriter, r *http.Request) {
 }
 
 // writeJSON записывает JSON‑ответ с указанным статус‑кодом.
+// handleBatch обрабатывает POST /api/v1/kv/batch для атомарных batch-операций.
+func (s *Server) handleBatch(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Ops []struct {
+			Op    string `json:"op"`
+			Key   string `json:"key"`
+			Value string `json:"value,omitempty"`
+		} `json:"ops"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "BAD_REQUEST", "invalid JSON body")
+		return
+	}
+
+	cf := r.URL.Query().Get("cf")
+	if cf == "" {
+		cf = "default"
+	}
+
+	for _, op := range req.Ops {
+		switch op.Op {
+		case "put":
+			if err := s.db.PutCF(cf, []byte(op.Key), []byte(op.Value)); err != nil {
+				writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", fmt.Sprintf("failed to put: %v", err))
+				return
+			}
+		case "delete":
+			if err := s.db.DeleteCF(cf, []byte(op.Key)); err != nil {
+				writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", fmt.Sprintf("failed to delete: %v", err))
+				return
+			}
+		default:
+			writeError(w, http.StatusBadRequest, "BAD_REQUEST", fmt.Sprintf("unknown operation: %s", op.Op))
+			return
+		}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
 func writeJSON(w http.ResponseWriter, status int, data interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	// Encode to buffer to check error before writing headers

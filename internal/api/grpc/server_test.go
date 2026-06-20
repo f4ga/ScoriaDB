@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/f4ga/ScoriaDB/internal/auth"
 	"github.com/f4ga/ScoriaDB/internal/errors"
 	"github.com/f4ga/ScoriaDB/pkg/scoria"
 	"github.com/f4ga/ScoriaDB/scoriadb/proto"
@@ -339,6 +340,350 @@ func TestServer_DeleteCF(t *testing.T) {
 	_, err = srv.DeleteCF(ctx, &proto.DeleteCFRequest{Name: "todelete"})
 	if err != nil {
 		t.Fatalf("DeleteCF failed: %v", err)
+	}
+}
+
+func TestServer_RollbackTxn(t *testing.T) {
+	tmpDir := t.TempDir()
+	db, err := scoria.NewScoriaDB(tmpDir)
+	if err != nil {
+		t.Fatalf("Failed to create database: %v", err)
+	}
+	defer errors.CloseWithFatal(db, "grpc-test-db")
+
+	srv := NewServer(db, []byte("test-secret"))
+	ctx := context.Background()
+
+	beginResp, err := srv.BeginTxn(ctx, &proto.BeginTxnRequest{})
+	if err != nil {
+		t.Fatalf("BeginTxn failed: %v", err)
+	}
+	txnID := beginResp.GetTxnId()
+
+	_, err = srv.RollbackTxn(ctx, &proto.RollbackTxnRequest{
+		TxnId: txnID,
+	})
+	if err != nil {
+		t.Fatalf("RollbackTxn failed: %v", err)
+	}
+
+	// Second rollback should fail (txn already removed)
+	_, err = srv.RollbackTxn(ctx, &proto.RollbackTxnRequest{
+		TxnId: txnID,
+	})
+	if status.Code(err) != codes.NotFound {
+		t.Errorf("Expected NotFound error, got %v", err)
+	}
+}
+
+func TestServer_Authenticate(t *testing.T) {
+	tmpDir := t.TempDir()
+	db, err := scoria.NewScoriaDB(tmpDir)
+	if err != nil {
+		t.Fatalf("Failed to create database: %v", err)
+	}
+	defer errors.CloseWithFatal(db, "grpc-test-db")
+
+	// Create auth CF and a user
+	err = db.CreateCF("__auth__")
+	if err != nil {
+		t.Fatalf("CreateCF failed: %v", err)
+	}
+
+	srv := NewServer(db, []byte("test-secret"))
+	ctx := context.Background()
+
+	// Create user via auth package directly
+	err = auth.CreateUser(db, "testuser", "testpass", []string{auth.RoleReadOnly})
+	if err != nil {
+		t.Fatalf("CreateUser failed: %v", err)
+	}
+
+	// Authenticate with correct credentials
+	resp, err := srv.Authenticate(ctx, &proto.AuthRequest{
+		Username: "testuser",
+		Password: "testpass",
+	})
+	if err != nil {
+		t.Fatalf("Authenticate failed: %v", err)
+	}
+	if resp.GetJwtToken() == "" {
+		t.Error("expected non-empty JWT token")
+	}
+
+	// Authenticate with wrong password
+	_, err = srv.Authenticate(ctx, &proto.AuthRequest{
+		Username: "testuser",
+		Password: "wrongpass",
+	})
+	if status.Code(err) != codes.Unauthenticated {
+		t.Errorf("expected Unauthenticated, got %v", err)
+	}
+
+	// Authenticate with non-existent user
+	_, err = srv.Authenticate(ctx, &proto.AuthRequest{
+		Username: "nonexistent",
+		Password: "pass",
+	})
+	if status.Code(err) != codes.Unauthenticated {
+		t.Errorf("expected Unauthenticated, got %v", err)
+	}
+}
+
+func TestServer_CreateUser(t *testing.T) {
+	tmpDir := t.TempDir()
+	db, err := scoria.NewScoriaDB(tmpDir)
+	if err != nil {
+		t.Fatalf("Failed to create database: %v", err)
+	}
+	defer errors.CloseWithFatal(db, "grpc-test-db")
+
+	err = db.CreateCF("__auth__")
+	if err != nil {
+		t.Fatalf("CreateCF failed: %v", err)
+	}
+
+	srv := NewServer(db, []byte("test-secret"))
+
+	// Create admin user first
+	err = auth.CreateUser(db, "admin", "adminpass", []string{auth.RoleAdmin})
+	if err != nil {
+		t.Fatalf("CreateUser failed: %v", err)
+	}
+
+	// Create context with admin claims
+	adminClaims := &auth.Claims{Username: "admin", Roles: []string{auth.RoleAdmin}}
+	ctx := context.WithValue(context.Background(), auth.ContextKeyUser, adminClaims)
+
+	// Create a new user
+	_, err = srv.CreateUser(ctx, &proto.CreateUserRequest{
+		Username: "newuser",
+		Password: "newpass",
+		Roles:    []string{auth.RoleReadOnly},
+	})
+	if err != nil {
+		t.Fatalf("CreateUser failed: %v", err)
+	}
+
+	// Create duplicate user
+	_, err = srv.CreateUser(ctx, &proto.CreateUserRequest{
+		Username: "newuser",
+		Password: "newpass",
+		Roles:    []string{auth.RoleReadOnly},
+	})
+	if status.Code(err) != codes.AlreadyExists {
+		t.Errorf("expected AlreadyExists, got %v", err)
+	}
+
+	// Create user without auth context
+	_, err = srv.CreateUser(context.Background(), &proto.CreateUserRequest{
+		Username: "unauth",
+		Password: "pass",
+		Roles:    []string{auth.RoleReadOnly},
+	})
+	if status.Code(err) != codes.Unauthenticated {
+		t.Errorf("expected Unauthenticated, got %v", err)
+	}
+
+	// Create user with non-admin role
+	readonlyClaims := &auth.Claims{Username: "reader", Roles: []string{auth.RoleReadOnly}}
+	readonlyCtx := context.WithValue(context.Background(), auth.ContextKeyUser, readonlyClaims)
+	_, err = srv.CreateUser(readonlyCtx, &proto.CreateUserRequest{
+		Username: "another",
+		Password: "pass",
+		Roles:    []string{auth.RoleReadOnly},
+	})
+	if status.Code(err) != codes.PermissionDenied {
+		t.Errorf("expected PermissionDenied, got %v", err)
+	}
+}
+
+func TestServer_ChangePassword(t *testing.T) {
+	tmpDir := t.TempDir()
+	db, err := scoria.NewScoriaDB(tmpDir)
+	if err != nil {
+		t.Fatalf("Failed to create database: %v", err)
+	}
+	defer errors.CloseWithFatal(db, "grpc-test-db")
+
+	err = db.CreateCF("__auth__")
+	if err != nil {
+		t.Fatalf("CreateCF failed: %v", err)
+	}
+
+	srv := NewServer(db, []byte("test-secret"))
+
+	// Create admin and a regular user
+	err = auth.CreateUser(db, "admin", "adminpass", []string{auth.RoleAdmin})
+	if err != nil {
+		t.Fatalf("CreateUser failed: %v", err)
+	}
+	err = auth.CreateUser(db, "targetuser", "oldpass", []string{auth.RoleReadOnly})
+	if err != nil {
+		t.Fatalf("CreateUser failed: %v", err)
+	}
+
+	adminClaims := &auth.Claims{Username: "admin", Roles: []string{auth.RoleAdmin}}
+	ctx := context.WithValue(context.Background(), auth.ContextKeyUser, adminClaims)
+
+	// Change password
+	_, err = srv.ChangePassword(ctx, &proto.ChangePasswordRequest{
+		Username:    "targetuser",
+		NewPassword: "newpass",
+	})
+	if err != nil {
+		t.Fatalf("ChangePassword failed: %v", err)
+	}
+
+	// Verify new password works
+	_, err = srv.Authenticate(context.Background(), &proto.AuthRequest{
+		Username: "targetuser",
+		Password: "newpass",
+	})
+	if err != nil {
+		t.Errorf("auth with new password failed: %v", err)
+	}
+
+	// Change password for non-existent user
+	_, err = srv.ChangePassword(ctx, &proto.ChangePasswordRequest{
+		Username:    "nonexistent",
+		NewPassword: "newpass",
+	})
+	if status.Code(err) != codes.NotFound {
+		t.Errorf("expected NotFound, got %v", err)
+	}
+
+	// Change password without auth
+	_, err = srv.ChangePassword(context.Background(), &proto.ChangePasswordRequest{
+		Username:    "targetuser",
+		NewPassword: "newpass",
+	})
+	if status.Code(err) != codes.Unauthenticated {
+		t.Errorf("expected Unauthenticated, got %v", err)
+	}
+}
+
+func TestServer_ListUsers(t *testing.T) {
+	tmpDir := t.TempDir()
+	db, err := scoria.NewScoriaDB(tmpDir)
+	if err != nil {
+		t.Fatalf("Failed to create database: %v", err)
+	}
+	defer errors.CloseWithFatal(db, "grpc-test-db")
+
+	err = db.CreateCF("__auth__")
+	if err != nil {
+		t.Fatalf("CreateCF failed: %v", err)
+	}
+
+	srv := NewServer(db, []byte("test-secret"))
+
+	// Create users
+	err = auth.CreateUser(db, "user1", "pass1", []string{auth.RoleReadOnly})
+	if err != nil {
+		t.Fatalf("CreateUser failed: %v", err)
+	}
+	err = auth.CreateUser(db, "user2", "pass2", []string{auth.RoleReadWrite})
+	if err != nil {
+		t.Fatalf("CreateUser failed: %v", err)
+	}
+
+	adminClaims := &auth.Claims{Username: "admin", Roles: []string{auth.RoleAdmin}}
+	ctx := context.WithValue(context.Background(), auth.ContextKeyUser, adminClaims)
+
+	resp, err := srv.ListUsers(ctx, &proto.ListUsersRequest{})
+	if err != nil {
+		t.Fatalf("ListUsers failed: %v", err)
+	}
+
+	if len(resp.Users) != 2 {
+		t.Errorf("expected 2 users, got %d", len(resp.Users))
+	}
+
+	// List users without auth
+	_, err = srv.ListUsers(context.Background(), &proto.ListUsersRequest{})
+	if status.Code(err) != codes.Unauthenticated {
+		t.Errorf("expected Unauthenticated, got %v", err)
+	}
+
+	// List users with non-admin role
+	readonlyClaims := &auth.Claims{Username: "reader", Roles: []string{auth.RoleReadOnly}}
+	readonlyCtx := context.WithValue(context.Background(), auth.ContextKeyUser, readonlyClaims)
+	_, err = srv.ListUsers(readonlyCtx, &proto.ListUsersRequest{})
+	if status.Code(err) != codes.PermissionDenied {
+		t.Errorf("expected PermissionDenied, got %v", err)
+	}
+}
+
+func TestServer_CreateCF_EmptyName(t *testing.T) {
+	tmpDir := t.TempDir()
+	db, err := scoria.NewScoriaDB(tmpDir)
+	if err != nil {
+		t.Fatalf("Failed to create database: %v", err)
+	}
+	defer errors.CloseWithFatal(db, "grpc-test-db")
+
+	srv := NewServer(db, []byte("test-secret"))
+	ctx := context.Background()
+
+	_, err = srv.CreateCF(ctx, &proto.CreateCFRequest{Name: ""})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Errorf("expected InvalidArgument, got %v", err)
+	}
+}
+
+func TestServer_GetWithCF(t *testing.T) {
+	tmpDir := t.TempDir()
+	db, err := scoria.NewScoriaDB(tmpDir)
+	if err != nil {
+		t.Fatalf("Failed to create database: %v", err)
+	}
+	defer errors.CloseWithFatal(db, "grpc-test-db")
+
+	srv := NewServer(db, []byte("test-secret"))
+	ctx := context.Background()
+
+	// Create custom CF first
+	_, err = srv.CreateCF(ctx, &proto.CreateCFRequest{Name: "customcf"})
+	if err != nil {
+		t.Fatalf("CreateCF failed: %v", err)
+	}
+
+	// Put with custom CF
+	_, err = srv.Put(ctx, &proto.PutRequest{
+		Key:    []byte("key1"),
+		Value:  []byte("val1"),
+		CfName: "customcf",
+	})
+	if err != nil {
+		t.Fatalf("Put failed: %v", err)
+	}
+
+	// Get with custom CF
+	resp, err := srv.Get(ctx, &proto.GetRequest{
+		Key:    []byte("key1"),
+		CfName: "customcf",
+	})
+	if err != nil {
+		t.Fatalf("Get failed: %v", err)
+	}
+	if !resp.GetFound() {
+		t.Error("expected key to be found")
+	}
+	if string(resp.GetValue()) != "val1" {
+		t.Errorf("expected 'val1', got %q", string(resp.GetValue()))
+	}
+
+	// Get with empty CF name (should default to "default")
+	resp, err = srv.Get(ctx, &proto.GetRequest{
+		Key:    []byte("key1"),
+		CfName: "",
+	})
+	if err != nil {
+		t.Fatalf("Get failed: %v", err)
+	}
+	if resp.GetFound() {
+		t.Error("expected key not to be found in default CF")
 	}
 }
 

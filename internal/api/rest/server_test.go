@@ -22,6 +22,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/f4ga/ScoriaDB/internal/auth"
 	"github.com/f4ga/ScoriaDB/internal/errors"
 	"github.com/f4ga/ScoriaDB/pkg/scoria"
 )
@@ -269,6 +270,197 @@ func TestRestServer_Batch(t *testing.T) {
 	srv.ServeHTTP(w, req)
 	if w.Code != http.StatusNotFound {
 		t.Errorf("GET batch:1 status = %d, want %d", w.Code, http.StatusNotFound)
+	}
+}
+
+func TestRestServer_Login(t *testing.T) {
+	tmpDir := t.TempDir()
+	db, err := scoria.NewScoriaDB(tmpDir)
+	if err != nil {
+		t.Fatalf("Failed to create database: %v", err)
+	}
+	defer errors.CloseWithFatal(db, "rest-test-db")
+
+	// Create auth CF and a user
+	if err := db.CreateCF("__auth__"); err != nil {
+		t.Fatalf("CreateCF failed: %v", err)
+	}
+
+	srv := NewServer(db, []byte("test-secret"))
+
+	// Create user via auth package
+	err = auth.CreateUser(db, "testuser", "testpass", []string{auth.RoleReadOnly})
+	if err != nil {
+		t.Fatalf("CreateUser failed: %v", err)
+	}
+
+	// Login with correct credentials
+	loginBody := `{"username": "testuser", "password": "testpass"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", bytes.NewReader([]byte(loginBody)))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("login status = %d, want %d", w.Code, http.StatusOK)
+	}
+	var resp map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("Failed to decode response: %v", err)
+	}
+	if resp["token"] == "" {
+		t.Error("expected non-empty token")
+	}
+
+	// Login with wrong password
+	loginBody = `{"username": "testuser", "password": "wrongpass"}`
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", bytes.NewReader([]byte(loginBody)))
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("expected 401 for wrong password, got %d", w.Code)
+	}
+
+	// Login with invalid JSON
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", bytes.NewReader([]byte("{")))
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for invalid JSON, got %d", w.Code)
+	}
+}
+
+func TestRestServer_AdminEndpoints(t *testing.T) {
+	tmpDir := t.TempDir()
+	db, err := scoria.NewScoriaDB(tmpDir)
+	if err != nil {
+		t.Fatalf("Failed to create database: %v", err)
+	}
+	defer errors.CloseWithFatal(db, "rest-test-db")
+
+	if err := db.CreateCF("__auth__"); err != nil {
+		t.Fatalf("CreateCF failed: %v", err)
+	}
+
+	srv := NewServer(db, []byte("test-secret"))
+
+	// Create admin user
+	err = auth.CreateUser(db, "admin", "adminpass", []string{auth.RoleAdmin})
+	if err != nil {
+		t.Fatalf("CreateUser failed: %v", err)
+	}
+
+	// Create a regular user
+	err = auth.CreateUser(db, "regular", "pass", []string{auth.RoleReadOnly})
+	if err != nil {
+		t.Fatalf("CreateUser failed: %v", err)
+	}
+
+	// Test ListUsers (GET /api/v1/admin/users)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/users", nil)
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("ListUsers status = %d, want %d", w.Code, http.StatusOK)
+	}
+	var listResp map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &listResp); err != nil {
+		t.Fatalf("Failed to decode response: %v", err)
+	}
+	users, ok := listResp["users"].([]interface{})
+	if !ok {
+		t.Fatalf("users field missing or not an array")
+	}
+	if len(users) != 2 {
+		t.Errorf("expected 2 users, got %d", len(users))
+	}
+
+	// Test CreateUser (POST /api/v1/admin/users)
+	createBody := `{"username": "newuser", "password": "newpass", "roles": ["readonly"]}`
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/admin/users", bytes.NewReader([]byte(createBody)))
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Errorf("CreateUser status = %d, want %d", w.Code, http.StatusCreated)
+	}
+
+	// Create duplicate user
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/admin/users", bytes.NewReader([]byte(createBody)))
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+
+	if w.Code != http.StatusConflict {
+		t.Errorf("expected 409 for duplicate user, got %d", w.Code)
+	}
+
+	// Create user with invalid JSON
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/admin/users", bytes.NewReader([]byte("{")))
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for invalid JSON, got %d", w.Code)
+	}
+}
+
+func TestRestServer_BatchErrors(t *testing.T) {
+	tmpDir := t.TempDir()
+	db, err := scoria.NewScoriaDB(tmpDir)
+	if err != nil {
+		t.Fatalf("Failed to create database: %v", err)
+	}
+	defer errors.CloseWithFatal(db, "rest-test-db")
+
+	srv := NewServer(db, []byte("test-secret"))
+
+	// Batch with invalid JSON
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/kv/batch", bytes.NewReader([]byte("{")))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for invalid JSON, got %d", w.Code)
+	}
+
+	// Batch with unknown operation
+	batchBody := `{"ops": [{"op": "unknown", "key": "test"}]}`
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/kv/batch", bytes.NewReader([]byte(batchBody)))
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for unknown op, got %d", w.Code)
+	}
+}
+
+func TestRestServer_MethodNotAllowed(t *testing.T) {
+	tmpDir := t.TempDir()
+	db, err := scoria.NewScoriaDB(tmpDir)
+	if err != nil {
+		t.Fatalf("Failed to create database: %v", err)
+	}
+	defer errors.CloseWithFatal(db, "rest-test-db")
+
+	srv := NewServer(db, []byte("test-secret"))
+
+	// POST on a key path (not scan or batch)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/kv/mykey", nil)
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Errorf("expected 405 for POST on key, got %d", w.Code)
 	}
 }
 

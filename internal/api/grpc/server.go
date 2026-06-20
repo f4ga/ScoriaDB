@@ -62,10 +62,9 @@ func (s *server) Get(ctx context.Context, req *proto.GetRequest) (*proto.GetResp
 		return nil, status.Errorf(codes.Internal, "failed to get key: %v", err)
 	}
 
-	if value == nil {
+	if len(value) == 0 {
 		return &proto.GetResponse{Found: false}, nil
 	}
-
 	return &proto.GetResponse{
 		Value: value,
 		Found: true,
@@ -266,6 +265,19 @@ func (s *server) Authenticate(ctx context.Context, req *proto.AuthRequest) (*pro
 func (s *server) generateTxnID() string {
 	// TODO: use proper UUID
 	return fmt.Sprintf("txn-%d", len(s.txns)+1)
+}
+
+// CreateCF creates a new column family
+func (s *server) CreateCF(ctx context.Context, req *proto.CreateCFRequest) (*proto.CreateCFResponse, error) {
+	cfName := req.GetName()
+	if cfName == "" {
+		return nil, status.Errorf(codes.InvalidArgument, "CF name cannot be empty")
+	}
+	err := s.db.CreateCF(cfName)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to create CF: %v", err)
+	}
+	return &proto.CreateCFResponse{}, nil
 }
 
 // ListCF returns all column family names

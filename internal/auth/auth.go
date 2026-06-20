@@ -179,7 +179,7 @@ func GetUser(cfdb scoria.CFDB, username string) (*User, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to retrieve user: %w", err)
 	}
-	if data == nil {
+	if len(data) == 0 {
 		return nil, ErrUserNotFound
 	}
 
@@ -256,7 +256,7 @@ func ChangePassword(db scoria.CFDB, username, newPassword string) error {
 	if err != nil {
 		return err
 	}
-	if val == nil {
+	if len(val) == 0 {
 		return ErrUserNotFound
 	}
 
