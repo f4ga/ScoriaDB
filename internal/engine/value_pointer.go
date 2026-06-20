@@ -19,6 +19,12 @@ import (
 	"fmt"
 )
 
+// ValuePointer points to a value in the Value Log.
+type ValuePointer struct {
+	Offset int64
+	Size   int32
+}
+
 // encodeValuePointer encodes a ValuePointer into 12 bytes.
 func encodeValuePointer(vp ValuePointer) []byte {
 	buf := make([]byte, 12)

@@ -166,6 +166,39 @@ func (e *LSMEngine) PutWithTS(key, value []byte, commitTS uint64) error {
 	return nil
 }
 
+// WriteAtomicBatch writes an atomic batch of operations.
+func (e *LSMEngine) WriteAtomicBatch(data []byte, commitTS uint64) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.closed {
+		return fmt.Errorf("engine closed")
+	}
+	walEntry := &WalEntry{
+		Op:        OpBatch,
+		Key:       nil,
+		Value:     data,
+		Timestamp: commitTS,
+	}
+	if err := e.wal.Write(walEntry); err != nil {
+		return fmt.Errorf("failed to write batch to wal: %w", err)
+	}
+	// Decode and apply each operation to the memtable
+	ops, err := decodeBatchLocal(data)
+	if err != nil {
+		return fmt.Errorf("failed to decode batch: %w", err)
+	}
+	for _, op := range ops {
+		mvccKey := mvcc.NewMVCCKey(op.Key, commitTS)
+		if op.IsDelete {
+			e.memTable.Put(mvccKey, nil)
+		} else {
+			e.memTable.Put(mvccKey, op.Value)
+		}
+		e.updateLastCommitCache(op.Key, commitTS)
+	}
+	return nil
+}
+
 // GetWithTS reads a value with the given snapshot timestamp.
 func (e *LSMEngine) GetWithTS(key []byte, snapshotTS uint64) ([]byte, error) {
 	e.mu.RLock()

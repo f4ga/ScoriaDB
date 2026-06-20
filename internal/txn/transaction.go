@@ -17,8 +17,6 @@ package txn
 import (
 	"errors"
 	"fmt"
-
-	"github.com/f4ga/ScoriaDB/internal/engine"
 )
 
 var (
@@ -38,7 +36,7 @@ type pendingOp struct {
 
 // Transaction represents an interactive transaction with optimistic concurrency control.
 type Transaction struct {
-	db      *engine.LSMEngine
+	db      Engine
 	startTS uint64                // snapshot timestamp
 	writes  map[string]*pendingOp // buffer of uncommitted changes (key → operation)
 	closed  bool                  // true after Commit or Rollback
@@ -46,8 +44,7 @@ type Transaction struct {
 
 // Begin starts a new transaction on the given engine.
 // startTS defines the isolation snapshot (all reads see data as of this timestamp).
-func Begin(db *engine.LSMEngine, startTS uint64) *Transaction {
-	db.RegisterSnapshot(startTS)
+func Begin(db Engine, startTS uint64) *Transaction {
 	return &Transaction{
 		db:      db,
 		startTS: startTS,
@@ -58,9 +55,8 @@ func Begin(db *engine.LSMEngine, startTS uint64) *Transaction {
 
 // BeginWithNextTS starts a new transaction, automatically obtaining startTS as the next available timestamp.
 // For simplicity we use atomic increment of LastTS in the engine.
-func BeginWithNextTS(db *engine.LSMEngine) (*Transaction, error) {
+func BeginWithNextTS(db Engine) (*Transaction, error) {
 	startTS := db.NextTimestamp()
-	db.RegisterSnapshot(startTS)
 	return Begin(db, startTS), nil
 }
 

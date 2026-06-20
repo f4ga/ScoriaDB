@@ -76,10 +76,7 @@ func (b *WriteBatch) Clear() {
 
 // ApplyBatch applies all operations atomically to the engine.
 // Returns the commit timestamp used.
-func ApplyBatch(db interface {
-	NextTimestamp() uint64
-	WriteAtomicBatch([]byte, uint64) error
-}, batch *WriteBatch) (uint64, error) {
+func ApplyBatch(db Engine, batch *WriteBatch) (uint64, error) {
 	if batch.Size() == 0 {
 		return 0, nil
 	}
@@ -99,9 +96,7 @@ func ApplyBatch(db interface {
 }
 
 // ApplyBatchWithTS applies the batch with a given commit timestamp.
-func ApplyBatchWithTS(db interface {
-	WriteAtomicBatch([]byte, uint64) error
-}, batch *WriteBatch, commitTS uint64) error {
+func ApplyBatchWithTS(db BatchWriter, batch *WriteBatch, commitTS uint64) error {
 	if batch.Size() == 0 {
 		return nil
 	}

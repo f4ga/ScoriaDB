@@ -25,9 +25,10 @@ import (
 
 	"github.com/f4ga/ScoriaDB/internal/engine/vfs"
 	"github.com/f4ga/ScoriaDB/internal/errors"
+	"github.com/f4ga/ScoriaDB/internal/keys"
 )
 
-// SSTableInfo содержит метаданные одного SSTable файла.
+// SSTableInfo contains metadata for a single SSTable file.
 type SSTableInfo struct {
 	FileNum uint64 `json:"file_num"`
 	Level   int    `json:"level"`
@@ -36,25 +37,24 @@ type SSTableInfo struct {
 	Size    uint64 `json:"size"`
 }
 
-// VersionEdit представляет одно атомарное изменение в составе файлов.
+// VersionEdit represents an atomic change to the file set.
 type VersionEdit struct {
 	NewFiles     []SSTableInfo `json:"new_files,omitempty"`
 	DeletedFiles []SSTableInfo `json:"deleted_files,omitempty"`
 	NextFileNum  uint64        `json:"next_file_num,omitempty"`
 }
 
-// Manifest управляет журналом метаданных SSTable.
+// Manifest manages the SSTable metadata log.
 type Manifest struct {
-	mu       sync.Mutex
-	vfs      vfs.VFS
-	file     vfs.File
-	filePath string
-	// Текущее состояние, восстановленное после чтения манифеста.
+	mu          sync.Mutex
+	vfs         vfs.VFS
+	file        vfs.File
+	filePath    string
 	levels      [][]SSTableInfo
 	nextFileNum uint64
 }
 
-// NewManifest создаёт новый манифест (или открывает существующий) по указанному пути.
+// NewManifest creates or opens a manifest at the given path.
 func NewManifest(vfs vfs.VFS, path string) (*Manifest, error) {
 	if err := vfs.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return nil, fmt.Errorf("failed to create manifest directory: %w", err)
@@ -69,11 +69,10 @@ func NewManifest(vfs vfs.VFS, path string) (*Manifest, error) {
 		vfs:         vfs,
 		file:        file,
 		filePath:    path,
-		levels:      make([][]SSTableInfo, 10), // предполагаем максимум 10 уровней
+		levels:      make([][]SSTableInfo, 10),
 		nextFileNum: 1,
 	}
 
-	// Восстанавливаем состояние из существующего файла
 	if err := m.recover(); err != nil {
 		errors.CloseWithLog(file, "manifest-file")
 		return nil, fmt.Errorf("failed to recover manifest: %w", err)
@@ -82,12 +81,11 @@ func NewManifest(vfs vfs.VFS, path string) (*Manifest, error) {
 	return m, nil
 }
 
-// recover читает все записи из файла и применяет их для восстановления текущего состояния.
+// recover reads all entries from the file and applies them.
 func (m *Manifest) recover() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// Перемещаемся в начало файла
 	if _, err := m.file.Seek(0, io.SeekStart); err != nil {
 		return fmt.Errorf("seek failed: %w", err)
 	}
@@ -99,8 +97,6 @@ func (m *Manifest) recover() error {
 			if err == io.EOF {
 				break
 			}
-			// Если JSON повреждён, останавливаемся на последней корректной записи
-			// (это допустимо, потому что каждая запись завершается символом новой строки)
 			break
 		}
 		m.applyEdit(&edit)
@@ -109,9 +105,8 @@ func (m *Manifest) recover() error {
 	return nil
 }
 
-// applyEdit применяет VersionEdit к in‑memory состоянию (без записи на диск).
+// applyEdit applies a VersionEdit to the in-memory state.
 func (m *Manifest) applyEdit(edit *VersionEdit) {
-	// Удаляем файлы
 	for _, df := range edit.DeletedFiles {
 		if df.Level < len(m.levels) {
 			filtered := make([]SSTableInfo, 0, len(m.levels[df.Level]))
@@ -124,60 +119,51 @@ func (m *Manifest) applyEdit(edit *VersionEdit) {
 		}
 	}
 
-	// Добавляем новые файлы
 	for _, nf := range edit.NewFiles {
 		level := nf.Level
 		if level >= len(m.levels) {
-			// расширяем уровни при необходимости
 			newLevels := make([][]SSTableInfo, level+1)
 			copy(newLevels, m.levels)
 			m.levels = newLevels
 		}
 		m.levels[level] = append(m.levels[level], nf)
-		// Сортируем по MinKey для быстрого поиска
 		sort.Slice(m.levels[level], func(i, j int) bool {
-			return CompareKeys(m.levels[level][i].MinKey, m.levels[level][j].MinKey) < 0
+			return keys.CompareKeys(m.levels[level][i].MinKey, m.levels[level][j].MinKey) < 0
 		})
 	}
 
-	// Обновляем счётчик файлов
 	if edit.NextFileNum > 0 {
 		m.nextFileNum = edit.NextFileNum
 	}
 }
 
-// Apply записывает новую VersionEdit в манифест и применяет её к состоянию.
+// Apply writes a VersionEdit to the manifest and applies it.
 func (m *Manifest) Apply(edit *VersionEdit) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// Сериализуем в JSON с новой строкой
 	data, err := json.Marshal(edit)
 	if err != nil {
 		return fmt.Errorf("failed to marshal version edit: %w", err)
 	}
 	data = append(data, '\n')
 
-	// Записываем в файл
 	if _, err := m.file.Write(data); err != nil {
 		return fmt.Errorf("failed to write manifest entry: %w", err)
 	}
-	// Синхронизируем, чтобы гарантировать сохранность
 	if err := m.file.Sync(); err != nil {
 		return fmt.Errorf("failed to sync manifest: %w", err)
 	}
 
-	// Применяем к состоянию в памяти
 	m.applyEdit(edit)
 	return nil
 }
 
-// GetLevels возвращает копию текущего распределения файлов по уровням.
+// GetLevels returns a copy of the current level distribution.
 func (m *Manifest) GetLevels() [][]SSTableInfo {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// Глубокая копия
 	result := make([][]SSTableInfo, len(m.levels))
 	for i, level := range m.levels {
 		result[i] = make([]SSTableInfo, len(level))
@@ -186,14 +172,14 @@ func (m *Manifest) GetLevels() [][]SSTableInfo {
 	return result
 }
 
-// NextFileNum возвращает следующий доступный номер файла.
+// NextFileNum returns the next available file number.
 func (m *Manifest) NextFileNum() uint64 {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.nextFileNum
 }
 
-// Close освобождает ресурсы манифеста.
+// Close releases manifest resources.
 func (m *Manifest) Close() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()

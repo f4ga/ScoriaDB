@@ -37,12 +37,6 @@ const (
 	MaxInlineSize = 64
 )
 
-// ValuePointer указывает на значение в VLog.
-type ValuePointer struct {
-	Offset int64 // смещение в файле
-	Size   int32 // размер значения (без заголовка)
-}
-
 // VLog представляет Value Log с mmap для zero-copy чтения.
 type VLog struct {
 	mu     sync.RWMutex

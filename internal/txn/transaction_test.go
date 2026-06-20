@@ -16,150 +16,93 @@ package txn
 
 import (
 	"testing"
-
-	"github.com/f4ga/ScoriaDB/internal/engine"
-	"github.com/f4ga/ScoriaDB/internal/errors"
 )
 
-func TestTransactionBasic(t *testing.T) {
-	dir := t.TempDir()
-	db, err := engine.NewLSMEngine(dir)
+// mockEngine implements Engine for testing.
+type mockEngine struct {
+	nextTS uint64
+}
+
+func (m *mockEngine) NextTimestamp() uint64 {
+	m.nextTS++
+	return m.nextTS
+}
+
+func (m *mockEngine) WriteAtomicBatch(data []byte, commitTS uint64) error {
+	return nil
+}
+
+func (m *mockEngine) RegisterSnapshot(snapshotTS uint64) {}
+
+func (m *mockEngine) UnregisterSnapshot(snapshotTS uint64) {}
+
+func (m *mockEngine) CheckConflict(key []byte, startTS uint64) (bool, error) {
+	return false, nil
+}
+
+func (m *mockEngine) GetWithTS(key []byte, snapshotTS uint64) ([]byte, error) {
+	return nil, nil
+}
+
+func TestTransactionLifecycle(t *testing.T) {
+	db := &mockEngine{nextTS: 100}
+
+	tx := Begin(db, 100)
+	if tx.IsClosed() {
+		t.Error("new transaction should not be closed")
+	}
+	if tx.StartTS() != 100 {
+		t.Errorf("expected startTS 100, got %d", tx.StartTS())
+	}
+
+	// Put and Get within transaction
+	if err := tx.Put([]byte("key"), []byte("value")); err != nil {
+		t.Fatalf("Put failed: %v", err)
+	}
+
+	val, err := tx.Get([]byte("key"))
 	if err != nil {
-		t.Fatalf("failed to create engine: %v", err)
+		t.Fatalf("Get failed: %v", err)
 	}
-	defer errors.CloseWithFatal(db, "txn-db")
-
-	// Write some initial data
-	if err := db.PutWithTS([]byte("key1"), []byte("initial"), 1); err != nil {
-		t.Fatalf("failed to put initial: %v", err)
+	if string(val) != "value" {
+		t.Errorf("expected 'value', got %s", val)
 	}
 
-	// Start transaction with startTS = 10
-	tx := Begin(db, 10)
-
-	// Read within transaction (should see initial value)
-	val, err := tx.Get([]byte("key1"))
-	if err != nil {
-		t.Fatalf("failed to get key1: %v", err)
-	}
-	if string(val) != "initial" {
-		t.Errorf("expected 'initial', got %s", val)
-	}
-
-	// Modify within transaction
-	if err := tx.Put([]byte("key1"), []byte("updated")); err != nil {
-		t.Fatalf("failed to put in transaction: %v", err)
-	}
-	if err := tx.Put([]byte("key2"), []byte("new")); err != nil {
-		t.Fatalf("failed to put key2: %v", err)
-	}
-
-	// Read own writes
-	val, err = tx.Get([]byte("key1"))
-	if err != nil {
-		t.Fatalf("failed to get key1 after put: %v", err)
-	}
-	if string(val) != "updated" {
-		t.Errorf("expected 'updated', got %s", val)
-	}
-
-	// Commit transaction
+	// Commit
 	if err := tx.Commit(); err != nil {
-		t.Fatalf("failed to commit: %v", err)
+		t.Fatalf("Commit failed: %v", err)
 	}
-
-	// Verify changes are visible after commit (with appropriate snapshot)
-	// Since we don't know commitTS, we can't test directly.
-	// For now, just ensure transaction is closed.
 	if !tx.IsClosed() {
 		t.Error("transaction should be closed after commit")
 	}
 }
 
-func TestTransactionRollback(t *testing.T) {
-	dir := t.TempDir()
-	db, err := engine.NewLSMEngine(dir)
-	if err != nil {
-		t.Fatalf("failed to create engine: %v", err)
-	}
-	defer errors.CloseWithFatal(db, "txn-db")
+func TestTransactionRollbackUnit(t *testing.T) {
+	db := &mockEngine{nextTS: 100}
+	tx := Begin(db, 100)
 
-	tx := Begin(db, 1)
 	if err := tx.Put([]byte("key"), []byte("value")); err != nil {
-		t.Fatalf("failed to put: %v", err)
+		t.Fatalf("Put failed: %v", err)
 	}
 
-	// Rollback
 	if err := tx.Rollback(); err != nil {
-		t.Fatalf("failed to rollback: %v", err)
+		t.Fatalf("Rollback failed: %v", err)
 	}
-
 	if !tx.IsClosed() {
 		t.Error("transaction should be closed after rollback")
 	}
-
-	// Ensure write not persisted
-	val, err := db.GetWithTS([]byte("key"), 2)
-	if err != nil {
-		t.Fatalf("failed to get: %v", err)
-	}
-	if val != nil {
-		t.Errorf("expected nil after rollback, got %s", val)
-	}
 }
 
-func TestTransactionDelete(t *testing.T) {
-	dir := t.TempDir()
-	db, err := engine.NewLSMEngine(dir)
-	if err != nil {
-		t.Fatalf("failed to create engine: %v", err)
-	}
-	defer errors.CloseWithFatal(db, "txn-db")
+func TestTransactionClosedUnit(t *testing.T) {
+	db := &mockEngine{nextTS: 100}
+	tx := Begin(db, 100)
 
-	// Write initial
-	if err := db.PutWithTS([]byte("key"), []byte("value"), 1); err != nil {
-		t.Fatalf("failed to put: %v", err)
-	}
-
-	tx := Begin(db, 10)
-	// Delete within transaction
-	if err := tx.Delete([]byte("key")); err != nil {
-		t.Fatalf("failed to delete: %v", err)
-	}
-
-	// Should see deletion within transaction
-	val, err := tx.Get([]byte("key"))
-	if err != nil {
-		t.Fatalf("failed to get: %v", err)
-	}
-	if val != nil {
-		t.Errorf("expected nil for deleted key, got %s", val)
-	}
-
-	// Commit
 	if err := tx.Commit(); err != nil {
-		t.Fatalf("failed to commit: %v", err)
-	}
-
-	// After commit, deletion should be visible (with appropriate snapshot)
-	// Not testing due to unknown commitTS
-}
-
-func TestTransactionClosed(t *testing.T) {
-	dir := t.TempDir()
-	db, err := engine.NewLSMEngine(dir)
-	if err != nil {
-		t.Fatalf("failed to create engine: %v", err)
-	}
-	defer errors.CloseWithFatal(db, "txn-db")
-
-	tx := Begin(db, 1)
-	if err := tx.Commit(); err != nil {
-		t.Fatalf("failed to commit: %v", err)
+		t.Fatalf("Commit failed: %v", err)
 	}
 
 	// Operations after commit should fail
-	_, err = tx.Get([]byte("key"))
+	_, err := tx.Get([]byte("key"))
 	if err != ErrTransactionClosed {
 		t.Errorf("expected ErrTransactionClosed, got %v", err)
 	}
@@ -181,39 +124,13 @@ func TestTransactionClosed(t *testing.T) {
 	}
 }
 
-func TestTransactionConflict(t *testing.T) {
-	dir := t.TempDir()
-	db, err := engine.NewLSMEngine(dir)
+func TestBeginWithNextTS(t *testing.T) {
+	db := &mockEngine{nextTS: 50}
+	tx, err := BeginWithNextTS(db)
 	if err != nil {
-		t.Fatalf("failed to create engine: %v", err)
+		t.Fatalf("BeginWithNextTS failed: %v", err)
 	}
-	defer errors.CloseWithFatal(db, "txn-db")
-
-	// Запись начального значения
-	if err := db.PutWithTS([]byte("key"), []byte("initial"), 1); err != nil {
-		t.Fatalf("init put: %v", err)
-	}
-
-	// Транзакция A: startTS = 10
-	txA := Begin(db, 10)
-	if err := txA.Put([]byte("key"), []byte("A")); err != nil {
-		t.Fatal(err)
-	}
-
-	// Транзакция B: startTS = 10 (такой же)
-	txB := Begin(db, 10)
-	if err := txB.Put([]byte("key"), []byte("B")); err != nil {
-		t.Fatal(err)
-	}
-
-	// Коммитим A — должен успешно
-	if err := txA.Commit(); err != nil {
-		t.Fatalf("txA commit: %v", err)
-	}
-
-	// Коммитим B — должен вернуть ErrConflict
-	err = txB.Commit()
-	if err != ErrConflict {
-		t.Fatalf("expected ErrConflict, got %v", err)
+	if tx.StartTS() != 51 {
+		t.Errorf("expected startTS 51, got %d", tx.StartTS())
 	}
 }

@@ -23,6 +23,7 @@ import (
 	"github.com/f4ga/ScoriaDB/pkg/scoria"
 	"github.com/f4ga/ScoriaDB/scoriadb/proto"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 )
 
@@ -48,6 +49,16 @@ func (m *mockScanStream) RecvMsg(msg interface{}) error {
 }
 
 func (m *mockScanStream) SendMsg(msg interface{}) error {
+	return nil
+}
+
+func (m *mockScanStream) SendHeader(metadata.MD) error {
+	return nil
+}
+
+func (m *mockScanStream) SetTrailer(metadata.MD) {}
+
+func (m *mockScanStream) SetHeader(metadata.MD) error {
 	return nil
 }
 
@@ -206,7 +217,6 @@ func TestServer_Scan(t *testing.T) {
 		t.Fatalf("Scan failed: %v", err)
 	}
 
-	// Should get all 10 items since there's no limit
 	if len(stream.responses) != 10 {
 		t.Errorf("expected 10 responses, got %d", len(stream.responses))
 	}
