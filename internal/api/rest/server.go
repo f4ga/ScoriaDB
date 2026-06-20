@@ -12,6 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// Package rest implements the REST API server for ScoriaDB, providing
+// HTTP endpoints for key-value operations, Column Family management,
+// health checks, and authentication.
 package rest
 
 import (

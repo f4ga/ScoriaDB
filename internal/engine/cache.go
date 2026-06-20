@@ -12,6 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// Package engine implements the core LSM-tree storage engine for ScoriaDB,
+// including MemTable, SSTable, WAL, Value Log, compaction, snapshots,
+// and background flush/compaction workers.
 package engine
 
 // updateLastCommitCache updates the last commit timestamp cache for a key.

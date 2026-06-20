@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// Package mvcc implements Multi-Version Concurrency Control for ScoriaDB,
+// providing snapshot isolation with versioned key-value pairs.
 package mvcc
 
 import (

@@ -12,6 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// Package vfs provides a virtual filesystem abstraction for ScoriaDB,
+// enabling testable filesystem operations through the VFS interface
+// and a default implementation backed by the os package.
 package vfs
 
 import (
@@ -22,7 +25,7 @@ import (
 	"github.com/f4ga/ScoriaDB/internal/errors"
 )
 
-// VFS определяет абстрактный интерфейс файловой системы.
+// VFS defines an abstract filesystem interface.
 type VFS interface {
 	// OpenFile открывает файл с указанными флагами и правами доступа.
 	OpenFile(name string, flag int, perm os.FileMode) (File, error)
@@ -42,7 +45,7 @@ type VFS interface {
 	ReadDir(dirname string) ([]os.DirEntry, error)
 }
 
-// File представляет открытый файл.
+// File represents an open file handle.
 type File interface {
 	io.Reader
 	io.Writer
@@ -56,7 +59,7 @@ type File interface {
 	Readdir(n int) ([]os.FileInfo, error)
 }
 
-// DefaultVFS реализует VFS, делегируя вызовы стандартным функциям пакета os.
+// DefaultVFS implements VFS by delegating to the standard os package functions.
 type DefaultVFS struct{}
 
 var _ VFS = (*DefaultVFS)(nil)
@@ -93,23 +96,23 @@ func (DefaultVFS) ReadDir(dirname string) ([]os.DirEntry, error) {
 	return os.ReadDir(dirname)
 }
 
-// MockVFS можно использовать в тестах для подмены файловых операций.
-// Реализация опущена для краткости, но может быть добавлена позже.
+// MockVFS can be used in tests to mock filesystem operations.
+// Implementation is omitted for brevity but can be added later.
 type MockVFS struct {
 	// ... поля для хранения состояния
 }
 
-// Ensure DefaultVFS используется по умолчанию.
+// Default is the default VFS instance used throughout ScoriaDB.
 var Default = DefaultVFS{}
 
-// NewDefaultVFS возвращает новый экземпляр DefaultVFS, реализующий интерфейс VFS.
+// NewDefaultVFS returns a new DefaultVFS instance implementing the VFS interface.
 func NewDefaultVFS() VFS {
 	return DefaultVFS{}
 }
 
-// Helper функции для удобства.
+// Helper functions for common VFS operations.
 
-// ReadFile читает весь файл в память.
+// ReadFile reads an entire file into memory.
 func ReadFile(vfs VFS, name string) ([]byte, error) {
 	f, err := vfs.Open(name)
 	if err != nil {
@@ -119,7 +122,7 @@ func ReadFile(vfs VFS, name string) ([]byte, error) {
 	return io.ReadAll(f)
 }
 
-// WriteFile записывает данные в файл, создавая его при необходимости.
+// WriteFile writes data to a file, creating it if necessary.
 func WriteFile(vfs VFS, name string, data []byte, perm os.FileMode) error {
 	f, err := vfs.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, perm)
 	if err != nil {
@@ -133,13 +136,13 @@ func WriteFile(vfs VFS, name string, data []byte, perm os.FileMode) error {
 	return f.Sync()
 }
 
-// Exists проверяет, существует ли файл или директория.
+// Exists checks whether a file or directory exists.
 func Exists(vfs VFS, name string) bool {
 	_, err := vfs.Stat(name)
 	return err == nil
 }
 
-// WalkDir обходит дерево директорий, вызывая walkFn для каждого элемента.
+// WalkDir walks the directory tree rooted at root, calling walkFn for each file or directory.
 func WalkDir(vfs VFS, root string, walkFn filepath.WalkFunc) error {
 	info, err := vfs.Stat(root)
 	if err != nil {

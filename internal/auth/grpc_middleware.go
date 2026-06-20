@@ -12,6 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// Package auth provides authentication and authorization for ScoriaDB,
+// including user management, JWT token generation/validation, and role-based
+// access control (RBAC).
 package auth
 
 import (
@@ -24,15 +27,15 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// ContextKey тип для ключей контекста.
+// ContextKey is a type for context keys used in gRPC middleware.
 type ContextKey string
 
 const (
-	// ContextKeyUser ключ для хранения claims пользователя в контексте.
+	// ContextKeyUser is the context key for storing user claims.
 	ContextKeyUser ContextKey = "user_claims"
 )
 
-// AuthInterceptor возвращает unary interceptor для проверки JWT и ролей.
+// AuthInterceptor returns a unary interceptor for JWT and role verification.
 func AuthInterceptor(jwtSecret []byte, skipMethods map[string]bool) grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
 		// Пропускаем методы, не требующие аутентификации
@@ -73,7 +76,7 @@ func AuthInterceptor(jwtSecret []byte, skipMethods map[string]bool) grpc.UnarySe
 	}
 }
 
-// StreamAuthInterceptor возвращает stream interceptor для проверки JWT и ролей.
+// StreamAuthInterceptor returns a stream interceptor for JWT and role verification.
 func StreamAuthInterceptor(jwtSecret []byte, skipMethods map[string]bool) grpc.StreamServerInterceptor {
 	return func(srv interface{}, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
 		// Пропускаем методы, не требующие аутентификации
@@ -115,7 +118,7 @@ func StreamAuthInterceptor(jwtSecret []byte, skipMethods map[string]bool) grpc.S
 	}
 }
 
-// wrappedServerStream обёртка для grpc.ServerStream с изменённым контекстом.
+// wrappedServerStream wraps grpc.ServerStream with a custom context.
 type wrappedServerStream struct {
 	grpc.ServerStream
 	ctx context.Context
@@ -125,7 +128,7 @@ func (w *wrappedServerStream) Context() context.Context {
 	return w.ctx
 }
 
-// hasRequiredRoleForMethod определяет, достаточно ли прав у пользователя для вызова метода.
+// hasRequiredRoleForMethod checks whether the user has sufficient privileges for the given gRPC method.
 func hasRequiredRoleForMethod(fullMethod string, userRoles []string) bool {
 	// Маппинг методов на минимально необходимые роли
 	// Формат fullMethod: "/scoriadb.ScoriaDB/Get"
@@ -161,7 +164,7 @@ func hasRequiredRoleForMethod(fullMethod string, userRoles []string) bool {
 	return false
 }
 
-// GetClaimsFromContext извлекает claims из контекста gRPC.
+// GetClaimsFromContext extracts user claims from a gRPC context.
 func GetClaimsFromContext(ctx context.Context) (*Claims, bool) {
 	val := ctx.Value(ContextKeyUser)
 	if val == nil {

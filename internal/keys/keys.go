@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// Package keys provides key comparison utilities for ScoriaDB's LSM-tree
+// and MVCC components.
 package keys
 
 // CompareKeys compares two byte slices lexicographically.

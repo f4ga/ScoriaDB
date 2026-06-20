@@ -12,6 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// Package scoria provides the public API for ScoriaDB, a high-performance
+// embedded LSM-based key-value store with MVCC, Column Families, and
+// transaction support.
 package scoria
 
 import (

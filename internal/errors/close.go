@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// Package errors provides error handling utilities for ScoriaDB, including
+// safe close/remove operations with logging and error wrapping.
 package errors
 
 import (

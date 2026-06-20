@@ -12,6 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// Package auth provides authentication and authorization for ScoriaDB,
+// including user management, JWT token generation/validation, and role-based
+// access control (RBAC).
 package auth
 
 import (
@@ -23,15 +26,15 @@ import (
 	"github.com/f4ga/ScoriaDB/internal/logger"
 )
 
-// HTTPContextKey тип для ключей контекста HTTP.
+// HTTPContextKey is a type for context keys used in HTTP middleware.
 type HTTPContextKey string
 
 const (
-	// HTTPContextKeyUser ключ для хранения claims пользователя в HTTP контексте.
+	// HTTPContextKeyUser is the context key for storing user claims in HTTP requests.
 	HTTPContextKeyUser HTTPContextKey = "user_claims"
 )
 
-// AuthMiddleware возвращает middleware для проверки JWT и ролей в HTTP‑запросах.
+// AuthMiddleware returns HTTP middleware for JWT and role verification.
 func AuthMiddleware(jwtSecret []byte, skipPaths map[string]bool) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -74,7 +77,7 @@ func AuthMiddleware(jwtSecret []byte, skipPaths map[string]bool) func(http.Handl
 	}
 }
 
-// GetClaimsFromHTTPRequest извлекает claims из контекста HTTP запроса.
+// GetClaimsFromHTTPRequest extracts user claims from an HTTP request context.
 func GetClaimsFromHTTPRequest(r *http.Request) (*Claims, bool) {
 	val := r.Context().Value(HTTPContextKeyUser)
 	if val == nil {
@@ -84,7 +87,7 @@ func GetClaimsFromHTTPRequest(r *http.Request) (*Claims, bool) {
 	return claims, ok
 }
 
-// writeAuthError записывает JSON‑ответ с ошибкой аутентификации/авторизации.
+// writeAuthError writes a JSON error response for authentication/authorization failures.
 func writeAuthError(w http.ResponseWriter, status int, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
@@ -94,7 +97,7 @@ func writeAuthError(w http.ResponseWriter, status int, message string) {
 	}
 }
 
-// getErrorCode возвращает строковый код ошибки по HTTP статусу.
+// getErrorCode returns a string error code for the given HTTP status.
 func getErrorCode(status int) string {
 	switch status {
 	case http.StatusUnauthorized:
@@ -106,7 +109,7 @@ func getErrorCode(status int) string {
 	}
 }
 
-// hasRequiredRoleForPath определяет, достаточно ли прав у пользователя для доступа к пути.
+// hasRequiredRoleForPath checks whether the user has sufficient privileges for the given HTTP path.
 func hasRequiredRoleForPath(path, method string, userRoles []string) bool {
 	// Маппинг путей и методов на минимально необходимые роли
 	var requiredRoles []string

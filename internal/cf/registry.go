@@ -12,6 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// Package cf provides Column Family management for ScoriaDB, including
+// a registry of independent LSM-tree instances and atomic batch operations
+// that span multiple Column Families.
 package cf
 
 import (

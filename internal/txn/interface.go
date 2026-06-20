@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// Package txn provides transaction and batch operation support for ScoriaDB,
+// including atomic write batches and multi-operation transactions with MVCC.
 package txn
 
 // BatchWriter defines the interface for atomic batch writes.

@@ -12,6 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// Package grpc implements the gRPC server for ScoriaDB, providing
+// key-value operations, Column Family management, and authentication
+// via the ScoriaDB protocol buffer service definition.
 package grpc
 
 import (

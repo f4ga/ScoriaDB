@@ -12,6 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// Package auth provides authentication and authorization for ScoriaDB,
+// including user management, JWT token generation/validation, and role-based
+// access control (RBAC).
 package auth
 
 import (
@@ -26,7 +29,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
-// User представляет пользователя системы.
+// User represents a system user with credentials and roles.
 type User struct {
 	Username     string   `json:"username"`
 	PasswordHash string   `json:"password_hash"`
@@ -34,31 +37,31 @@ type User struct {
 	CreatedAt    int64    `json:"created_at"` // Unix timestamp
 }
 
-// Claims — JWT claims, содержащие информацию о пользователе.
+// Claims represents JWT claims containing user information.
 type Claims struct {
 	Username string   `json:"sub"`
 	Roles    []string `json:"roles"`
 	jwt.RegisteredClaims
 }
 
-// Константы для ролей.
+// Role constants for RBAC.
 const (
 	RoleAdmin     = "admin"
 	RoleReadWrite = "readwrite"
 	RoleReadOnly  = "readonly"
 )
 
-// Системный Column Family для хранения пользователей.
+// AuthCF is the system Column Family for storing user credentials and roles.
 const AuthCF = "__auth__"
 
-// Префикс ключа пользователя в CF.
+// userKey returns the CF key prefix for a given username.
 func userKey(username string) []byte {
 	return []byte("user:" + username)
 }
 
-// CreateUser создаёт нового пользователя с указанными данными.
-// Проверяет, что username не пуст, пароль не пуст, роли валидны.
-// Хеширует пароль с помощью bcrypt и сохраняет пользователя в CF `__auth__`.
+// CreateUser creates a new user with the given credentials and roles.
+// It validates that the username and password are non-empty, checks role validity,
+// hashes the password with bcrypt, and stores the user in the `__auth__` CF.
 func CreateUser(cfdb scoria.CFDB, username, password string, roles []string) error {
 	if username == "" {
 		return errors.New("username cannot be empty")
@@ -115,7 +118,7 @@ func CreateUser(cfdb scoria.CFDB, username, password string, roles []string) err
 	return nil
 }
 
-// Authenticate проверяет учётные данные и возвращает JWT‑токен в случае успеха.
+// Authenticate verifies credentials and returns a JWT token on success.
 func Authenticate(cfdb scoria.CFDB, username, password string, jwtSecret []byte) (string, error) {
 	username = strings.ToLower(strings.TrimSpace(username))
 
@@ -149,7 +152,7 @@ func Authenticate(cfdb scoria.CFDB, username, password string, jwtSecret []byte)
 	return tokenString, nil
 }
 
-// ValidateToken проверяет JWT‑токен и возвращает claims.
+// ValidateToken validates a JWT token and returns its claims.
 func ValidateToken(tokenStr string, jwtSecret []byte) (*Claims, error) {
 	token, err := jwt.ParseWithClaims(tokenStr, &Claims{}, func(token *jwt.Token) (interface{}, error) {
 		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
@@ -168,7 +171,7 @@ func ValidateToken(tokenStr string, jwtSecret []byte) (*Claims, error) {
 	return nil, errors.New("invalid token claims")
 }
 
-// GetUser возвращает пользователя по username.
+// GetUser returns a user by username.
 func GetUser(cfdb scoria.CFDB, username string) (*User, error) {
 	username = strings.ToLower(strings.TrimSpace(username))
 
@@ -189,7 +192,7 @@ func GetUser(cfdb scoria.CFDB, username string) (*User, error) {
 	return &user, nil
 }
 
-// ListUsers возвращает список всех пользователей.
+// ListUsers returns a list of all registered users.
 func ListUsers(cfdb scoria.CFDB) ([]User, error) {
 	iter := cfdb.ScanCF(AuthCF, []byte("user:"))
 	defer iter.Close()
@@ -214,13 +217,13 @@ func ListUsers(cfdb scoria.CFDB) ([]User, error) {
 	return users, nil
 }
 
-// DeleteUser удаляет пользователя по username.
+// DeleteUser deletes a user by username.
 func DeleteUser(cfdb scoria.CFDB, username string) error {
 	username = strings.ToLower(strings.TrimSpace(username))
 	return cfdb.DeleteCF(AuthCF, userKey(username))
 }
 
-// UpdateUserRoles обновляет роли пользователя.
+// UpdateUserRoles updates the roles of an existing user.
 func UpdateUserRoles(cfdb scoria.CFDB, username string, roles []string) error {
 	user, err := GetUser(cfdb, username)
 	if err != nil {
@@ -242,7 +245,7 @@ func UpdateUserRoles(cfdb scoria.CFDB, username string, roles []string) error {
 	return cfdb.PutCF(AuthCF, userKey(username), data)
 }
 
-// ChangePassword меняет пароль существующего пользователя
+// ChangePassword changes the password of an existing user.
 func ChangePassword(db scoria.CFDB, username, newPassword string) error {
 	if newPassword == "" {
 		return ErrInvalidCredentials
@@ -279,7 +282,7 @@ func ChangePassword(db scoria.CFDB, username, newPassword string) error {
 	return db.PutCF("__auth__", key, newVal)
 }
 
-// Проверяет, является ли роль допустимой.
+// isValidRole checks whether the given role is a valid role constant.
 func isValidRole(role string) bool {
 	switch role {
 	case RoleAdmin, RoleReadWrite, RoleReadOnly:
@@ -289,7 +292,7 @@ func isValidRole(role string) bool {
 	}
 }
 
-// Проверяет, имеет ли пользователь хотя бы одну из требуемых ролей.
+// HasAnyRole checks if the user has at least one of the required roles.
 func HasAnyRole(user *User, requiredRoles []string) bool {
 	for _, userRole := range user.Roles {
 		for _, required := range requiredRoles {
@@ -301,7 +304,7 @@ func HasAnyRole(user *User, requiredRoles []string) bool {
 	return false
 }
 
-// Проверяет, имеет ли пользователь все требуемые роли.
+// HasAllRoles checks if the user has all of the required roles.
 func HasAllRoles(user *User, requiredRoles []string) bool {
 	for _, required := range requiredRoles {
 		found := false
@@ -318,7 +321,7 @@ func HasAllRoles(user *User, requiredRoles []string) bool {
 	return true
 }
 
-// extractBearerToken извлекает токен из заголовка "Bearer <token>".
+// extractBearerToken extracts a Bearer token from the "Authorization" header.
 func extractBearerToken(header string) string {
 	const prefix = "Bearer "
 	if !strings.HasPrefix(header, prefix) {
@@ -327,7 +330,7 @@ func extractBearerToken(header string) string {
 	return strings.TrimSpace(header[len(prefix):])
 }
 
-// Ошибки аутентификации.
+// Authentication errors.
 var (
 	ErrUserNotFound           = errors.New("user not found")
 	ErrUserAlreadyExists      = errors.New("user already exists")
