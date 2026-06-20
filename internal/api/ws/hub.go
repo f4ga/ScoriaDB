@@ -19,6 +19,7 @@ import (
 	"log"
 	"sync"
 
+	"github.com/f4ga/ScoriaDB/internal/errors"
 	"github.com/gorilla/websocket"
 )
 
@@ -68,7 +69,7 @@ func (h *Hub) run() {
 			err := conn.WriteMessage(websocket.TextMessage, msg)
 			if err != nil {
 				log.Printf("WebSocket write error: %v", err)
-				conn.Close()
+				errors.CloseWithLog(conn, "websocket-conn")
 				h.mu.RUnlock()
 				h.Unregister(conn)
 				h.mu.RLock()
@@ -83,7 +84,7 @@ func (h *Hub) Close() {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	for conn := range h.connections {
-		conn.Close()
+		errors.CloseWithLog(conn, "websocket-conn")
 	}
 	close(h.broadcast)
 }
@@ -104,7 +105,11 @@ func (h *Hub) NotifyKeyUpdated(cf, key string, value []byte) {
 		Value: string(value),
 		CF:    cf,
 	}
-	msg, _ := json.Marshal(event)
+	msg, err := json.Marshal(event)
+	if err != nil {
+		log.Printf("WARNING: failed to marshal event: %v", err)
+		return
+	}
 	h.Broadcast(msg)
 }
 
@@ -115,6 +120,10 @@ func (h *Hub) NotifyKeyDeleted(cf, key string) {
 		Key:  key,
 		CF:   cf,
 	}
-	msg, _ := json.Marshal(event)
+	msg, err := json.Marshal(event)
+	if err != nil {
+		log.Printf("WARNING: failed to marshal event: %v", err)
+		return
+	}
 	h.Broadcast(msg)
 }

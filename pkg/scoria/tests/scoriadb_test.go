@@ -17,6 +17,7 @@ package scoria_test
 import (
 	"testing"
 
+	"github.com/f4ga/ScoriaDB/internal/errors"
 	"github.com/f4ga/ScoriaDB/pkg/scoria"
 )
 
@@ -27,7 +28,8 @@ func TestScoriaDBCF(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create ScoriaDB: %v", err)
 	}
-	defer db.Close()
+	// Вместо defer db.Close()
+	defer errors.CloseWithFatal(db, "scoria-db")
 
 	// Проверяем, что CF "default" существует
 	val, err := db.Get([]byte("nonexistent"))
@@ -108,7 +110,7 @@ func TestScoriaDBDropCF(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create ScoriaDB: %v", err)
 	}
-	defer db.Close()
+	defer errors.CloseWithFatal(db, "scoria-db")
 
 	err = db.CreateCF("todelete")
 	if err != nil {
@@ -140,7 +142,7 @@ func TestScoriaDBEmbeddedCFDB(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EmbeddedCFDB failed: %v", err)
 	}
-	defer db.Close()
+	defer errors.CloseWithFatal(db, "scoria-db")
 
 	// Простая проверка работы
 	err = db.Put([]byte("test"), []byte("data"))

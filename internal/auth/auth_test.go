@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/f4ga/ScoriaDB/internal/errors"
 	"github.com/f4ga/ScoriaDB/pkg/scoria"
 	"github.com/golang-jwt/jwt/v5"
 )
@@ -29,7 +30,7 @@ func TestCreateUserAndLogin(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to open test database: %v", err)
 	}
-	defer db.Close()
+	defer errors.CloseWithFatal(db, "auth-test-db")
 
 	// Ensure auth CF exists
 	err = db.CreateCF(AuthCF)
@@ -85,7 +86,7 @@ func TestDuplicateUser(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to open test database: %v", err)
 	}
-	defer db.Close()
+	defer errors.CloseWithFatal(db, "auth-test-db")
 
 	err = db.CreateCF(AuthCF)
 	if err != nil {
@@ -109,7 +110,7 @@ func TestGetUser(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to open test database: %v", err)
 	}
-	defer db.Close()
+	defer errors.CloseWithFatal(db, "auth-test-db")
 
 	err = db.CreateCF(AuthCF)
 	if err != nil {
@@ -147,7 +148,7 @@ func TestListUsers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to open test database: %v", err)
 	}
-	defer db.Close()
+	defer errors.CloseWithFatal(db, "auth-test-db")
 
 	err = db.CreateCF(AuthCF)
 	if err != nil {
@@ -212,7 +213,7 @@ func TestUpdateUserRoles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to open test database: %v", err)
 	}
-	defer db.Close()
+	defer errors.CloseWithFatal(db, "auth-test-db")
 
 	err = db.CreateCF(AuthCF)
 	if err != nil {
@@ -258,7 +259,7 @@ func TestDeleteUser(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to open test database: %v", err)
 	}
-	defer db.Close()
+	defer errors.CloseWithFatal(db, "auth-test-db")
 
 	err = db.CreateCF(AuthCF)
 	if err != nil {
@@ -289,7 +290,7 @@ func TestTokenExpiration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to open test database: %v", err)
 	}
-	defer db.Close()
+	defer errors.CloseWithFatal(db, "auth-test-db")
 
 	err = db.CreateCF(AuthCF)
 	if err != nil {
@@ -360,7 +361,7 @@ func TestInvalidRoleValidation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to open test database: %v", err)
 	}
-	defer db.Close()
+	defer errors.CloseWithFatal(db, "auth-test-db")
 
 	err = db.CreateCF(AuthCF)
 	if err != nil {
@@ -381,7 +382,7 @@ func TestChangePasswordSuccess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to open test database: %v", err)
 	}
-	defer db.Close()
+	defer errors.CloseWithFatal(db, "auth-test-db")
 
 	err = db.CreateCF(AuthCF)
 	if err != nil {
@@ -425,7 +426,7 @@ func TestChangePasswordUserNotFound(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to open test database: %v", err)
 	}
-	defer db.Close()
+	defer errors.CloseWithFatal(db, "auth-test-db")
 
 	err = db.CreateCF(AuthCF)
 	if err != nil {
@@ -445,7 +446,7 @@ func TestChangePasswordPreservesRoles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to open test database: %v", err)
 	}
-	defer db.Close()
+	defer errors.CloseWithFatal(db, "auth-test-db")
 
 	err = db.CreateCF(AuthCF)
 	if err != nil {
@@ -504,7 +505,7 @@ func TestChangePasswordEmptyNewPassword(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to open test database: %v", err)
 	}
-	defer db.Close()
+	defer errors.CloseWithFatal(db, "auth-test-db")
 
 	err = db.CreateCF(AuthCF)
 	if err != nil {
@@ -529,7 +530,7 @@ func TestChangePasswordSamePassword(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to open test database: %v", err)
 	}
-	defer db.Close()
+	defer errors.CloseWithFatal(db, "auth-test-db")
 
 	err = db.CreateCF(AuthCF)
 	if err != nil {

@@ -57,7 +57,10 @@ func TestCFWriteBatchBasic(t *testing.T) {
 	}
 
 	// Проверяем, что данные записались в правильные CF
-	eng1, _ := reg.GetCF("cf1")
+	eng1, err := reg.GetCF("cf1")
+	if err != nil {
+		t.Fatalf("failed to get CF: %v", err)
+	}
 	val, err := eng1.GetWithTS([]byte("key1"), commitTS)
 	if err != nil {
 		t.Fatalf("failed to get key1 from cf1: %v", err)
@@ -66,7 +69,10 @@ func TestCFWriteBatchBasic(t *testing.T) {
 		t.Errorf("expected value1, got %s", val)
 	}
 
-	eng2, _ := reg.GetCF("cf2")
+	eng2, err := reg.GetCF("cf2")
+	if err != nil {
+		t.Fatalf("failed to get CF: %v", err)
+	}
 	val, err = eng2.GetWithTS([]byte("key2"), commitTS)
 	if err != nil {
 		t.Fatalf("failed to get key2 from cf2: %v", err)

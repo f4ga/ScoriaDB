@@ -15,7 +15,6 @@
 package sstable
 
 import (
-	"hash"
 	"hash/fnv"
 )
 
@@ -108,7 +107,7 @@ func (bf *BloomFilter) SetK(k uint32) {
 // bloomHash returns two 32-bit hashes for a key (LevelDB algorithm).
 func bloomHash(key []byte) (uint32, uint32) {
 	// Use FNV-1a hash for simplicity (LevelDB uses MurmurHash2)
-	var h hash.Hash32 = fnv.New32a()
+	h := fnv.New32a()
 	h.Write(key)
 	h1 := h.Sum32()
 

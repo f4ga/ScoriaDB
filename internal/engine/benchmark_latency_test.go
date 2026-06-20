@@ -84,10 +84,10 @@ func (c *latencyCollector) report(b *testing.B, label string) {
 // ---------------------------------------------------------------------------
 
 func cleanTemp() {
-	os.RemoveAll("/tmp/scoriadb-*")
-	os.RemoveAll("/tmp/TestVLogRecoveryAfterCrash*")
-	os.RemoveAll("/tmp/scoriadb-latency-bench-*")
-	os.RemoveAll("/tmp/scoria-*")
+	errors.RemoveAll("/tmp/scoriadb-*")
+	errors.RemoveAll("/tmp/TestVLogRecoveryAfterCrash*")
+	errors.RemoveAll("/tmp/scoriadb-latency-bench-*")
+	errors.RemoveAll("/tmp/scoria-*")
 }
 
 // ---------------------------------------------------------------------------
@@ -113,14 +113,14 @@ func openTestDBWithOptions(b *testing.B, walOpts WALOptions) *LSMEngine {
 
 	defer func() {
 		if b.Failed() {
-			os.RemoveAll(dir)
+			errors.RemoveAll(dir)
 			cleanTemp()
 		}
 	}()
 
 	db, err := NewLSMEngine(dir, walOpts)
 	if err != nil {
-		os.RemoveAll(dir)
+		errors.RemoveAll(dir)
 		b.Fatal(err)
 	}
 	return db
@@ -414,7 +414,7 @@ func BenchmarkScanLatency(b *testing.B) {
 		for iter.Next() {
 			count++
 		}
-		iter.Close()
+		errors.CloseWithLog(iter, "bench-scan-iter")
 		collector.Add(time.Since(start))
 		if count == 0 {
 			b.Fatal("scan returned 0 entries")

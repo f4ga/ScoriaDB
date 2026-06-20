@@ -103,7 +103,10 @@ func (k MVCCKey) Compare(other MVCCKey) int {
 
 // Less реализует интерфейс btree.Item для сортировки.
 func (k MVCCKey) Less(than btree.Item) bool {
-	other := than.(MVCCKey)
+	other, ok := than.(MVCCKey)
+	if !ok {
+		return false
+	}
 	cmp := bytes.Compare(k.Key, other.Key)
 	if cmp < 0 {
 		return true

@@ -16,12 +16,6 @@ mem.prof
 
 # Temporary files
 *.md.tmp
-functz.md
-*.md
-!README.md
-group_commit.md
-TECHDEBT.md
-NOLINT.md
 
 # Build artifacts
 scoria

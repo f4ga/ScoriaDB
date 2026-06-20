@@ -25,5 +25,9 @@ func (e *LSMEngine) getLastCommitCache(key []byte) (uint64, bool) {
 	if !ok {
 		return 0, false
 	}
-	return val.(uint64), true
+	v, ok := val.(uint64)
+	if !ok {
+		return 0, false
+	}
+	return v, true
 }

@@ -22,6 +22,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/f4ga/ScoriaDB/internal/errors"
 	"github.com/f4ga/ScoriaDB/pkg/scoria"
 )
 
@@ -31,7 +32,7 @@ func TestRestServer_GetPutDelete(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create database: %v", err)
 	}
-	defer db.Close()
+	defer errors.CloseWithFatal(db, "rest-test-db")
 
 	srv := NewServer(db, []byte("test-secret"))
 
@@ -90,7 +91,7 @@ func TestRestServer_Scan(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create database: %v", err)
 	}
-	defer db.Close()
+	defer errors.CloseWithFatal(db, "rest-test-db")
 
 	srv := NewServer(db, []byte("test-secret"))
 
@@ -138,7 +139,7 @@ func TestRestServer_CFOperations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create database: %v", err)
 	}
-	defer db.Close()
+	defer errors.CloseWithFatal(db, "rest-test-db")
 
 	// Create a new CF
 	if err := db.CreateCF("testcf"); err != nil {
@@ -179,7 +180,7 @@ func TestRestServer_ErrorHandling(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create database: %v", err)
 	}
-	defer db.Close()
+	defer errors.CloseWithFatal(db, "rest-test-db")
 
 	srv := NewServer(db, []byte("test-secret"))
 
@@ -222,7 +223,7 @@ func TestRestServer_CORS(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create database: %v", err)
 	}
-	defer db.Close()
+	defer errors.CloseWithFatal(db, "rest-test-db")
 
 	srv := NewServer(db, []byte("test-secret"))
 

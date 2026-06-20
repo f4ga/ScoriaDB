@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 
@@ -219,7 +220,9 @@ func writeJSON(w http.ResponseWriter, status int, data interface{}) {
 		return
 	}
 	w.WriteHeader(status)
-	_, _ = buf.WriteTo(w)
+	if _, err := buf.WriteTo(w); err != nil {
+		log.Printf("WARNING: failed to write response: %v", err)
+	}
 }
 
 // writeError записывает JSON‑ответ с ошибкой в формате, описанном в Разделе 3.6.1 плана.
@@ -235,7 +238,10 @@ func writeError(w http.ResponseWriter, status int, code, message string) {
 		return
 	}
 	w.WriteHeader(status)
-	_, _ = buf.WriteTo(w)
+
+	if _, err := buf.WriteTo(w); err != nil {
+		log.Printf("WARNING: failed to write response: %v", err)
+	}
 }
 
 // handleLogin обрабатывает POST /api/v1/auth/login

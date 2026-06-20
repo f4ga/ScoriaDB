@@ -161,8 +161,14 @@ func TestCompactionSimple(t *testing.T) {
 	}
 
 	// Открываем оба SSTable
-	reader1, _ := Open(path1)
-	reader2, _ := Open(path2)
+	reader1, err := Open(path1)
+	if err != nil {
+		t.Fatalf("failed to open reader1: %v", err)
+	}
+	reader2, err := Open(path2)
+	if err != nil {
+		t.Fatalf("failed to open reader2: %v", err)
+	}
 	defer errors.CloseWithFatal(reader1, "sstable-reader1")
 	defer errors.CloseWithFatal(reader2, "sstable-reader2")
 

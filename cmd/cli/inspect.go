@@ -28,7 +28,10 @@ import (
 
 // inspectCmd is the actual implementation of the inspect command.
 func inspectCmd(cmd *cobra.Command, args []string) error {
-	dir, _ := cmd.Flags().GetString("dir")
+	dir, err := cmd.Flags().GetString("dir")
+	if err != nil {
+		return fmt.Errorf("failed to get dir flag: %w", err)
+	}
 	if dir == "" {
 		dir = "./data"
 	}

@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/f4ga/ScoriaDB/internal/engine"
+	"github.com/f4ga/ScoriaDB/internal/errors"
 )
 
 // -----------------------------------------------------------------------------
@@ -67,8 +68,8 @@ func benchmarkPutWithGroupCommit(b *testing.B, groupCommit bool, valueSize int) 
 	if err != nil {
 		b.Fatalf("failed to create engine: %v", err)
 	}
-	defer eng.Close()
-
+	// Вместо defer eng.Close()
+	defer errors.CloseWithFatal(eng, "engine")
 	key := []byte("bench-key")
 	value := make([]byte, valueSize)
 
@@ -218,7 +219,7 @@ func setupBenchDB(b *testing.B) (*ScoriaDB, func()) {
 	if err != nil {
 		b.Fatalf("failed to open db: %v", err)
 	}
-	return db, func() { db.Close() }
+	return db, func() { errors.CloseWithLog(db, "database") }
 }
 
 // Бенчмарки для разных размеров значений (без Group Commit, только синхронный режим)
@@ -228,7 +229,8 @@ func valueSizeBenchmarkSync(b *testing.B, size int) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	defer eng.Close()
+	// Вместо defer eng.Close()
+	defer errors.CloseWithFatal(eng, "engine")
 	key := []byte("bench-key")
 	value := make([]byte, size)
 	b.ResetTimer()

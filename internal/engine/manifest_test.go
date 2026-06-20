@@ -34,7 +34,6 @@ func TestNewManifest(t *testing.T) {
 	}
 	defer errors.CloseWithFatal(m, "manifest")
 
-	// Проверяем начальное состояние
 	levels := m.GetLevels()
 	if len(levels) != 10 {
 		t.Errorf("expected 10 levels, got %d", len(levels))
@@ -60,7 +59,6 @@ func TestManifestApply(t *testing.T) {
 	}
 	defer errors.CloseWithFatal(m, "manifest")
 
-	// Добавляем файл на уровень 0
 	edit := &VersionEdit{
 		NewFiles: []SSTableInfo{
 			{
@@ -88,7 +86,6 @@ func TestManifestApply(t *testing.T) {
 		t.Errorf("expected next file num 2, got %d", m.NextFileNum())
 	}
 
-	// Удаляем файл
 	edit2 := &VersionEdit{
 		DeletedFiles: []SSTableInfo{
 			{
@@ -115,7 +112,6 @@ func TestManifestRecover(t *testing.T) {
 	path := filepath.Join(tmpDir, "MANIFEST")
 
 	vfs := vfs.NewDefaultVFS()
-	// Создаём манифест и применяем несколько изменений
 	m1, err := NewManifest(vfs, path)
 	if err != nil {
 		t.Fatalf("failed to create manifest: %v", err)
@@ -151,9 +147,8 @@ func TestManifestRecover(t *testing.T) {
 	if err := m1.Apply(edit2); err != nil {
 		t.Fatalf("failed to apply edit2: %v", err)
 	}
-	m1.Close()
+	errors.CloseWithFatal(m1, "manifest1")
 
-	// Открываем заново, должно восстановить состояние
 	m2, err := NewManifest(vfs, path)
 	if err != nil {
 		t.Fatalf("failed to reopen manifest: %v", err)
@@ -183,7 +178,6 @@ func TestManifestGetLevels(t *testing.T) {
 	}
 	defer errors.CloseWithFatal(m, "manifest")
 
-	// Добавляем файлы на разные уровни
 	edit := &VersionEdit{
 		NewFiles: []SSTableInfo{
 			{FileNum: 1, Level: 0, MinKey: []byte("a"), MaxKey: []byte("b"), Size: 100},
@@ -206,7 +200,6 @@ func TestManifestGetLevels(t *testing.T) {
 	if len(levels[1]) != 2 {
 		t.Errorf("expected 2 files in level 1, got %d", len(levels[1]))
 	}
-	// Проверяем сортировку по MinKey
 	if string(levels[1][0].MinKey) != "c" || string(levels[1][1].MinKey) != "e" {
 		t.Errorf("level 1 not sorted correctly: %v", levels[1])
 	}
@@ -216,7 +209,6 @@ func TestManifestEmptyFile(t *testing.T) {
 	tmpDir := t.TempDir()
 	path := filepath.Join(tmpDir, "MANIFEST")
 
-	// Создаём пустой файл
 	vfs := vfs.NewDefaultVFS()
 	file, err := vfs.OpenFile(path, os.O_RDWR|os.O_CREATE, 0644)
 	if err != nil {
@@ -230,7 +222,6 @@ func TestManifestEmptyFile(t *testing.T) {
 	}
 	defer errors.CloseWithFatal(m, "manifest")
 
-	// Должен быть дефолтное состояние
 	if m.NextFileNum() != 1 {
 		t.Errorf("expected next file num 1, got %d", m.NextFileNum())
 	}
@@ -241,7 +232,6 @@ func TestManifestCorruptedFile(t *testing.T) {
 	path := filepath.Join(tmpDir, "MANIFEST")
 
 	vfs := vfs.NewDefaultVFS()
-	// Пишем некорректный JSON
 	file, err := vfs.OpenFile(path, os.O_RDWR|os.O_CREATE, 0644)
 	if err != nil {
 		t.Fatal(err)
@@ -252,14 +242,12 @@ func TestManifestCorruptedFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Манифест должен открыться (восстановление остановится на ошибке)
 	m, err := NewManifest(vfs, path)
 	if err != nil {
 		t.Fatalf("failed to open corrupted manifest: %v", err)
 	}
 	defer errors.CloseWithFatal(m, "manifest")
 
-	// Состояние должно быть дефолтным
 	if m.NextFileNum() != 1 {
 		t.Errorf("expected next file num 1, got %d", m.NextFileNum())
 	}
@@ -270,15 +258,14 @@ func TestManifestFsync(t *testing.T) {
 	tmpDir := t.TempDir()
 	path := filepath.Join(tmpDir, "MANIFEST")
 
-	// Используем стандартный VFS
 	vfs := vfs.NewDefaultVFS()
 	m, err := NewManifest(vfs, path)
 	if err != nil {
 		t.Fatalf("failed to create manifest: %v", err)
 	}
+	// Закрываем в конце теста — только один раз
 	defer errors.CloseWithFatal(m, "manifest")
 
-	// Применяем несколько VersionEdit
 	edit1 := &VersionEdit{
 		NewFiles: []SSTableInfo{
 			{FileNum: 1, Level: 0, MinKey: []byte("a"), MaxKey: []byte("b"), Size: 100},
@@ -298,8 +285,7 @@ func TestManifestFsync(t *testing.T) {
 		t.Fatalf("failed to apply edit2: %v", err)
 	}
 
-	// Закрываем манифест (симулируем нормальное завершение)
-	m.Close()
+	// НЕ ЗАКРЫВАЕМ ЗДЕСЬ — defer сделает это в конце
 
 	// Открываем заново (симулируем восстановление после краха)
 	m2, err := NewManifest(vfs, path)
@@ -308,7 +294,6 @@ func TestManifestFsync(t *testing.T) {
 	}
 	defer errors.CloseWithFatal(m2, "manifest2")
 
-	// Проверяем, что все изменения восстановились
 	levels := m2.GetLevels()
 	if len(levels[0]) != 1 || levels[0][0].FileNum != 1 {
 		t.Errorf("level 0 mismatch after recovery: %v", levels[0])

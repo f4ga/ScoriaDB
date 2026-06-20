@@ -276,7 +276,15 @@ func (e *LSMEngine) maybeCompact() {
 
 	// Simple condition: if Level0 has more than MaxLevel0Files files, start compaction
 	if len(e.levels[0]) > MaxLevel0Files {
-		//nolint:errcheck // error is handled inside goroutine
-		go e.compactLevel0()
+		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("WARNING: compaction panic: %v", r)
+				}
+			}()
+			if err := e.compactLevel0(); err != nil {
+				log.Printf("WARNING: compaction failed: %v", err)
+			}
+		}()
 	}
 }

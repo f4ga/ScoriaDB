@@ -154,7 +154,15 @@ func (e *LSMEngine) maybeCompactLevel0() {
 //nolint:unused // memtable flush trigger
 func (e *LSMEngine) maybeFlush() {
 	if e.memSize >= MaxMemTableSize {
-		//nolint:errcheck // error is handled inside goroutine
-		go e.flushMemTable()
+		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("WARNING: flush panic: %v", r)
+				}
+			}()
+			if err := e.flushMemTable(); err != nil {
+				log.Printf("WARNING: flush failed: %v", err)
+			}
+		}()
 	}
 }

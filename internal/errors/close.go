@@ -21,6 +21,14 @@ import (
 	"os"
 )
 
+// RemoveAll removes a directory tree and logs a warning if an error occurs.
+// Ignores os.ErrNotExist errors.
+func RemoveAll(path string) {
+	if err := os.RemoveAll(path); err != nil {
+		log.Printf("WARNING: failed to remove %s: %v", path, err)
+	}
+}
+
 // CloseWithLog closes an io.Closer and logs a warning if an error occurs.
 // Used in production code where close errors are non-critical.
 func CloseWithLog(closer io.Closer, name string) {

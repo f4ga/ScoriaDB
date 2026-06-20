@@ -95,11 +95,15 @@ func (w *groupCommitWriter) flushLoop() {
 		select {
 		case <-w.ticker.C:
 			w.mu.Lock()
-			_ = w.flushLocked() // ошибка игнорируется, но сохраняется в flushErr
+			if err := w.flushLocked(); err != nil {
+				w.flushErr = err
+			} // ошибка игнорируется, но сохраняется в flushErr
 			w.mu.Unlock()
 		case <-w.flushChan:
 			w.mu.Lock()
-			_ = w.flushLocked() // ошибка игнорируется, но сохраняется в flushErr
+			if err := w.flushLocked(); err != nil {
+				w.flushErr = err
+			} // ошибка игнорируется, но сохраняется в flushErr
 			w.mu.Unlock()
 			return
 		case <-w.done:

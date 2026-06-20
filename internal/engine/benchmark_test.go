@@ -32,7 +32,7 @@ func openBenchDB(b *testing.B) *LSMEngine {
 	if err != nil {
 		b.Fatal(err)
 	}
-	b.Cleanup(func() { os.RemoveAll(dir) })
+	b.Cleanup(func() { errors.RemoveAll(dir) })
 
 	db, err := NewLSMEngine(dir)
 	if err != nil {
@@ -193,7 +193,7 @@ func BenchmarkScan(b *testing.B) {
 		for iter.Next() {
 			count++
 		}
-		iter.Close()
+		errors.CloseWithLog(iter, "bench-scan-iter")
 		if count == 0 {
 			b.Fatal("scan returned 0 entries")
 		}

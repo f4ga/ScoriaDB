@@ -21,6 +21,7 @@ import (
 
 	"github.com/f4ga/ScoriaDB/internal/api/rest"
 	"github.com/f4ga/ScoriaDB/internal/auth"
+	"github.com/f4ga/ScoriaDB/internal/errors"
 	"github.com/f4ga/ScoriaDB/pkg/scoria"
 )
 
@@ -45,14 +46,12 @@ func main() {
 	if err != nil {
 		log.Fatalf("[SERVER] failed to open database: %v", err)
 	}
-	defer db.Close()
+	defer errors.CloseWithLog(db, "database")
 
-	// Создаём CF для аутентификации
 	if err := db.CreateCF(auth.AuthCF); err != nil {
 		log.Printf("[SERVER] Note: __auth__ CF creation: %v", err)
 	}
 
-	// Создаём admin пользователя (если нет)
 	ensureAdminUser(db)
 
 	restServer := rest.NewServer(db, jwtSecret)
@@ -66,23 +65,8 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.Handle("/api/", authMiddleware(restServer))
-	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"status":"ok"}`))
-	})
-	mux.HandleFunc("/ready", func(w http.ResponseWriter, r *http.Request) {
-		_, err := db.Get([]byte("__scoria_health__"))
-		if err != nil {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusServiceUnavailable)
-			w.Write([]byte(`{"status":"not ready"}`))
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"status":"ready"}`))
-	})
+	mux.HandleFunc("/health", healthHandler)
+	mux.HandleFunc("/ready", readyHandler(db))
 
 	log.Printf("[SERVER] REST API starting on %s", addr)
 	if err := http.ListenAndServe(addr, mux); err != nil {
@@ -96,10 +80,37 @@ func ensureAdminUser(cfdb scoria.CFDB) {
 		log.Println("[SERVER] Admin user already exists")
 		return
 	}
-	err = auth.CreateUser(cfdb, "admin", "2027", []string{auth.RoleAdmin})
-	if err != nil {
+	if err := auth.CreateUser(cfdb, "admin", "2027", []string{auth.RoleAdmin}); err != nil {
 		log.Printf("[SERVER] WARNING: failed to create admin user: %v", err)
 		return
 	}
 	log.Println("[SERVER] ✅ Admin user created with default password: 2027")
+}
+
+func healthHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	if _, err := w.Write([]byte(`{"status":"ok"}`)); err != nil {
+		log.Printf("WARNING: failed to write health response: %v", err)
+	}
+}
+
+func readyHandler(db scoria.CFDB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		_, err := db.Get([]byte("__scoria_health__"))
+		if err != nil {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			if _, err := w.Write([]byte(`{"status":"not ready"}`)); err != nil {
+				log.Printf("WARNING: failed to write not ready response: %v", err)
+			}
+			return
+		}
+
+		w.WriteHeader(http.StatusOK)
+		if _, err := w.Write([]byte(`{"status":"ready"}`)); err != nil {
+			log.Printf("WARNING: failed to write ready response: %v", err)
+		}
+	}
 }

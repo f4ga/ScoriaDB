@@ -17,11 +17,9 @@ package txn
 import (
 	"encoding/binary"
 	"fmt"
-
-	"github.com/f4ga/ScoriaDB/internal/engine"
 )
 
-// OpType представляет тип операции в батче.
+// OpType represents operation type in a batch.
 type OpType int
 
 const (
@@ -29,26 +27,26 @@ const (
 	OpDelete
 )
 
-// BatchOp представляет одну операцию в батче.
+// BatchOp represents a single operation in a batch.
 type BatchOp struct {
 	Type  OpType
 	Key   []byte
-	Value []byte // для Delete может быть nil
+	Value []byte
 }
 
-// WriteBatch представляет атомарный батч операций.
+// WriteBatch represents an atomic batch of operations.
 type WriteBatch struct {
 	ops []BatchOp
 }
 
-// NewWriteBatch создает новый пустой WriteBatch.
+// NewWriteBatch creates a new empty WriteBatch.
 func NewWriteBatch() *WriteBatch {
 	return &WriteBatch{
 		ops: make([]BatchOp, 0),
 	}
 }
 
-// AddPut добавляет операцию записи в батч.
+// AddPut adds a Put operation to the batch.
 func (b *WriteBatch) AddPut(key, value []byte) {
 	b.ops = append(b.ops, BatchOp{
 		Type:  OpPut,
@@ -57,7 +55,7 @@ func (b *WriteBatch) AddPut(key, value []byte) {
 	})
 }
 
-// AddDelete добавляет операцию удаления в батч.
+// AddDelete adds a Delete operation to the batch.
 func (b *WriteBatch) AddDelete(key []byte) {
 	b.ops = append(b.ops, BatchOp{
 		Type:  OpDelete,
@@ -66,34 +64,33 @@ func (b *WriteBatch) AddDelete(key []byte) {
 	})
 }
 
-// Size возвращает количество операций в батче.
+// Size returns the number of operations in the batch.
 func (b *WriteBatch) Size() int {
 	return len(b.ops)
 }
 
-// Clear очищает батч.
+// Clear clears the batch.
 func (b *WriteBatch) Clear() {
 	b.ops = b.ops[:0]
 }
 
-// ApplyBatch применяет все операции батча атомарно к движку.
-// Возвращает commit timestamp, который был использован для всех операций.
-// Если происходит ошибка, ни одна операция не применяется.
-func ApplyBatch(db *engine.LSMEngine, batch *WriteBatch) (uint64, error) {
+// ApplyBatch applies all operations atomically to the engine.
+// Returns the commit timestamp used.
+func ApplyBatch(db interface {
+	NextTimestamp() uint64
+	WriteAtomicBatch([]byte, uint64) error
+}, batch *WriteBatch) (uint64, error) {
 	if batch.Size() == 0 {
 		return 0, nil
 	}
 
-	// Генерируем единый commit timestamp.
 	commitTS := db.NextTimestamp()
 
-	// Сериализуем батч.
 	encoded, err := EncodeBatch(batch)
 	if err != nil {
 		return 0, fmt.Errorf("failed to encode batch: %w", err)
 	}
 
-	// Применяем батч атомарно через новый метод.
 	if err := db.WriteAtomicBatch(encoded, commitTS); err != nil {
 		return 0, fmt.Errorf("failed to apply batch atomically: %w", err)
 	}
@@ -101,27 +98,25 @@ func ApplyBatch(db *engine.LSMEngine, batch *WriteBatch) (uint64, error) {
 	return commitTS, nil
 }
 
-// ApplyBatchWithTS применяет батч с заданным commit timestamp.
-// Используется внутри транзакций, где timestamp уже известен.
-func ApplyBatchWithTS(db *engine.LSMEngine, batch *WriteBatch, commitTS uint64) error {
+// ApplyBatchWithTS applies the batch with a given commit timestamp.
+func ApplyBatchWithTS(db interface {
+	WriteAtomicBatch([]byte, uint64) error
+}, batch *WriteBatch, commitTS uint64) error {
 	if batch.Size() == 0 {
 		return nil
 	}
-	// Сериализуем батч.
+
 	encoded, err := EncodeBatch(batch)
 	if err != nil {
 		return fmt.Errorf("failed to encode batch: %w", err)
 	}
+
 	return db.WriteAtomicBatch(encoded, commitTS)
 }
 
-// EncodeBatch сериализует WriteBatch в байты для хранения в WAL.
-// Формат: количество операций (2 байта) + для каждой операции:
-//
-//	тип (1 байт) + длина ключа (2 байта) + ключ + длина значения (4 байта) + значение
+// EncodeBatch serializes WriteBatch into bytes for WAL storage.
 func EncodeBatch(batch *WriteBatch) ([]byte, error) {
-	// Сначала вычисляем общий размер
-	totalSize := 2 // для количества операций
+	totalSize := 2
 	for _, op := range batch.ops {
 		totalSize += 1 + 2 + len(op.Key) + 4 + len(op.Value)
 	}
@@ -129,35 +124,29 @@ func EncodeBatch(batch *WriteBatch) ([]byte, error) {
 	buf := make([]byte, totalSize)
 	pos := 0
 
-	// Количество операций
 	binary.BigEndian.PutUint16(buf[pos:pos+2], uint16(len(batch.ops)))
 	pos += 2
 
-	// Каждая операция
 	for _, op := range batch.ops {
-		// Тип операции
-		if op.Type == OpPut {
+		switch op.Type {
+		case OpPut:
 			buf[pos] = 1
-		} else if op.Type == OpDelete {
+		case OpDelete:
 			buf[pos] = 2
-		} else {
+		default:
 			return nil, fmt.Errorf("unknown operation type: %v", op.Type)
 		}
 		pos++
 
-		// Длина ключа
 		binary.BigEndian.PutUint16(buf[pos:pos+2], uint16(len(op.Key)))
 		pos += 2
 
-		// Ключ
 		copy(buf[pos:pos+len(op.Key)], op.Key)
 		pos += len(op.Key)
 
-		// Длина значения
 		binary.BigEndian.PutUint32(buf[pos:pos+4], uint32(len(op.Value)))
 		pos += 4
 
-		// Значение
 		copy(buf[pos:pos+len(op.Value)], op.Value)
 		pos += len(op.Value)
 	}
@@ -165,7 +154,7 @@ func EncodeBatch(batch *WriteBatch) ([]byte, error) {
 	return buf, nil
 }
 
-// DecodeBatch десериализует WriteBatch из байтов.
+// DecodeBatch deserializes WriteBatch from bytes.
 func DecodeBatch(data []byte) (*WriteBatch, error) {
 	if len(data) < 2 {
 		return nil, fmt.Errorf("batch data too short")
@@ -210,11 +199,12 @@ func DecodeBatch(data []byte) (*WriteBatch, error) {
 		copy(value, data[pos:pos+int(valLen)])
 		pos += int(valLen)
 
-		if opType == 1 {
+		switch opType {
+		case 1:
 			batch.AddPut(key, value)
-		} else if opType == 2 {
+		case 2:
 			batch.AddDelete(key)
-		} else {
+		default:
 			return nil, fmt.Errorf("unknown operation type in batch: %d", opType)
 		}
 	}

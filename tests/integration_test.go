@@ -17,6 +17,7 @@ package tests
 import (
 	"testing"
 
+	"github.com/f4ga/ScoriaDB/internal/errors"
 	"github.com/f4ga/ScoriaDB/pkg/scoria"
 )
 
@@ -28,7 +29,7 @@ func TestIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to open database: %v", err)
 	}
-	defer db.Close()
+	defer errors.CloseWithFatal(db, "integration-db")
 
 	// Записываем ключ
 	key := []byte("testkey")

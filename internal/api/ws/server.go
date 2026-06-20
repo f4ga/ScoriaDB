@@ -18,6 +18,7 @@ import (
 	"log"
 	"net/http"
 
+	"github.com/f4ga/ScoriaDB/internal/errors"
 	"github.com/gorilla/websocket"
 )
 
@@ -45,7 +46,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		log.Printf("WebSocket upgrade failed: %v", err)
 		return
 	}
-	defer conn.Close()
+	defer errors.CloseWithLog(conn, "websocket-conn")
 
 	// Регистрируем соединение в хабе
 	s.hub.Register(conn)
