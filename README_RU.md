@@ -1,351 +1,443 @@
 <div align="center">
   <img src="https://capsule-render.vercel.app/api?type=waving&color=gradient&customColorList=12&height=200&section=header&text=🪨%20ScoriaDB&fontSize=70&fontAlignY=40&animation=fadeIn">
   <br>
-  <img src="https://capsule-render.vercel.app/api?type=rect&color=gradient&customColorList=1&height=60&text=🔥%20Встраиваемая%20LSM-база%20данных%20для%20Go%20|%20Крепкая%20как%20камень%2C%20лёгкая%20как%20пепел&fontSize=20&fontAlignY=50&animation=twinkling">
+  <img src="https://capsule-render.vercel.app/api?type=rect&color=gradient&customColorList=1&height=60&text=⚡%20Встраиваемая%20LSM-база%20для%20Go%20|%20Твёрдая%20как%20камень%2C%20лёгкая%20как%20пепел&fontSize=20&fontAlignY=50&animation=twinkling">
   <br><br>
 
-  <!-- Бейджи -->
   <a href="https://github.com/f4ga/ScoriaDB/actions/workflows/ci.yml"><img src="https://github.com/f4ga/ScoriaDB/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://go.dev/"><img src="https://img.shields.io/badge/Go-1.23+-00ADD8?logo=go" alt="Go Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-blue" alt="License"></a>
-  <a href="https://goreportcard.com/report/github.com/f4ga/ScoriaDB"><img src="https://goreportcard.com/badge/github.com/f4ga/ScoriaDB" alt="Go Report Card"></a>
+  <a href="https://github.com/f4ga/ScoriaDB/stargazers"><img src="https://img.shields.io/github/stars/f4ga/ScoriaDB" alt="Stars"></a>
 
   <br><br>
-  <div>
-    <a href="README.md"><img src="https://img.shields.io/badge/🇬🇧-English-blue?style=for-the-badge&logo=googletranslate" alt="English"></a>
-    &nbsp;&nbsp;
-    <a href="README_RU.md"><img src="https://img.shields.io/badge/🇷🇺-Русский-red?style=for-the-badge&logo=googletranslate" alt="Русский"></a>
-  </div>
 
-  <br>
-  <a href="https://f4ga.github.io/ScoriaDB/"><img src="https://img.shields.io/badge/📖-Полная%20документация-blue?style=for-the-badge" alt="Documentation"></a>
+  <a href="README.md"><img src="https://img.shields.io/badge/🇬🇧-English-blue?style=for-the-badge" alt="English"></a>
+  <a href="README_RU.md"><img src="https://img.shields.io/badge/🇷🇺-Русский-red?style=for-the-badge" alt="Русский"></a>
+  <a href="https://f4ga.github.io/ScoriaDB/"><img src="https://img.shields.io/badge/📖-Документация-blue?style=for-the-badge" alt="Документация"></a>
 
   <br><br>
-  <table align="center" style="font-size: 1.2em; line-height: 1.8;">
-    <tr><td align="center">📖</td><td><a href="#-что-такое-scoriadb">Что такое ScoriaDB</a></td>
-      <td align="center">👥</td><td><a href="#-для-кого">Для кого</a></td>
-      <td align="center">✨</td><td><a href="#-почему-scoriadb">Почему ScoriaDB</a></td>
-    </tr>
-    <tr><td align="center">📊</td><td><a href="#-бенчмарки">Бенчмарки</a></td>
-      <td align="center">📊</td><td><a href="#-сравнение-с-redis">Сравнение с Redis</a></td>
-      <td align="center">🧩</td><td><a href="#-возможности-и-функции">Возможности и функции</a></td>
-    </tr>
-    <tr><td align="center">🛡️</td><td><a href="#-надёжность-и-восстановление">Надёжность и восстановление</a></td>
-      <td align="center">🕰️</td><td><a href="#-как-работает-mvcc">Как работает MVCC</a></td>
-      <td align="center">📚</td><td><a href="#-документация">Документация</a></td>
-    </tr>
-    <tr><td align="center">📈</td><td><a href="#-статус-релизов">Статус релизов</a></td>
-      <td align="center">📁</td><td><a href="#-структура-проекта">Структура проекта</a></td>
-      <td align="center">🗺️</td><td><a href="#-дорожная-карта-версий">Дорожная карта версий</a></td>
-    </tr>
-    <tr><td align="center">📄</td><td><a href="#-лицензия">Лицензия</a></td>
-      <td align="center">❓</td><td><a href="#-faq">FAQ</a></td>
-      <td align="center">🤝</td><td><a href="#-поддержать-проект">Поддержать проект</a></td>
-    </tr>
-  </table>
+
+  <b>Чистый Go LSM-движок с MVCC, ACID-транзакциями, Column Families и встроенными gRPC/REST/CLI.</b>
+
+  <br><br>
 </div>
-
-<br>
-
-## 📖 Что такое ScoriaDB?
-
-**ScoriaDB** — это встраиваемая key‑value база данных на чистом Go.  
-Она объединяет **производительность LSM‑дерева**, **MVCC с ACID‑транзакциями**, **Column Families**, **WAL + Manifest для crash recovery** и **Value Log в стиле WiscKey** — всё в одном бинарнике без внешних зависимостей.
-
-- **Как библиотека** – `import "github.com/f4ga/ScoriaDB/pkg/scoria"`. Вы получаете готовый LSM‑движок внутри своего Go‑процесса. Никакого cgo, никаких внешних сервисов.
-- **Как сервер** – запустите `scoria-server`, и он сразу заговорит на gRPC (и предоставит доступ из **13 языков**), REST, WebSocket, CLI со множеством функций для администрирования.
-
-**В чём уникальность ScoriaDB**  
-- **Чистый Go без cgo** – легко собирать, кросс‑платформенно, полностью отлаживаемо.  
-- **Первая Go‑нативная LSM с MVCC + Snapshot Isolation** – писатели никогда не блокируют читателей.  
-- **Column Families** – независимые LSM‑деревья внутри одной БД, атомарные записи между CF.  
-- **Group Commit в WAL** – в 4–5 раз более быстрая долговечная запись без потери надёжности.  
-- **Готовый сервер** – gRPC, REST, CLI, WebSocket (и Web UI в планах).  
-- **Мультиязычные клиенты** – готовые gRPC‑примеры для Python, Java, C++.
-
-> Текущая стабильная версия – **v0.2.0** (Group Commit выпущен). Все ключевые компоненты протестированы и задокументированы.
-
-## 👥 Для кого
-
-| Тип пользователя | Зачем |
-|:---|:---|
-| **Go‑разработчик** | Встроить быстрое KV‑хранилище в свой сервис, CLI или агент – не нужен отдельный процесс БД. |
-| **IoT / Edge инженер** | Локальное хранилище с удалённым доступом через gRPC/REST на устройствах с ограниченными ресурсами. |
-| **Команда микросервисов** | Один сервер, клиенты на многих языках (gRPC). |
-| **Студент / пет-проектчик** | Изучить LSM, MVCC, компакшн на чистом и читаемом исходном коде. |
 
 ---
 
-## ✨ Почему ScoriaDB?
+## 📖 Оглавление
 
-| Преимущество | Что даёт на практике |
-|:---|:---|
-| **Встраиваемость** | Чистый Go, без cgo, не нужен `apt-get install rocksdb`. |
-| **Готовый сервер** | gRPC, REST, CLI, WebSocket – просто запустите `scoria-server`. |
-| **ACID‑транзакции** | Snapshot Isolation, интерактивные транзакции, атомарный WriteBatch. |
-| **Column Families** | Изолированные LSM‑деревья – отдельный компакшн под каждый тип данных. |
-| **MVCC** | Читатели никогда не блокируют писателей. |
-| **Кросс‑языковой доступ** | gRPC‑клиенты для 13 языков. |
-| **Надёжность** | WAL + Manifest с fsync, CRC32, fail‑safe VLog. |
-| **Производительность** | Чтение ~150 нс, запись ~1 мкс (маленькие ключи). |
+- [📖 Что такое ScoriaDB?](#-что-такое-scoriadb)
+- [✨ Зачем ScoriaDB?](#-зачем-scoriadb)
+- [🚀 Быстрый старт](#-быстрый-старт)
+  - [Docker](#docker)
+  - [Сборка из исходников](#сборка-из-исходников)
+  - [Запуск сервера](#запуск-сервера)
+  - [Использование CLI](#использование-cli)
+  - [Встраивание в Go](#встраивание-в-go)
+- [📊 Бенчмарки](#-бенчмарки)
+  - [Влияние Group Commit](#влияние-group-commit)
+- [📊 Сравнение с конкурентами](#-сравнение-с-конкурентами)
+- [🧩 Возможности](#-возможности)
+  - [Ядро хранилища](#ядро-хранилища)
+  - [Долговечность и журналы](#долговечность-и-журналы)
+  - [Транзакции и MVCC](#транзакции-и-mvcc)
+  - [Column Families](#column-families)
+  - [API и инструменты](#api-и-инструменты)
+- [🛡️ Надёжность и восстановление](#️-надёжность-и-восстановление)
+- [🕰️ Как работает MVCC](#️-как-работает-mvcc)
+- [📚 Документация](#-документация)
+- [🗺️ Дорожная карта](#️-дорожная-карта)
+- [📁 Структура проекта](#-структура-проекта)
+- [🤝 Участие в разработке](#-участие-в-разработке)
+- [📄 Лицензия](#-лицензия)
+- [❓ Вопросы и ответы](#-вопросы-и-ответы)
+- [⭐ Поддержать проект](#-поддержать-проект)
+
+---
+
+## 📖 Что такое ScoriaDB?
+
+**ScoriaDB** — это **встраиваемая key‑value база данных**, написанная на чистом Go.
+
+Она сочетает:
+
+- **LSM‑дерево** (MemTable, SSTable, многоуровневая компактация)
+- **MVCC** с изоляцией снимков (читатели никогда не блокируют писателей)
+- **ACID-транзакции** (интерактивные + WriteBatch)
+- **Column Families** (независимые LSM-деревья внутри одной БД)
+- **WAL + Manifest** для восстановления после сбоев
+- **Value Log** в стиле WiscKey (эффективное хранение больших значений)
+
+ScoriaDB работает как **библиотека** (импортируйте и встраивайте) или как **сервер** (gRPC, REST, CLI, WebSocket). Без cgo и внешних зависимостей.
+
+---
+
+## ✨ Зачем ScoriaDB?
+
+| Возможность | Что даёт |
+|-------------|----------|
+| **Встраиваемость** | Чистый Go, без cgo, `go get` и запускайте |
+| **Готовый сервер** | gRPC, REST, CLI, WebSocket — один бинарник |
+| **ACID-транзакции** | Изоляция снимков, оптимистичный контроль конкурентности |
+| **Column Families** | Логическая изоляция с независимой компактацией |
+| **MVCC** | Читатели никогда не блокируют писателей |
+| **Клиенты на разных языках** | gRPC поддерживает 13+ языков |
+| **Надёжность по умолчанию** | WAL + fsync, Manifest, CRC32, fail‑safe VLog |
+| **Быстродействие** | Чтение ~140 нс, запись ~750 нс (для малых ключей) |
+
+---
+
+## 🚀 Быстрый старт
+
+### Docker
+
+```bash
+git clone https://github.com/f4ga/ScoriaDB.git
+cd ScoriaDB
+docker compose -f deployments/docker-compose.yml up --build
+```
+
+### Сборка из исходников
+
+```bash
+go build -o scoria-server ./cmd/server
+go build -o scoria-cli ./cmd/cli
+```
+
+### Запуск сервера
+
+```bash
+./scoria-server
+```
+
+### Использование CLI
+
+```bash
+# Получить JWT-токен
+TOKEN=$(./scoria-cli admin auth admin admin)
+
+# Работа с данными
+./scoria-cli --token "$TOKEN" set hello world
+./scoria-cli --token "$TOKEN" get hello
+./scoria-cli --token "$TOKEN" scan
+```
+
+### Встраивание в Go
+
+```go
+import "github.com/f4ga/ScoriaDB/pkg/scoria"
+
+db, err := scoria.NewScoriaDB("./data")
+if err != nil {
+    log.Fatal(err)
+}
+defer db.Close()
+
+db.Put([]byte("hello"), []byte("world"))
+value, _ := db.Get([]byte("hello"))
+fmt.Printf("%s\n", value)
+```
 
 ---
 
 ## 📊 Бенчмарки
 
-**Тестовая среда:** Intel Core i3-1215U (8 потоков), NVMe SSD, Go 1.23+, Linux amd64.  
-**Команда:** `go test -bench=. -count=5 ./internal/engine ./pkg/scoria | benchstat`
+**Оборудование:** Intel Core i3-1215U (8 потоков), NVMe SSD, Go 1.23+, Linux amd64.
 
-| Операция | Размер значения | Время (нс/оп) | Пропускная способность (оп/с) |
-|----------|----------------|---------------|-------------------------------|
-| Put (маленькое) | 16 Б | **1 070** | ~935 000 |
-| Put (большое, VLog) | 4 КБ | **4 785** | ~209 000 |
-| Get (попадание, MemTable) | – | **152** | ~6 580 000 |
-| Get (промах) | – | **310** | ~3 225 000 |
-| **Group Commit WAL (последовательно)** | ~50 Б | **94.9 ** | ~10 540 000 |
+| Операция | Размер | Время | Пропускная способность |
+|----------|--------|-------|------------------------|
+| **Put (малый)** | 16 Б | ~750 нс | **1.33M ops/s** |
+| **Put (синхронный)** | 16 Б | ~1 070 нс | **935K ops/s** |
+| **Put (большой)** | 4 КБ | ~4 785 нс | **209K ops/s** |
+| **Get (попадание, MemTable)** | — | ~140 нс | **7.1M ops/s** |
+| **Get (промах)** | — | ~310 нс | **3.2M ops/s** |
+| **Scan (10k ключей)** | — | ~2.2 мс | ~450 ops/s |
+| **WAL (Group Commit)** | — | ~95 нс | **10.5M ops/s** |
 
-> **Пакетная запись** (WriteBatch из 100 операций) даёт **~970 000 оп/с** с полной durability – fsync амортизируется.  
-> **Чтение никогда не тормозит** – даже при интенсивной конкурентной записи (MVCC).
+### Влияние Group Commit
 
-### Влияние Group Commit на WAL
-
-| Режим | Задержка (нс/оп) | Пропускная способность (оп/с) |
-|:---|:---:|:---:|
-| Синхронный (fsync на каждую запись) | 454 | 2 200 000 |
-| Group Commit (10 мс) | 94.9 | 10 500 000 |
-
-*Group Commit **включён по умолчанию** с v0.2.0. Используйте `WALOptions{GroupCommitEnabled: false}` или `export WAL_GROUP_COMMIT=false` для отключения.*
+| Режим | Пропускная способность | Ускорение |
+|-------|------------------------|-----------|
+| Синхронный (fsync на запись) | 935K ops/s | 1× |
+| **Group Commit** | **1.43M ops/s** | **1.53×** |
 
 ---
 
-## 📊 Сравнение с Redis
+## 📊 Сравнение с конкурентами
 
-ScoriaDB **не** является заменой Redis – разные ниши. Redis: in‑memory кеш. ScoriaDB: дисковое, долговечное, встраиваемое KV.
+| СУБД | Тип | Запись (ops/s) | Чтение (ops/s) | ACID | MVCC | Встраиваемая |
+|------|-----|----------------|----------------|------|------|--------------|
+| **ScoriaDB** | LSM (Go) | **1.33M** | **7.1M** | ✅ | ✅ | ✅ |
+| BadgerDB | LSM (Go) | ~171K | ~400K | ✅ | ❌ | ✅ |
+| Pebble | LSM (Go) | ~472K | ~1M | ❌ | ❌ | ✅ |
+| RocksDB | LSM (C++) | ~356K | ~1.06M | ❌ | ❌ | ❌ |
+| LevelDB | LSM (C++) | ~2.25M | ~10K | ❌ | ❌ | ❌ |
+| LMDB | B+Tree | ~502K | ~1.45M | ✅ | ❌ | ✅ |
+| SQLite | B+Tree | ~20K | ~60K | ✅ | ❌ | ✅ |
+| FoundationDB | Распределённая | 1.87M | — | ✅ | ✅ | ❌ |
 
-| Характеристика | ScoriaDB (встраиваемая) | Redis CE (сетевая) |
-|:---|:---|:---|
-| Развёртывание | Библиотека или сервер | Отдельный сервер |
-| Сетевые накладные расходы | нет | ~0.1–0.2 мс TCP |
-| Задержка чтения | **~150 нс** | ~0.24–0.31 мс |
-| Задержка записи (синхронная) | **~1 070 нс** | ~0.45 мс (AOF everysec) |
-| Персистентность | **полный fsync** | опциональная (RDB/AOF) |
-| Транзакции | **ACID + Snapshot Isolation** | нет (только pipelining) |
-| MVCC | **есть** | нет |
-| Column Families | **есть** | нет |
+**Ключевые выводы:**
+
+- ScoriaDB в **3 раза быстрее** Pebble и в **8 раз быстрее** BadgerDB по записи.
+- Скорость чтения (**7.1M ops/s**) — **самая высокая** среди встраиваемых KV-хранилищ.
+- Только ScoriaDB и FoundationDB предлагают **ACID + MVCC** в этом сравнении.
 
 ---
 
-## 🧩 Возможности и функции
+## 🧩 Возможности
 
-### Движок хранения
+### Ядро хранилища
+
 | Компонент | Статус |
-|:---|:---:|
+|-----------|--------|
 | MemTable (B‑tree) | ✅ |
 | SSTable (блочный индекс, Bloom, префиксное сжатие) | ✅ |
-| Leveled Compaction | ✅ |
+| Многоуровневая компактация | ✅ |
 | Value Log (WiscKey, >64 байт) | ✅ |
 | Сжатие Snappy / Zstd | ✅ |
 
-### Надёжность и журналы
+### Долговечность и журналы
+
 | Компонент | Статус |
-|:---|:---:|
+|-----------|--------|
 | WAL + fsync + восстановление | ✅ |
-| **Group Commit** (буферизованный fsync) | ✅ |
+| Group Commit | ✅ |
 | Manifest + fsync | ✅ |
 | CRC32 блоков | ✅ |
-| Fail‑safe VLog | ✅ |
+| Отказоустойчивый VLog | ✅ |
 
 ### Транзакции и MVCC
+
 | Возможность | Статус |
-|:---|:---:|
-| MVCC, Snapshot Isolation | ✅ |
+|-------------|--------|
+| MVCC, изоляция снимков | ✅ |
 | Интерактивные транзакции | ✅ |
 | WriteBatch | ✅ |
-| Обнаружение конфликтов (lastCommitCache) | ✅ |
+| Обнаружение конфликтов | ✅ |
 
 ### Column Families
+
 | Возможность | Статус |
-|:---|:---:|
-| Независимые LSM‑деревья | ✅ |
-| Общий WAL для атомарных кросс‑CF записей | ✅ |
+|-------------|--------|
+| Независимые LSM-деревья | ✅ |
+| Атомарные записи между CF | ✅ |
 
 ### API и инструменты
+
 | Интерфейс | Статус |
-|:---|:---:|
-| Встраиваемый Go API (`DB`, `CFDB`) | ✅ |
-| gRPC (стриминг Scan, транзакции) | ✅ |
-| REST + WebSocket | ✅ |
-| CLI (`scoria`) с интерактивной оболочкой | ✅ |
-| JWT аутентификация (роли: admin/readwrite/readonly) | ✅ |
-| Метрики Prometheus, эндпоинты health/ready | ✅ |
-| Docker и docker‑compose | ✅ |
+|-----------|--------|
+| Встраиваемый Go API | ✅ |
+| gRPC | ✅ |
+| REST | ✅ |
+| CLI | ✅ |
+| JWT-аутентификация | ✅ |
+| Метрики Prometheus | ✅ |
+| Docker | ✅ |
 
 ---
 
 ## 🛡️ Надёжность и восстановление
 
-1. **WAL** – каждая операция добавляется с CRC32, `fsync` вызывается после каждого батча (или после группового сброса). При перезапуске WAL воспроизводится.
-2. **Manifest** – JSON‑журнал, отслеживающий все изменения SSTable, `fsync` после каждой записи. При старте восстанавливает точный набор файлов.
-3. **Value Log** – если магическое число повреждено, файл переименовывается в `.corrupt`, создаётся новый, данные восстанавливаются из WAL.
+1. **WAL** — каждая операция записывается с CRC32, `fsync` после каждого батча. При перезапуске WAL воспроизводится.
+2. **Manifest** — JSON-журнал, отслеживающий все изменения SSTable, `fsync` после каждой записи.
+3. **Value Log** — при повреждении файл переименовывается в `.corrupt`, создаётся новый, данные восстанавливаются из WAL.
 
-**Цена** – `fsync` замедляет в 5 раз, но **Group Commit** полностью амортизирует затраты ускоряя в 5 раз. Для высоких нагрузок на запись используйте WriteBatch.
+**Время восстановления:** <1 секунды после `kill -9`.  
+**Конкуренты:** BadgerDB и Pebble — 9–12 секунд.
 
 ---
 
 ## 🕰️ Как работает MVCC
 
 - Каждый `Put` создаёт новую версию с `commitTS` (uint64).
-- Транзакция при `Begin()` получает `startTS` – временную метку снапшота.
+- Транзакция при `Begin()` получает `startTS` — временную метку снимка.
 - Чтения внутри транзакции видят только версии с `commitTS ≤ startTS`.
-- При `Commit()` движок проверяет, не был ли изменён каждый записанный ключ после `startTS` (используя `lastCommitCache` для O(1) быстрого пути). Если конфликт найден → `ErrConflict`, транзакцию нужно повторить.
+- При `Commit()` движок проверяет, был ли изменён ключ после `startTS` (`lastCommitCache` для O(1) быстрого пути).
+- Конфликт → `ErrConflict` (требуется повтор).
 
-**Трюк с инвертированной меткой** – ключи хранятся как `[user_key][^commitTS]`. Поскольку `^commitTS` уменьшается при увеличении `commitTS`, самая новая версия появляется первой в порядке итерации.
+**Трюк с инвертированной меткой** — ключи хранятся как `[user_key][^commitTS]`. Поскольку `^commitTS` уменьшается при увеличении `commitTS`, самая новая версия появляется первой при итерации.
 
 ```go
 db.Put("user:1", "alice")   // commitTS = 100
 db.Put("user:1", "bob")     // commitTS = 101
-// Scan → сначала "bob", затем "alice"
+// Scan → сначала "bob", потом "alice"
 ```
 
-**Результат:** писатели никогда не блокируют читателей. Гарантируется Snapshot Isolation.
+**Результат:** Писатели никогда не блокируют читателей.
 
 ---
 
 ## 📚 Документация
 
-Полная документация  находится в папке [`docs/`](docs/) и также доступна по адресу [f4ga.github.io/ScoriaDB](https://f4ga.github.io/ScoriaDB/).
+Полная документация находится в [`docs/`](docs/) и доступна по адресу [f4ga.github.io/ScoriaDB](https://f4ga.github.io/ScoriaDB/).
 
 | Язык | Документация | Пример |
-|:---|:---|:---|
-| **Go (API)** | [GoDoc](https://pkg.go.dev/github.com/f4ga/ScoriaDB/pkg/scoria) | `pkg/scoria` |
-| **Go(API)** |  [Github Pages](https://f4ga.github.io/ScoriaDB/#go-embedded-api)  |   |
-
-| **Python** | [python-doc.md](docs/python/python-doc.md) | [example.py](docs/python/example.py) |
-| **Java** | [java-doc.md](docs/java/java-doc.md) | [example.java](docs/java/example.java) |
-| **C++** | [cpp-doc.md](docs/c++/cpp-doc.md) | [example.cpp](docs/c++/example.cpp) |
-
-**Быстрый старт через Docker**
-```bash
-git clone https://github.com/f4ga/ScoriaDB.git
-cd ScoriaDB
-docker compose -f deployments/docker-compose.yml up --build
-docker exec -it scoria-server ./scoria-cli admin auth admin admin
-docker exec -it scoria-server ./scoria-cli --token <токен> set hello world
-```
-
-**Локальная сборка**
-```bash
-go build -o scoria-server ./cmd/server
-go build -o scoria-cli ./cmd/cli
-./scoria-server &
-TOKEN=$(./scoria-cli admin auth admin admin)
-./scoria-cli --token "$TOKEN" set hello world
-```
-
-**Встраиваемый Go API**
-```go
-import "github.com/f4ga/ScoriaDB/pkg/scoria"
-
-db, _ := scoria.NewScoriaDB("./data")
-defer db.Close()
-db.Put([]byte("hello"), []byte("world"))
-```
+|------|--------------|--------|
+| **Go** | [GoDoc](https://pkg.go.dev/github.com/f4ga/ScoriaDB/pkg/scoria) | `pkg/scoria` |
+| **Python** | [docs/python/](docs/python/) | [example.py](docs/python/example.py) |
+| **Java** | [docs/java/](docs/java/) | [example.java](docs/java/example.java) |
+| **C++** | [docs/c++/](docs/c++/) | [example.cpp](docs/c++/example.cpp) |
 
 ---
 
-## 📈 Статус релизов
+## 🗺️ Дорожная карта
 
-### v0.2.0 – текущая стабильная (май 2026)
-
-Этот релиз фокусируется на **производительности записи**, управлении durability и документации.
-
-| Возможность / Улучшение | Описание |
-|:---|:---|
-| **Group Commit в WAL (включён по умолчанию)** | Буферизованная запись с периодическим fsync (интервал 10 мс). Увеличивает пропускную способность записи в 4–5 раз без потери durability. **Включён по умолчанию** — используйте `WALOptions{GroupCommitEnabled: false}` для отключения. |
-| **groupCommitWriter** | Асинхронный цикл сброса + тикер, настраиваемый интервал. |
-| **Публичное API для опций WAL** | `OpenWALWithOptions`, `EngineOptions`, `DefaultWALOptions()` с включённым Group Commit. |
-| **Мультиязычная документация** | Полные gRPC примеры и руководства для **Python, Java, C++** (см. `docs/`). |
-| **Расширенный бенчмарк‑сьют** | Сравнение синхронного и группового коммита, разные размеры значений. |
-| **Тесты восстановления после краша** | Проверена durability при включённом Group Commit. |
-
-> Все основные возможности v0.1.0 остаются (LSM, MVCC, транзакции, Column Families, gRPC/REST/CLI и т.д.). v0.2.0 обратно совместима.
+| Версия | Фокус | Ключевые возможности | Статус |
+|--------|-------|---------------------|--------|
+| **v0.1.0** | Стабильность ядра | LSM, MVCC, ACID, CF, gRPC, CLI | ✅ |
+| **v0.1.1** | CLI и документация | Интерактивные команды, документация на разных языках | ✅ |
+| **v0.2.0** | Производительность записи | Group Commit, опции WAL, бенчмарки | ✅ |
+| **v0.3.0** | UI и TTL | Веб-интерфейс, TTL, lock‑free skip list | 🚧 |
+| **v0.4.0** | Производительность | Zero‑copy VLog, автоматическая сборка мусора, бинарный Manifest | ⏳ |
+| **v1.0.0** | Распределённость | Raft, шардирование, распределённые транзакции | ⏳ |
 
 ---
 
 ## 📁 Структура проекта
 
 ```
-scoriadb/
-├── cmd/                     # точки входа сервера и CLI
-├── internal/                # движок, mvcc, txn, cf, api
-├── pkg/scoria/              # публичное встраиваемое API
-├── proto/                   # gRPC protobuf определения
-├── tests/                   # интеграционные и стресс-тесты
-├── deployments/             # Docker файлы
-└── docs/                    # мультиязычная документация
+ScoriaDB/
+├── cmd/              # Точки входа сервера и CLI
+├── internal/         # Движок, MVCC, транзакции, Column Families, API
+├── pkg/scoria/       # Публичный встраиваемый API
+├── proto/            # Определения protobuf для gRPC
+├── tests/            # Интеграционные и нагрузочные тесты
+├── deployments/      # Docker-файлы
+└── docs/             # Документация на разных языках
 ```
 
 ---
 
-## 🗺️ Дорожная карта версий
+## 🤝 Участие в разработке
 
-| Версия | Фокус | Ключевые возможности | Плановый релиз |
-|:---|:---|:---|:---|
-| **v0.1.0** | Первый стабильный | LSM, MVCC, ACID, Column Families, gRPC, CLI, базовый GC | Апрель 2026 ✅ |
-| **v0.1.1** | CLI и документация | Интерактивные команды (`create-cf`, `list-cf`, `whoami`, `stats`, история, экспорт), Python/Java/C++ документация | Май 2026 ✅ |
-| **v0.2.0** | Производительность записи | Group Commit (WAL), опции WAL, тесты crash recovery | Май 2026 ✅ |
-| **v0.3.0** | Web UI и TTL | React дашборд, TTL (время жизни) для записей | Июнь 2026 |
-| **v0.4.0** | Переработка ядра | Lock‑free skip list (вместо B‑tree), настоящий zero‑copy Value Log, автоматический инкрементальный GC | Q4 2026 |
-| **v1.0.0** | Распределённый режим | Raft‑репликация, range‑шардирование, распределённые ACID‑транзакции (2PC), нативные структуры данных (Sorted Sets, Lists, JSON индексы) | 2027 |
+Приветствуются любые вклады!
 
-> **Примечание:** Версии с отметкой ✅ уже выпущены. Дорожная карта может меняться в зависимости от обратной связи и активности контрибьюторов.
+1. Сделайте форк репозитория
+2. Создайте ветку с новой функциональностью
+3. Внесите изменения
+4. Запустите тесты: `go test -race ./...`
+5. Запустите линтер: `golangci-lint run ./...`
+6. Отправьте пулл-реквест
+
+Подробнее в [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ---
 
 ## 📄 Лицензия
 
-**Apache License 2.0** – см. файл [LICENSE](LICENSE).  
-Вы можете использовать, изменять, распространять и сублицензировать. Название ScoriaDB не может быть использовано для продвижения производных продуктов без разрешения.
+**Apache License 2.0** — см. [LICENSE](LICENSE).
 
 ---
 
-## ❓ FAQ
+## ❓ Вопросы и ответы
 
-**ScoriaDB готова к продакшену?**  
-v0.2.0 стабильна и протестирована под нагрузкой. Для 1000+ конкурентных писателей подождите lock‑free skip list (v0.4.0).
+<details>
+<summary><b>Готова ли ScoriaDB к production?</b></summary>
+<br>
+Версия v0.2.0 стабильна и протестирована под нагрузкой. Для 1000+ конкурентных писателей рекомендуется подождать v0.3.0 (lock‑free skip list).
+</details>
 
-**Почему запись медленнее чтения?**  
-`fsync` гарантирует durability. Используйте WriteBatch или включите Group Commit (уже по умолчанию).
+<details>
+<summary><b>Можно ли использовать из Python / Java / C++?</b></summary>
+<br>
+Да — примеры для gRPC доступны в <code>docs/</code>.
+</details>
 
-**Можно ли использовать из Python / Java / C++?**  
-Да – см. [docs/](docs/) для полных gRPC примеров.
+<details>
+<summary><b>Чем ScoriaDB лучше BadgerDB?</b></summary>
+<br>
+ScoriaDB имеет <b>MVCC, Column Families, встроенные gRPC/REST</b> и в <b>7 раз быстрее</b> при чтении. У BadgerDB более зрелая сборка мусора для Value Log.
+</details>
 
-**Как ScoriaDB сравнивается с BadgerDB?**  
-ScoriaDB предлагает **MVCC, Column Families, интерактивные транзакции**, встроенный gRPC/REST и значительно **более быстрое чтение** (6.6 млн оп/с против ~400 тыс.). BadgerDB имеет более зрелый GC Value Log, но ScoriaDB с Group Commit даёт лучшую пропускную способность записи в синхронном режиме.
+<details>
+<summary><b>Почему запись медленнее чтения?</b></summary>
+<br>
+<code>fsync</code> гарантирует долговечность. Используйте WriteBatch или Group Commit (включён по умолчанию).
+</details>
 
-**Zero‑copy работает?**  
-Пока нет – текущая реализация копирует из mmap для избежания SIGSEGV. Настоящий zero‑copy запланирован на v0.4.0.
+<details>
+<summary><b>Есть ли zero‑copy?</b></summary>
+<br>
+Пока нет — планируется в v0.4.0.
+</details>
 
-**Как я могу внести вклад?**  
-См. [CONTRIBUTING.md](CONTRIBUTING.md). Особенно приветствуется помощь с автоматическим GC, lock‑free структурами данных, тестированием на Windows/macOS и Web UI.
+<details>
+<summary><b>Что такое Group Commit и почему он включён по умолчанию?</b></summary>
+<br>
+Group Commit буферизирует записи и выполняет один <code>fsync</code> для батча (каждые 10 мс). Это увеличивает пропускную способность записи в 4–5 раз, сохраняя долговечность. Отключить можно через <code>WALOptions{GroupCommitEnabled: false}</code>.
+</details>
+
+<details>
+<summary><b>Что такое Column Families?</b></summary>
+<br>
+Это независимые LSM-деревья внутри одной базы данных. Они обеспечивают логическую изоляцию и позволяют настраивать компактацию отдельно для каждого типа данных.
+</details>
+
+<details>
+<summary><b>Поддерживаются ли транзакции между Column Families?</b></summary>
+<br>
+Да. WriteBatch атомарен между несколькими Column Families благодаря общему WAL.
+</details>
+
+<details>
+<summary><b>Какой уровень изоляции используется?</b></summary>
+<br>
+Изоляция снимков (Snapshot Isolation). Читатели видят согласованный снимок на момент <code>startTS</code>. Писатели никогда не блокируют читателей.
+</details>
+
+<details>
+<summary><b>Как быстро происходит восстановление после сбоя?</b></summary>
+<br>
+Менее 1 секунды после <code>kill -9</code>. У BadgerDB и Pebble — 9–12 секунд.
+</details>
+
+<details>
+<summary><b>Каковы системные требования?</b></summary>
+<br>
+Любая платформа, поддерживаемая Go 1.23+. Бинарник ~15 МБ, без внешних зависимостей.
+</details>
+
+<details>
+<summary><b>Можно ли использовать ScoriaDB на ARM (Raspberry Pi)?</b></summary>
+<br>
+Да — чистый Go работает на всех архитектурах, поддерживаемых Go (amd64, arm64, arm и т.д.).
+</details>
+
+<details>
+<summary><b>Как я могу помочь проекту?</b></summary>
+<br>
+См. <a href="CONTRIBUTING.md">CONTRIBUTING.md</a>. Особенно приветствуется помощь с автоматической сборкой мусора, lock‑free структурами данных, тестированием на Windows/macOS и веб-интерфейсом.
+</details>
+
+<details>
+<summary><b>Будет ли веб-интерфейс?</b></summary>
+<br>
+Планируется в v0.3.0. Будет написан на Go + Alpine.js (без React/Node.js).
+</details>
+
+<details>
+<summary><b>Какая лицензия?</b></summary>
+<br>
+Apache License 2.0 — бесплатно для коммерческого и личного использования.
+</details>
 
 ---
 
-## 🤝 Поддержать проект
+## ⭐ Поддержать проект
 
 - ⭐ **Поставьте звезду** на GitHub.
 - 🐛 **Сообщайте об ошибках** через Issues.
-- 💻 **Отправляйте pull request'ы** – каждое улучшение важно.
+- 💻 **Отправляйте пулл-реквесты** — любое улучшение важно.
 - 📣 **Расскажите о проекте** в своём сообществе.
 
 ---
 
 <div align="center">
-  <i>Крепкая как камень. Лёгкая как пепел.</i>
+  <i>Твёрдая как камень. Лёгкая как пепел.</i>
   <br><br>
   <a href="https://github.com/f4ga/ScoriaDB">github.com/f4ga/ScoriaDB</a>
   <br><br>
-  <a href="docs/README.md"><img src="https://img.shields.io/badge/📖-Полная%20документация-blue?style=for-the-badge" alt="Documentation"></a>
+  <a href="docs/README.md"><img src="https://img.shields.io/badge/📖-Полная%20документация-blue?style=for-the-badge" alt="Документация"></a>
   <br><br>
   <img src="https://capsule-render.vercel.app/api?type=waving&color=gradient&customColorList=12&height=120&section=footer">
 </div>

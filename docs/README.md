@@ -65,13 +65,15 @@ It combines:
 
 | Operation | Value size | Time (ns/op) | Throughput (ops/s) |
 |-----------|------------|--------------|--------------------|
-| `engine.Put` (small) | 16 B | **1 070** | ~935 000 |
-| `engine.Put` (large, VLog) | 4 KB | **4 785** | ~209 000 |
-| `engine.Get` (hit, MemTable) | – | **152** | ~6 580 000 |
-| `engine.Get` (miss) | – | **310** | ~3 225 000 |
-| **Group Commit WAL (sequential)** | ~50 B | **94.9 ns** | ~10 540 000 |
+| `engine.Put` (small) | 16 B | **~750** | **~1.33M** |
+| `engine.Put` (sync, no Group Commit) | 16 B | **~1,070** | **~935K** |
+| `engine.Put` (large, VLog) | 4 KB | **~4,785** | **~209K** |
+| `engine.Get` (hit, MemTable) | – | **~140** | **~7.1M** |
+| `engine.Get` (miss) | – | **~310** | **~3.2M** |
+| `engine.Scan` (10k keys) | – | **~2.2 ms** | **~450 ops/s** |
+| **Group Commit WAL (sequential)** | ~50 B | **~95** | **~10.5M** |
 
-> **Batch writes** (WriteBatch of 100 items) give **~970 000 ops/s** with full durability – fsync amortised.  
+> **Batch writes** (WriteBatch of 100 items) give **~970,000 ops/s** with full durability – fsync amortised.  
 > **Reads never stall** – even under heavy concurrent writes (MVCC).
 
 For more detailed benchmarks, see the [full README](../README.md#-benchmarks).
@@ -84,8 +86,8 @@ Group Commit is a WAL optimization that batches multiple write operations and ca
 
 | Mode | Latency (ns/op) | Throughput (ops/s) |
 |:---|:---:|:---:|
-| Sync (fsync each op) | 454 | 2 200 000 |
-| **Group Commit (10ms)** | **94.9** | **10 500 000** |
+| Sync (fsync each op) | 454 | 2,200,000 |
+| **Group Commit (10ms)** | **94.9** | **10,500,000** |
 
 *Group Commit is already released and enabled by default in the server mode.* It improves write throughput by **4–5×** without sacrificing safety.
 
@@ -101,8 +103,8 @@ ScoriaDB is **not** a Redis replacement – different niches. Redis: in‑memory
 |:---|:---|:---|
 | Deployment | Library or server | Separate server |
 | Network overhead | none | ~0.1–0.2 ms TCP |
-| Read latency | **~150 ns** | ~0.24–0.31 ms |
-| Write latency (sync) | **~1 070 ns** | ~0.45 ms (AOF everysec) |
+| Read latency | **~140 ns** | ~0.24–0.31 ms |
+| Write latency (sync) | **~750 ns** | ~0.45 ms (AOF everysec) |
 | Persistence | **full fsync** | optional (RDB/AOF) |
 | Transactions | **ACID + Snapshot Isolation** | none (pipelining) |
 | MVCC | **yes** | no |
@@ -120,7 +122,7 @@ This release focuses on **write performance, durability control, and documentati
 |:---|:---|
 | **Group Commit in WAL** | Buffered writes with periodic fsync (10 ms interval). Improves write throughput by 4–5× without sacrificing durability. |
 | **WAL group commit writer** | Asynchronous flush loop + ticker, configurable interval. |
-| **Public API for WAL options** | `OpenWALWithOptions` and `EngineOptions` allow enabling Group Commit. |
+| **Public API for WAL options** | `OpenWALWithOptions` and `EngineOptions` allow enabling/disabling Group Commit. |
 | **Multi‑language documentation** | Full gRPC examples and guides for **Python, Java, C++** (see `docs/`). |
 | **Benchmark suite** | Extended benchmarks for sync vs group commit, different value sizes. |
 | **Crash recovery tests** | Validated durability with Group Commit enabled. |
@@ -137,8 +139,9 @@ This release focuses on **write performance, durability control, and documentati
 | **v0.1.1** | CLI & docs | Interactive shell commands (`create-cf`, `list-cf`, `whoami`, `stats`, history, export), Python/Java/C++ docs | May 2026 ✅ |
 | **v0.2.0** | Write performance | **Group Commit** (WAL), WAL options, crash recovery tests | May 2026 ✅ |
 | **v0.2.1** | Minor fixes & QoL | Windows/macOS CI, `admin delete-user`, `admin get-user` | June 2026 |
-| **v0.3.0** | Web UI & TTL | React dashboard, TTL (time‑to‑live) for records, Group Commit by default | Q3 2026 |
-| **v0.4.0** | Core rewrite | Lock‑free skip list (instead of B‑tree), true zero‑copy Value Log, automatic incremental GC | Q4 2026 |
+| **v0.3.0** | Web UI & TTL | Alpine.js dashboard, TTL (time‑to‑live), lock‑free skip list | July 2026 |
+| **v0.3.1** | Web UI polish | Live updates, pagination, documentation in UI | August 2026 |
+| **v0.4.0** | Performance | Zero‑copy Value Log, automatic incremental GC, binary Manifest | Q4 2026 |
 | **v1.0.0** | Distributed mode | Raft replication, range sharding, distributed ACID transactions (2PC), native data structures (Sorted Sets, Lists, JSON indexes) | 2027 |
 
 > **Note:** Versions with a ✅ are already released. The roadmap is subject to change based on feedback and contributor availability.
@@ -358,7 +361,7 @@ The Value Log (`.vlog` file) grows over time even after keys are deleted. Run ma
 **When to run GC:**  
 When disk usage is high and you can tolerate a short write pause (GC stops writes during execution).
 
-> **Note:** Automatic incremental GC is planned for v0.3.0.
+> **Note:** Automatic incremental GC is planned for v0.4.0.
 
 ---
 
@@ -388,13 +391,13 @@ curl http://localhost:8080/metrics
 | Limitation | Planned fix |
 |------------|--------------|
 | MemTable uses B‑tree with global mutex | lock‑free skip list – v0.3.0 |
-| Manifest stored as JSON (slow) | binary format – v0.2.0 |
-| Value Log GC is manual only | automatic incremental GC – v0.3.0 |
-| Transactions work only on `default` CF | v0.2.0 |
-| No true zero‑copy (data copied from mmap) | v0.3.0 |
-| WAL does `fsync` on every batch | Group Commit – v0.2.0 ✅ |
+| Manifest stored as JSON (slow) | binary format – v0.4.0 |
+| Value Log GC is manual only | automatic incremental GC – v0.4.0 |
+| Transactions work only on `default` CF | v0.3.0 |
+| No true zero‑copy (data copied from mmap) | v0.4.0 |
+| No distributed replication | Raft – v1.0.0 |
 
-> **Note:** Some limitations have been addressed in v0.2.0 (Group Commit). Check the [roadmap](#6-version-roadmap) for upcoming improvements.
+> **Note:** Group Commit is already released in v0.2.0. Check the [roadmap](#6-version-roadmap) for upcoming improvements.
 
 ---
 

@@ -21,8 +21,8 @@ import (
 	"github.com/f4ga/ScoriaDB/internal/mvcc"
 )
 
-// encodeMVCCKey кодирует MVCCKey в байты для хранения в SSTable.
-// Формат: длина ключа (2 байта) + ключ + timestamp (8 байт, little endian)
+// encodeMVCCKey encodes MVCCKey into bytes for storage in SSTable.
+// Format: key length (2 bytes) + key (variable) + timestamp (8 bytes, little endian)
 func encodeMVCCKey(key mvcc.MVCCKey) []byte {
 	kl := len(key.Key)
 	buf := make([]byte, 2+kl+8)
@@ -32,7 +32,7 @@ func encodeMVCCKey(key mvcc.MVCCKey) []byte {
 	return buf
 }
 
-// decodeMVCCKey декодирует байты обратно в MVCCKey.
+// decodeMVCCKey decodes bytes back to MVCCKey.
 func decodeMVCCKey(data []byte) (mvcc.MVCCKey, error) {
 	if len(data) < 2 {
 		return mvcc.MVCCKey{}, ErrCorrupted
@@ -49,5 +49,5 @@ func decodeMVCCKey(data []byte) (mvcc.MVCCKey, error) {
 	}, nil
 }
 
-// ErrCorrupted ошибка повреждённых данных.
+// ErrCorrupted is returned when SSTable data is corrupted.
 var ErrCorrupted = errors.New("corrupted SSTable data")

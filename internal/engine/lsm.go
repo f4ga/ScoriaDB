@@ -17,9 +17,11 @@ package engine
 import (
 	"bytes"
 	"fmt"
+	"log"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/f4ga/ScoriaDB/internal/engine/sstable"
 	"github.com/f4ga/ScoriaDB/internal/engine/vfs"
@@ -43,6 +45,13 @@ type LSMEngine struct {
 	closed              bool
 	memSize             int64
 	lastCommitCache     sync.Map
+
+	// Background tasks
+	flushCh     chan struct{}
+	compactCh   chan struct{}
+	stopCh      chan struct{}
+	wg          sync.WaitGroup
+	flushTicker *time.Ticker
 }
 
 // NewLSMEngine creates a new LSM engine.
@@ -119,7 +128,90 @@ func NewLSMEngine(dataDir string, opts ...WALOptions) (*LSMEngine, error) {
 		errors.CloseWithLog(engine, "engine")
 		return nil, fmt.Errorf("failed to recover from wal: %w", err)
 	}
+
+	// Start background tasks
+	engine.startBackgroundTasks()
+
 	return engine, nil
+}
+
+// startBackgroundTasks starts background flush and compaction workers.
+func (e *LSMEngine) startBackgroundTasks() {
+	e.flushCh = make(chan struct{}, 1)
+	e.compactCh = make(chan struct{}, 1)
+	e.stopCh = make(chan struct{})
+	e.flushTicker = time.NewTicker(10 * time.Second)
+
+	// Flush worker
+	e.wg.Add(1)
+	go e.flushWorker()
+
+	// Compaction worker
+	e.wg.Add(1)
+	go e.compactionWorker()
+
+	log.Println("INFO: background tasks started (flush + compaction)")
+}
+
+// stopBackgroundTasks stops background workers.
+func (e *LSMEngine) stopBackgroundTasks() {
+	close(e.stopCh)
+	e.flushTicker.Stop()
+	e.wg.Wait()
+	log.Println("INFO: background tasks stopped")
+}
+
+// flushWorker periodically checks and flushes MemTable.
+func (e *LSMEngine) flushWorker() {
+	defer e.wg.Done()
+	for {
+		select {
+		case <-e.stopCh:
+			return
+		case <-e.flushTicker.C:
+			e.mu.RLock()
+			size := e.memSize
+			e.mu.RUnlock()
+
+			if size > MaxMemTableSize {
+				select {
+				case e.flushCh <- struct{}{}:
+				default:
+				}
+			}
+		case <-e.flushCh:
+			if err := e.flushMemTable(); err != nil {
+				log.Printf("WARNING: flush failed: %v", err)
+			}
+		}
+	}
+}
+
+// compactionWorker periodically checks and triggers compaction.
+func (e *LSMEngine) compactionWorker() {
+	defer e.wg.Done()
+	compTicker := time.NewTicker(30 * time.Second)
+	defer compTicker.Stop()
+
+	for {
+		select {
+		case <-e.stopCh:
+			return
+		case <-compTicker.C:
+			e.mu.RLock()
+			level0Count := len(e.levels[0])
+			e.mu.RUnlock()
+
+			if level0Count > MaxLevel0Files {
+				select {
+				case e.compactCh <- struct{}{}:
+				default:
+				}
+			}
+		case <-e.compactCh:
+			e.maybeCompact()
+		}
+	}
 }
 
 // NextTimestamp returns a new unique timestamp.
@@ -162,6 +254,7 @@ func (e *LSMEngine) PutWithTS(key, value []byte, commitTS uint64) error {
 		return fmt.Errorf("failed to write to wal: %w", err)
 	}
 	e.memTable.Put(mvccKey, storedValue)
+	atomic.AddInt64(&e.memSize, int64(len(key)+len(value)))
 	e.updateLastCommitCache(key, commitTS)
 	return nil
 }
@@ -187,15 +280,18 @@ func (e *LSMEngine) WriteAtomicBatch(data []byte, commitTS uint64) error {
 	if err != nil {
 		return fmt.Errorf("failed to decode batch: %w", err)
 	}
+	var totalSize int64
 	for _, op := range ops {
 		mvccKey := mvcc.NewMVCCKey(op.Key, commitTS)
 		if op.IsDelete {
 			e.memTable.Put(mvccKey, nil)
 		} else {
 			e.memTable.Put(mvccKey, op.Value)
+			totalSize += int64(len(op.Key) + len(op.Value))
 		}
 		e.updateLastCommitCache(op.Key, commitTS)
 	}
+	atomic.AddInt64(&e.memSize, totalSize)
 	return nil
 }
 
@@ -326,6 +422,7 @@ func (e *LSMEngine) DeleteWithTS(key []byte, commitTS uint64) error {
 	}
 	mvccKey := mvcc.NewMVCCKey(key, commitTS)
 	e.memTable.DeleteWithTS(mvccKey)
+	atomic.AddInt64(&e.memSize, -int64(len(key)))
 	e.updateLastCommitCache(key, commitTS)
 	return nil
 }
@@ -336,6 +433,11 @@ func (e *LSMEngine) ActiveMemTable() *MemTable { return e.memTable }
 // FrozenMemTable returns the frozen MemTable.
 func (e *LSMEngine) FrozenMemTable() *MemTable { return e.frozenMemTable }
 
+// SetMinActiveSnapshotTS sets the minimum active snapshot timestamp.
+func (e *LSMEngine) SetMinActiveSnapshotTS(ts uint64) {
+	atomic.StoreUint64(&e.minActiveSnapshotTS, ts)
+}
+
 // Close closes the engine and releases all resources.
 func (e *LSMEngine) Close() error {
 	e.mu.Lock()
@@ -343,8 +445,19 @@ func (e *LSMEngine) Close() error {
 	if e.closed {
 		return nil
 	}
+
+	// Stop background tasks
+	e.stopBackgroundTasks()
+
 	e.closed = true
 	var errs []error
+
+	// Close MemTable
+	if e.memTable != nil {
+		e.memTable.Close()
+	}
+
+	// Close SSTable readers
 	for _, level := range e.levels {
 		for _, reader := range level {
 			if err := reader.Close(); err != nil {
@@ -352,17 +465,25 @@ func (e *LSMEngine) Close() error {
 			}
 		}
 	}
+
+	// Close VLog
 	if err := e.vlog.Close(); err != nil {
 		errs = append(errs, err)
 	}
+
+	// Close WAL
 	if err := e.wal.Close(); err != nil {
 		errs = append(errs, err)
 	}
+
+	// Close Manifest
 	if err := e.manifest.Close(); err != nil {
 		errs = append(errs, err)
 	}
+
 	if len(errs) > 0 {
 		return fmt.Errorf("errors while closing engine: %v", errs)
 	}
+	log.Println("INFO: engine closed successfully")
 	return nil
 }

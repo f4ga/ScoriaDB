@@ -16,7 +16,6 @@ package sstable
 
 import (
 	"encoding/binary"
-	"io"
 
 	"github.com/f4ga/ScoriaDB/internal/mvcc"
 )
@@ -40,16 +39,9 @@ func (r *Reader) NewIterator() (*SSTableIterator, error) {
 
 	// Iterate over all blocks
 	for _, idxEntry := range r.indexEntries {
-		// Seek to block start
-		if _, err := r.file.Seek(int64(idxEntry.offset), 0); err != nil {
-			return nil, err
-		}
-		var blockSize uint32
-		if err := binary.Read(r.file, binary.LittleEndian, &blockSize); err != nil {
-			return nil, err
-		}
-		blockData := make([]byte, blockSize)
-		if _, err := io.ReadFull(r.file, blockData); err != nil {
+		// Read block using the pooled buffer
+		blockData, err := r.readBlock(idxEntry.offset)
+		if err != nil {
 			return nil, err
 		}
 
@@ -67,11 +59,19 @@ func (r *Reader) NewIterator() (*SSTableIterator, error) {
 				// Skip corrupted entry
 				continue
 			}
+			// Copy key and value since the block buffer will be returned to the pool
+			keyCopy := make([]byte, len(entryKey))
+			copy(keyCopy, entryKey)
+			valCopy := make([]byte, len(entryVal))
+			copy(valCopy, entryVal)
 			entries = append(entries, kvEntry{
 				key:   mvccKey,
-				value: entryVal,
+				value: valCopy,
 			})
 		}
+
+		// Return the block buffer to the pool
+		ReleaseBlock(blockData)
 	}
 
 	return &SSTableIterator{

@@ -171,3 +171,11 @@ func (it *MemTableIterator) Value() []byte {
 func (it *MemTableIterator) Close() {
 	it.entries = nil
 }
+
+// Close releases resources held by MemTable.
+func (mt *MemTable) Close() {
+	mt.mu.Lock()
+	defer mt.mu.Unlock()
+	mt.tree = nil
+	mt.size = 0
+}
