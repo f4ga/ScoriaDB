@@ -40,7 +40,7 @@ func recoverFromWAL(wal *WAL, memTable *MemTable, vlog *VLog) error {
 			mvccKey := mvcc.NewMVCCKey(entry.Key, entry.Timestamp)
 			memTable.Put(mvccKey, nil)
 		case OpBatch:
-			ops, err := decodeBatchLocal(entry.Value)
+			ops, err := decodeBatchOps(entry.Value)
 			if err != nil {
 				log.Printf("wal: failed to decode batch: %v", err)
 				return nil

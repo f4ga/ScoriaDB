@@ -136,7 +136,7 @@ func (m *Manifest) applyEdit(edit *VersionEdit) {
 		m.levels[level] = append(m.levels[level], nf)
 		// Сортируем по MinKey для быстрого поиска
 		sort.Slice(m.levels[level], func(i, j int) bool {
-			return compareKeys(m.levels[level][i].MinKey, m.levels[level][j].MinKey) < 0
+			return CompareKeys(m.levels[level][i].MinKey, m.levels[level][j].MinKey) < 0
 		})
 	}
 
@@ -198,27 +198,4 @@ func (m *Manifest) Close() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.file.Close()
-}
-
-// compareKeys сравнивает два ключа лексикографически.
-func compareKeys(a, b []byte) int {
-	minLen := len(a)
-	if len(b) < minLen {
-		minLen = len(b)
-	}
-	for i := 0; i < minLen; i++ {
-		if a[i] != b[i] {
-			if a[i] < b[i] {
-				return -1
-			}
-			return 1
-		}
-	}
-	if len(a) < len(b) {
-		return -1
-	}
-	if len(a) > len(b) {
-		return 1
-	}
-	return 0
 }

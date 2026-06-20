@@ -17,6 +17,7 @@ package sstable
 import (
 	"container/heap"
 
+	"github.com/f4ga/ScoriaDB/internal/keys"
 	"github.com/f4ga/ScoriaDB/internal/mvcc"
 )
 
@@ -46,7 +47,7 @@ type mergeHeap []*heapItem
 func (h mergeHeap) Len() int { return len(h) }
 func (h mergeHeap) Less(i, j int) bool {
 	ki, kj := h[i].key, h[j].key
-	cmp := compareKeys(ki.Key, kj.Key)
+	cmp := keys.CompareKeys(ki.Key, kj.Key)
 	if cmp < 0 {
 		return true
 	}
@@ -106,7 +107,7 @@ func (mi *MergeIterator) Next() bool {
 		bestItem := item
 
 		var sameKeyItems []*heapItem
-		for mi.heap.Len() > 0 && compareKeys((*mi.heap)[0].key.Key, userKey) == 0 {
+		for mi.heap.Len() > 0 && keys.CompareKeys((*mi.heap)[0].key.Key, userKey) == 0 {
 			popped := heap.Pop(mi.heap)
 			it, ok := popped.(*heapItem)
 			if !ok {

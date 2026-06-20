@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/f4ga/ScoriaDB/internal/keys"
 	"github.com/f4ga/ScoriaDB/internal/mvcc"
 )
 
@@ -85,10 +86,10 @@ func (w *Writer) Append(key mvcc.MVCCKey, value []byte) error {
 	w.keys = append(w.keys, key.Key)
 
 	// Обновляем min/max ключи
-	if w.minKey == nil || compareKeys(key.Key, w.minKey) < 0 {
+	if w.minKey == nil || keys.CompareKeys(key.Key, w.minKey) < 0 {
 		w.minKey = key.Key
 	}
-	if w.maxKey == nil || compareKeys(key.Key, w.maxKey) > 0 {
+	if w.maxKey == nil || keys.CompareKeys(key.Key, w.maxKey) > 0 {
 		w.maxKey = key.Key
 	}
 
@@ -247,29 +248,6 @@ func encodeEntry(key, value []byte) []byte {
 	copy(buf[8:8+kl], key)
 	copy(buf[8+kl:], value)
 	return buf
-}
-
-// compareKeys сравнивает два ключа лексикографически.
-func compareKeys(a, b []byte) int {
-	minLen := len(a)
-	if len(b) < minLen {
-		minLen = len(b)
-	}
-	for i := 0; i < minLen; i++ {
-		if a[i] != b[i] {
-			if a[i] < b[i] {
-				return -1
-			}
-			return 1
-		}
-	}
-	if len(a) < len(b) {
-		return -1
-	}
-	if len(a) > len(b) {
-		return 1
-	}
-	return 0
 }
 
 // Footer представляет футер SSTable.

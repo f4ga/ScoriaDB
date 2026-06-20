@@ -25,7 +25,6 @@ func TestTimestampMonotonic(t *testing.T) {
 	if prev != 1 {
 		t.Errorf("expected initial timestamp 1, got %d", prev)
 	}
-	// Increment a few times and ensure monotonic increase
 	for i := 0; i < 100; i++ {
 		next := tg.Increment()
 		if next <= prev {
@@ -55,7 +54,6 @@ func TestTimestampConcurrency(t *testing.T) {
 	wg.Wait()
 	close(results)
 
-	// Collect all timestamps
 	seen := make(map[uint64]bool)
 	for ts := range results {
 		if seen[ts] {
@@ -64,13 +62,10 @@ func TestTimestampConcurrency(t *testing.T) {
 		seen[ts] = true
 	}
 
-	// Verify that timestamps are sequential from 2 to N+1
-	// Since we start at 1 and each Increment adds 1, total increments = goroutines * callsPerGoroutine
 	expectedCount := goroutines * callsPerGoroutine
 	if len(seen) != expectedCount {
 		t.Errorf("expected %d unique timestamps, got %d", expectedCount, len(seen))
 	}
-	// Check that max timestamp equals expectedCount + 1 (since start at 1, first increment returns 2)
 	maxTS := uint64(0)
 	for ts := range seen {
 		if ts > maxTS {
@@ -85,21 +80,17 @@ func TestTimestampConcurrency(t *testing.T) {
 
 func TestTimestampSet(t *testing.T) {
 	tg := NewTimestampGenerator()
-	// Initial value should be 1
 	if v := tg.Next(); v != 1 {
 		t.Errorf("expected 1, got %d", v)
 	}
-	// Set to higher value
 	tg.Set(100)
 	if v := tg.Next(); v != 100 {
 		t.Errorf("expected 100 after Set, got %d", v)
 	}
-	// Set to lower value should be ignored
 	tg.Set(50)
 	if v := tg.Next(); v != 100 {
 		t.Errorf("expected still 100 after lower Set, got %d", v)
 	}
-	// Concurrent Set and Increment
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() {
@@ -111,10 +102,95 @@ func TestTimestampSet(t *testing.T) {
 		tg.Increment()
 	}()
 	wg.Wait()
-	// After concurrent operations, the counter should be at least 200 or more
-	// (since Increment may have increased it)
 	v := tg.Next()
 	if v < 200 {
 		t.Errorf("expected at least 200 after concurrent Set/Increment, got %d", v)
+	}
+}
+
+func TestMVCCKeyCompare(t *testing.T) {
+	tests := []struct {
+		name     string
+		a, b     MVCCKey
+		expected int
+	}{
+		{
+			name:     "equal keys and timestamps",
+			a:        NewMVCCKey([]byte("key"), 100),
+			b:        NewMVCCKey([]byte("key"), 100),
+			expected: 0,
+		},
+		{
+			name:     "same key, different timestamp (newer first)",
+			a:        NewMVCCKey([]byte("key"), 200),
+			b:        NewMVCCKey([]byte("key"), 100),
+			expected: 1,
+		},
+		{
+			name:     "different keys",
+			a:        NewMVCCKey([]byte("a"), 100),
+			b:        NewMVCCKey([]byte("b"), 100),
+			expected: -1,
+		},
+		{
+			name:     "same key, same timestamp",
+			a:        NewMVCCKey([]byte("key"), 100),
+			b:        NewMVCCKey([]byte("key"), 100),
+			expected: 0,
+		},
+		{
+			name:     "key a less than b",
+			a:        NewMVCCKey([]byte("apple"), 100),
+			b:        NewMVCCKey([]byte("banana"), 100),
+			expected: -1,
+		},
+		{
+			name:     "key a greater than b",
+			a:        NewMVCCKey([]byte("banana"), 100),
+			b:        NewMVCCKey([]byte("apple"), 100),
+			expected: 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := tt.a.Compare(tt.b)
+			if result != tt.expected {
+				t.Errorf("Compare() = %d, want %d", result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestMVCCKeyCommitTS(t *testing.T) {
+	key := NewMVCCKey([]byte("key"), 12345)
+	if key.CommitTS() != 12345 {
+		t.Errorf("CommitTS() = %d, want 12345", key.CommitTS())
+	}
+}
+
+func TestNewMVCCKey(t *testing.T) {
+	key := []byte("test")
+	ts := uint64(999)
+	mvccKey := NewMVCCKey(key, ts)
+
+	if string(mvccKey.Key) != string(key) {
+		t.Errorf("Key = %s, want %s", mvccKey.Key, key)
+	}
+	if mvccKey.CommitTS() != ts {
+		t.Errorf("CommitTS = %d, want %d", mvccKey.CommitTS(), ts)
+	}
+}
+
+func TestInvertRevertTimestamp(t *testing.T) {
+	original := uint64(12345)
+	inverted := InvertTimestamp(original)
+	reverted := RevertTimestamp(inverted)
+
+	if reverted != original {
+		t.Errorf("RevertTimestamp(InvertTimestamp(%d)) = %d, want %d", original, reverted, original)
+	}
+	if inverted == original {
+		t.Error("InvertTimestamp should change the value")
 	}
 }

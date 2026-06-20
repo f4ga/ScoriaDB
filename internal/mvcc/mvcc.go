@@ -19,6 +19,7 @@ import (
 	"math"
 	"sync/atomic"
 
+	"github.com/f4ga/ScoriaDB/internal/keys"
 	"github.com/google/btree"
 )
 
@@ -88,7 +89,7 @@ func (k MVCCKey) CommitTS() uint64 {
 // Compare сравнивает два ключа лексикографически (ключ, затем timestamp).
 func (k MVCCKey) Compare(other MVCCKey) int {
 	// Сравниваем ключи
-	if cmp := bytesCompare(k.Key, other.Key); cmp != 0 {
+	if cmp := keys.CompareKeys(k.Key, other.Key); cmp != 0 {
 		return cmp
 	}
 	// Более новые версии (больший инвертированный timestamp) идут первыми
@@ -116,27 +117,4 @@ func (k MVCCKey) Less(than btree.Item) bool {
 	}
 	// Более новые версии (больший инвертированный timestamp) идут первыми
 	return k.Timestamp > other.Timestamp
-}
-
-// bytesCompare сравнивает два байтовых среза.
-func bytesCompare(a, b []byte) int {
-	minLen := len(a)
-	if len(b) < minLen {
-		minLen = len(b)
-	}
-	for i := 0; i < minLen; i++ {
-		if a[i] < b[i] {
-			return -1
-		}
-		if a[i] > b[i] {
-			return 1
-		}
-	}
-	if len(a) < len(b) {
-		return -1
-	}
-	if len(a) > len(b) {
-		return 1
-	}
-	return 0
 }

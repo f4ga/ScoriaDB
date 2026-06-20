@@ -22,6 +22,7 @@ import (
 	"os"
 
 	"github.com/f4ga/ScoriaDB/internal/errors"
+	"github.com/f4ga/ScoriaDB/internal/keys"
 	"github.com/f4ga/ScoriaDB/internal/mvcc"
 )
 
@@ -190,7 +191,7 @@ func (r *Reader) Lookup(key mvcc.MVCCKey) ([]byte, bool) {
 			continue
 		}
 		// Сравниваем ключ индекса (последний ключ блока) с искомым ключом
-		if compareKeys(idxKey.Key, userKey) >= 0 {
+		if keys.CompareKeys(idxKey.Key, userKey) >= 0 {
 			blockIndex = i
 			break
 		}
@@ -232,7 +233,7 @@ func (r *Reader) Lookup(key mvcc.MVCCKey) ([]byte, bool) {
 			continue
 		}
 		// Сравниваем ключи
-		if compareKeys(mvccKey.Key, userKey) == 0 {
+		if keys.CompareKeys(mvccKey.Key, userKey) == 0 {
 			// Проверяем видимость версии: commitTS <= snapshotTS ?
 			// Это эквивалентно mvccKey.Timestamp >= key.Timestamp (инвертированный timestamp)
 			if mvccKey.Timestamp >= key.Timestamp {
@@ -245,7 +246,7 @@ func (r *Reader) Lookup(key mvcc.MVCCKey) ([]byte, bool) {
 			}
 			// Версия слишком новая (commitTS > snapshotTS), продолжаем искать более старые версии
 			// Поскольку версии отсортированы от новых к старым, следующая версия будет старше
-		} else if compareKeys(mvccKey.Key, userKey) > 0 {
+		} else if keys.CompareKeys(mvccKey.Key, userKey) > 0 {
 			// Ключ стал больше искомого, значит все последующие ключи также больше
 			// (блок отсортирован). Прерываем поиск.
 			break

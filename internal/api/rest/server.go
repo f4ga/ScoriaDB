@@ -272,7 +272,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleListUsers обрабатывает GET /api/v1/admin/users (требует роль admin)
-func (s *Server) handleListUsers(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleListUsers(w http.ResponseWriter, _ *http.Request) {
 	// Проверка роли уже выполнена в middleware
 	users, err := auth.ListUsers(s.db)
 	if err != nil {

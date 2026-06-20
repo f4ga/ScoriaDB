@@ -36,7 +36,6 @@ func TestRestServer_GetPutDelete(t *testing.T) {
 
 	srv := NewServer(db, []byte("test-secret"))
 
-	// Test PUT
 	putBody := `{"value": "hello world"}`
 	req := httptest.NewRequest(http.MethodPut, "/api/v1/kv/testkey", bytes.NewReader([]byte(putBody)))
 	req.Header.Set("Content-Type", "application/json")
@@ -47,7 +46,6 @@ func TestRestServer_GetPutDelete(t *testing.T) {
 		t.Errorf("PUT status = %d, want %d", w.Code, http.StatusOK)
 	}
 
-	// Test GET
 	req = httptest.NewRequest(http.MethodGet, "/api/v1/kv/testkey", nil)
 	w = httptest.NewRecorder()
 	srv.ServeHTTP(w, req)
@@ -63,7 +61,6 @@ func TestRestServer_GetPutDelete(t *testing.T) {
 		t.Errorf("GET value = %v, want 'hello world'", resp["value"])
 	}
 
-	// Test DELETE
 	req = httptest.NewRequest(http.MethodDelete, "/api/v1/kv/testkey", nil)
 	w = httptest.NewRecorder()
 	srv.ServeHTTP(w, req)
@@ -72,7 +69,6 @@ func TestRestServer_GetPutDelete(t *testing.T) {
 		t.Errorf("DELETE status = %d, want %d", w.Code, http.StatusOK)
 	}
 
-	// Verify key is gone
 	req = httptest.NewRequest(http.MethodGet, "/api/v1/kv/testkey", nil)
 	w = httptest.NewRecorder()
 	srv.ServeHTTP(w, req)
@@ -83,9 +79,6 @@ func TestRestServer_GetPutDelete(t *testing.T) {
 }
 
 func TestRestServer_Scan(t *testing.T) {
-	// Scanning is not yet implemented; skip this test for now.
-	t.Skip("Scanning not implemented yet")
-
 	tmpDir := t.TempDir()
 	db, err := scoria.NewScoriaDB(tmpDir)
 	if err != nil {
@@ -93,10 +86,10 @@ func TestRestServer_Scan(t *testing.T) {
 	}
 	defer errors.CloseWithFatal(db, "rest-test-db")
 
+	// Создаём сервер
 	srv := NewServer(db, []byte("test-secret"))
 
-	// Insert a few keys with prefix "user:"
-	keys := []string{"user:alice", "user:bob", "other:charlie"}
+	keys := []string{"user:alice", "user:bob", "other:charlie", "user:dave"}
 	for _, k := range keys {
 		body := fmt.Sprintf(`{"value": "value-%s"}`, k)
 		req := httptest.NewRequest(http.MethodPut, "/api/v1/kv/"+k, bytes.NewReader([]byte(body)))
@@ -108,7 +101,6 @@ func TestRestServer_Scan(t *testing.T) {
 		}
 	}
 
-	// Scan with prefix "user:"
 	scanBody := `{"prefix": "user:"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/kv/scan", bytes.NewReader([]byte(scanBody)))
 	req.Header.Set("Content-Type", "application/json")
@@ -123,13 +115,12 @@ func TestRestServer_Scan(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
 		t.Fatalf("Failed to decode scan response: %v", err)
 	}
-	// Expect empty items for now
 	items, ok := result["items"].([]interface{})
 	if !ok {
 		t.Fatalf("items field missing or not an array")
 	}
-	if len(items) != 0 {
-		t.Errorf("Expected 0 items (scan not implemented), got %d", len(items))
+	if len(items) != 3 {
+		t.Errorf("expected 3 items, got %d", len(items))
 	}
 }
 
@@ -141,14 +132,12 @@ func TestRestServer_CFOperations(t *testing.T) {
 	}
 	defer errors.CloseWithFatal(db, "rest-test-db")
 
-	// Create a new CF
 	if err := db.CreateCF("testcf"); err != nil {
 		t.Fatalf("Failed to create CF: %v", err)
 	}
 
 	srv := NewServer(db, []byte("test-secret"))
 
-	// Put into testcf
 	putBody := `{"value": "cf value", "cf": "testcf"}`
 	req := httptest.NewRequest(http.MethodPut, "/api/v1/kv/cfkey", bytes.NewReader([]byte(putBody)))
 	req.Header.Set("Content-Type", "application/json")
@@ -158,7 +147,6 @@ func TestRestServer_CFOperations(t *testing.T) {
 		t.Errorf("PUT with CF status = %d, want %d", w.Code, http.StatusOK)
 	}
 
-	// Get from testcf using query param
 	req = httptest.NewRequest(http.MethodGet, "/api/v1/kv/cfkey?cf=testcf", nil)
 	w = httptest.NewRecorder()
 	srv.ServeHTTP(w, req)
@@ -184,7 +172,6 @@ func TestRestServer_ErrorHandling(t *testing.T) {
 
 	srv := NewServer(db, []byte("test-secret"))
 
-	// GET non-existent key
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/kv/nonexistent", nil)
 	w := httptest.NewRecorder()
 	srv.ServeHTTP(w, req)
@@ -199,7 +186,6 @@ func TestRestServer_ErrorHandling(t *testing.T) {
 		t.Errorf("Error code = %v, want NOT_FOUND", errResp["code"])
 	}
 
-	// Invalid JSON body
 	req = httptest.NewRequest(http.MethodPut, "/api/v1/kv/key", bytes.NewReader([]byte("{")))
 	req.Header.Set("Content-Type", "application/json")
 	w = httptest.NewRecorder()
@@ -208,7 +194,6 @@ func TestRestServer_ErrorHandling(t *testing.T) {
 		t.Errorf("Invalid JSON status = %d, want %d", w.Code, http.StatusBadRequest)
 	}
 
-	// Invalid path
 	req = httptest.NewRequest(http.MethodGet, "/api/v1/unknown", nil)
 	w = httptest.NewRecorder()
 	srv.ServeHTTP(w, req)
@@ -227,7 +212,6 @@ func TestRestServer_CORS(t *testing.T) {
 
 	srv := NewServer(db, []byte("test-secret"))
 
-	// OPTIONS request
 	req := httptest.NewRequest(http.MethodOptions, "/api/v1/kv/key", nil)
 	w := httptest.NewRecorder()
 	srv.ServeHTTP(w, req)
@@ -237,5 +221,79 @@ func TestRestServer_CORS(t *testing.T) {
 	headers := w.Header()
 	if headers.Get("Access-Control-Allow-Origin") != "*" {
 		t.Error("CORS header missing")
+	}
+}
+
+func TestRestServer_Batch(t *testing.T) {
+	tmpDir := t.TempDir()
+	db, err := scoria.NewScoriaDB(tmpDir)
+	if err != nil {
+		t.Fatalf("Failed to create database: %v", err)
+	}
+	defer errors.CloseWithFatal(db, "rest-test-db")
+
+	srv := NewServer(db, []byte("test-secret"))
+
+	batchBody := `{
+		"ops": [
+			{"op": "put", "key": "batch:1", "value": "val1"},
+			{"op": "put", "key": "batch:2", "value": "val2"},
+			{"op": "delete", "key": "batch:1"}
+		]
+	}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/kv/batch", bytes.NewReader([]byte(batchBody)))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("batch status = %d, want %d", w.Code, http.StatusOK)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/kv/batch:2", nil)
+	w = httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Errorf("GET batch:2 status = %d, want %d", w.Code, http.StatusOK)
+	}
+	var resp map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("Failed to decode response: %v", err)
+	}
+	if resp["value"] != "val2" {
+		t.Errorf("expected value 'val2', got %v", resp["value"])
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/kv/batch:1", nil)
+	w = httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Errorf("GET batch:1 status = %d, want %d", w.Code, http.StatusNotFound)
+	}
+}
+
+func TestRestServer_Health(t *testing.T) {
+	tmpDir := t.TempDir()
+	db, err := scoria.NewScoriaDB(tmpDir)
+	if err != nil {
+		t.Fatalf("Failed to create database: %v", err)
+	}
+	defer errors.CloseWithFatal(db, "rest-test-db")
+
+	srv := NewServer(db, []byte("test-secret"))
+
+	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("health status = %d, want %d", w.Code, http.StatusOK)
+	}
+	var resp map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("Failed to decode response: %v", err)
+	}
+	if resp["status"] != "ok" {
+		t.Errorf("status = %v, want 'ok'", resp["status"])
 	}
 }
