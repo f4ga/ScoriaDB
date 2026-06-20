@@ -18,7 +18,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"hash/crc32"
-	"log"
 	"os"
 	"sort"
 	"sync"
@@ -26,6 +25,7 @@ import (
 
 	"github.com/f4ga/ScoriaDB/internal/engine/vfs"
 	"github.com/f4ga/ScoriaDB/internal/errors"
+	"github.com/f4ga/ScoriaDB/internal/logger"
 )
 
 const (
@@ -89,31 +89,31 @@ func OpenVLog(vfs vfs.VFS, path string) (*VLog, error) {
 		magic := binary.BigEndian.Uint32(header[0:4])
 		version := binary.BigEndian.Uint32(header[4:8])
 		if magic != VLogMagic {
-			// Повреждённый VLog: логируем, удаляем файл и создаём новый
-			log.Printf("vlog: magic mismatch, removing corrupted file %s", path)
+			// Corrupted VLog: log, remove file and create a new one
+			logger.Warn("vlog: magic mismatch, removing corrupted file %s", path)
 			errors.CloseWithLog(osFile, "vlog-osfile")
 			if err := vfs.Remove(path); err != nil {
-				// Попробуем переименовать файл как запасной вариант
+				// Try to rename the file as a fallback
 				backupPath := path + ".corrupted"
 				if renameErr := vfs.Rename(path, backupPath); renameErr != nil {
 					return nil, fmt.Errorf("failed to remove corrupted vlog file (remove: %v, rename: %v)", err, renameErr)
 				}
-				log.Printf("vlog: renamed corrupted file to %s", backupPath)
+				logger.Info("vlog: renamed corrupted file to %s", backupPath)
 			}
 			// Открываем заново (будет создан пустой файл)
 			return OpenVLog(vfs, path)
 		}
 		if version != VLogVersion {
-			// Повреждённый VLog: логируем, удаляем файл и создаём новый
-			log.Printf("vlog: version mismatch (got %d, expected %d), removing corrupted file %s", version, VLogVersion, path)
+			// Corrupted VLog: log, remove file and create a new one
+			logger.Warn("vlog: version mismatch (got %d, expected %d), removing corrupted file %s", version, VLogVersion, path)
 			errors.CloseWithLog(osFile, "vlog-osfile")
 			if err := vfs.Remove(path); err != nil {
-				// Попробуем переименовать файл как запасной вариант
+				// Try to rename the file as a fallback
 				backupPath := path + ".corrupted"
 				if renameErr := vfs.Rename(path, backupPath); renameErr != nil {
 					return nil, fmt.Errorf("failed to remove corrupted vlog file (remove: %v, rename: %v)", err, renameErr)
 				}
-				log.Printf("vlog: renamed corrupted file to %s", backupPath)
+				logger.Info("vlog: renamed corrupted file to %s", backupPath)
 			}
 			// Открываем заново (будет создан пустой файл)
 			return OpenVLog(vfs, path)

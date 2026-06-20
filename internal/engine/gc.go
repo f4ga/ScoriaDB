@@ -16,8 +16,8 @@ package engine
 
 import (
 	"fmt"
-	"log"
 
+	"github.com/f4ga/ScoriaDB/internal/logger"
 	"github.com/f4ga/ScoriaDB/internal/mvcc"
 )
 
@@ -52,7 +52,7 @@ func (e *LSMEngine) CollectLiveValuePointers() (map[ValuePointer]struct{}, error
 		for _, reader := range e.levels[level] {
 			iter, err := reader.NewIterator()
 			if err != nil {
-				log.Printf("gc: failed to create iterator for SSTable: %v", err)
+				logger.Warn("gc: failed to create iterator for SSTable: %v", err)
 				continue
 			}
 			for iter.Next() {

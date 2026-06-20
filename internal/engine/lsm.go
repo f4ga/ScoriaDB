@@ -17,7 +17,6 @@ package engine
 import (
 	"bytes"
 	"fmt"
-	"log"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
@@ -26,6 +25,7 @@ import (
 	"github.com/f4ga/ScoriaDB/internal/engine/sstable"
 	"github.com/f4ga/ScoriaDB/internal/engine/vfs"
 	"github.com/f4ga/ScoriaDB/internal/errors"
+	"github.com/f4ga/ScoriaDB/internal/logger"
 	"github.com/f4ga/ScoriaDB/internal/mvcc"
 )
 
@@ -150,7 +150,7 @@ func (e *LSMEngine) startBackgroundTasks() {
 	e.wg.Add(1)
 	go e.compactionWorker()
 
-	log.Println("INFO: background tasks started (flush + compaction)")
+	logger.Info("background tasks started (flush + compaction)")
 }
 
 // stopBackgroundTasks stops background workers.
@@ -158,7 +158,7 @@ func (e *LSMEngine) stopBackgroundTasks() {
 	close(e.stopCh)
 	e.flushTicker.Stop()
 	e.wg.Wait()
-	log.Println("INFO: background tasks stopped")
+	logger.Info("background tasks stopped")
 }
 
 // flushWorker periodically checks and flushes MemTable.
@@ -181,7 +181,7 @@ func (e *LSMEngine) flushWorker() {
 			}
 		case <-e.flushCh:
 			if err := e.flushMemTable(); err != nil {
-				log.Printf("WARNING: flush failed: %v", err)
+				logger.Warn("flush failed: %v", err)
 			}
 		}
 	}
@@ -487,6 +487,6 @@ func (e *LSMEngine) Close() error {
 	if len(errs) > 0 {
 		return fmt.Errorf("errors while closing engine: %v", errs)
 	}
-	log.Println("INFO: engine closed successfully")
+	logger.Info("engine closed successfully")
 	return nil
 }

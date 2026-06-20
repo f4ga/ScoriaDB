@@ -16,9 +16,11 @@ package auth
 
 import (
 	"context"
-	"log"
 	"net/http"
+
 	"strings"
+
+	"github.com/f4ga/ScoriaDB/internal/logger"
 )
 
 // HTTPContextKey тип для ключей контекста HTTP.
@@ -88,7 +90,7 @@ func writeAuthError(w http.ResponseWriter, status int, message string) {
 	w.WriteHeader(status)
 	jsonBody := `{"code":"` + getErrorCode(status) + `","message":"` + message + `"}`
 	if _, err := w.Write([]byte(jsonBody)); err != nil {
-		log.Printf("failed to write error response: %v", err)
+		logger.Warn("failed to write error response: %v", err)
 	}
 }
 

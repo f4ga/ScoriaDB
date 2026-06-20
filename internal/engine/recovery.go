@@ -15,8 +15,7 @@
 package engine
 
 import (
-	"log"
-
+	"github.com/f4ga/ScoriaDB/internal/logger"
 	"github.com/f4ga/ScoriaDB/internal/mvcc"
 )
 
@@ -29,7 +28,7 @@ func recoverFromWAL(wal *WAL, memTable *MemTable, vlog *VLog) error {
 			if len(entry.Value) == 12 {
 				if vp, ok := decodeValuePointer(entry.Value); ok {
 					if vp.Offset < 0 || vp.Size <= 0 || vp.Offset+int64(vp.Size)+8 > vlog.Size() {
-						log.Printf("wal: skipping entry with invalid VLog pointer offset=%d size=%d vlogSize=%d",
+						logger.Warn("wal: skipping entry with invalid VLog pointer offset=%d size=%d vlogSize=%d",
 							vp.Offset, vp.Size, vlog.Size())
 						return nil
 					}
@@ -42,7 +41,7 @@ func recoverFromWAL(wal *WAL, memTable *MemTable, vlog *VLog) error {
 		case OpBatch:
 			ops, err := decodeBatchLocal(entry.Value)
 			if err != nil {
-				log.Printf("wal: failed to decode batch: %v", err)
+				logger.Warn("wal: failed to decode batch: %v", err)
 				return nil
 			}
 			for _, op := range ops {
@@ -54,13 +53,13 @@ func recoverFromWAL(wal *WAL, memTable *MemTable, vlog *VLog) error {
 				if len(op.Value) == 12 {
 					if vp, ok := decodeValuePointer(op.Value); ok {
 						if vp.Offset < 0 || vp.Size <= 0 || vp.Offset+int64(vp.Size)+8 > vlog.Size() {
-							log.Printf("wal: skipping batch entry with invalid VLog pointer offset=%d size=%d vlogSize=%d",
+							logger.Warn("wal: skipping batch entry with invalid VLog pointer offset=%d size=%d vlogSize=%d",
 								vp.Offset, vp.Size, vlog.Size())
 							memTable.Put(mvccKey, nil)
 							continue
 						}
 					} else {
-						log.Printf("wal: skipping batch entry with malformed VLog pointer")
+						logger.Warn("wal: skipping batch entry with malformed VLog pointer")
 						memTable.Put(mvccKey, nil)
 						continue
 					}

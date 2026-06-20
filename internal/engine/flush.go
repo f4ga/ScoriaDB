@@ -17,11 +17,11 @@ package engine
 import (
 	"bytes"
 	"fmt"
-	"log"
 	"path/filepath"
 
 	"github.com/f4ga/ScoriaDB/internal/engine/sstable"
 	"github.com/f4ga/ScoriaDB/internal/errors"
+	"github.com/f4ga/ScoriaDB/internal/logger"
 	// "github.com/f4ga/ScoriaDB/internal/mvcc"  implement or decide where to do it
 )
 
@@ -75,7 +75,7 @@ func (e *LSMEngine) flushMemTable() error {
 			writer = nil
 			// Delete partially written file via VFS
 			if err := e.vfs.Remove(sstPath); err != nil {
-				log.Printf("flush: failed to remove %s: %v", sstPath, err)
+				logger.Warn("flush: failed to remove %s: %v", sstPath, err)
 			}
 			return fmt.Errorf("failed to append key to SSTable: %w", err)
 		}
@@ -83,7 +83,7 @@ func (e *LSMEngine) flushMemTable() error {
 
 	if err := writer.Finish(); err != nil {
 		if err := e.vfs.Remove(sstPath); err != nil {
-			log.Printf("flush: failed to remove %s: %v", sstPath, err)
+			logger.Warn("flush: failed to remove %s: %v", sstPath, err)
 		}
 		return fmt.Errorf("failed to finish SSTable: %w", err)
 	}
@@ -92,7 +92,7 @@ func (e *LSMEngine) flushMemTable() error {
 	reader, err := sstable.Open(sstPath)
 	if err != nil {
 		if err := e.vfs.Remove(sstPath); err != nil {
-			log.Printf("flush: failed to remove %s: %v", sstPath, err)
+			logger.Warn("flush: failed to remove %s: %v", sstPath, err)
 		}
 		return fmt.Errorf("failed to open SSTable: %w", err)
 	}
@@ -102,7 +102,7 @@ func (e *LSMEngine) flushMemTable() error {
 	if err != nil {
 		errors.CloseWithLog(reader, "flush-sstable")
 		if err := e.vfs.Remove(sstPath); err != nil {
-			log.Printf("flush: failed to remove %s: %v", sstPath, err)
+			logger.Warn("flush: failed to remove %s: %v", sstPath, err)
 		}
 		return fmt.Errorf("failed to stat SSTable: %w", err)
 	}
@@ -125,7 +125,7 @@ func (e *LSMEngine) flushMemTable() error {
 	if err := e.manifest.Apply(edit); err != nil {
 		errors.CloseWithLog(reader, "flush-sstable")
 		if err := e.vfs.Remove(sstPath); err != nil {
-			log.Printf("flush: failed to remove %s: %v", sstPath, err)
+			logger.Warn("flush: failed to remove %s: %v", sstPath, err)
 		}
 		return fmt.Errorf("failed to apply manifest edit: %w", err)
 	}

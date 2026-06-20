@@ -17,15 +17,16 @@ package errors
 import (
 	"fmt"
 	"io"
-	"log"
 	"os"
+
+	"github.com/f4ga/ScoriaDB/internal/logger"
 )
 
 // RemoveAll removes a directory tree and logs a warning if an error occurs.
 // Ignores os.ErrNotExist errors.
 func RemoveAll(path string) {
 	if err := os.RemoveAll(path); err != nil {
-		log.Printf("WARNING: failed to remove %s: %v", path, err)
+		logger.Warn("failed to remove %s: %v", path, err)
 	}
 }
 
@@ -33,15 +34,15 @@ func RemoveAll(path string) {
 // Used in production code where close errors are non-critical.
 func CloseWithLog(closer io.Closer, name string) {
 	if err := closer.Close(); err != nil {
-		log.Printf("WARNING: failed to close %s: %v", name, err)
+		logger.Warn("failed to close %s: %v", name, err)
 	}
 }
 
-// CloseWithFatal closes an io.Closer and calls log.Fatal if an error occurs.
+// CloseWithFatal closes an io.Closer and calls logger.Fatal if an error occurs.
 // Used in tests where close errors should fail immediately.
 func CloseWithFatal(closer io.Closer, name string) {
 	if err := closer.Close(); err != nil {
-		log.Fatalf("FATAL: failed to close %s: %v", name, err)
+		logger.Fatal("failed to close %s: %v", name, err)
 	}
 }
 
@@ -49,7 +50,7 @@ func CloseWithFatal(closer io.Closer, name string) {
 // Ignores os.ErrNotExist errors.
 func RemoveWithLog(path string) {
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-		log.Printf("WARNING: failed to remove %s: %v", path, err)
+		logger.Warn("failed to remove %s: %v", path, err)
 	}
 }
 

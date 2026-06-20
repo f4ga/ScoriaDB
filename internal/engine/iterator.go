@@ -16,7 +16,8 @@ package engine
 
 import (
 	"bytes"
-	"log"
+
+	"github.com/f4ga/ScoriaDB/internal/logger"
 
 	"github.com/f4ga/ScoriaDB/internal/engine/sstable"
 	"github.com/f4ga/ScoriaDB/internal/mvcc"
@@ -114,7 +115,7 @@ func (e *LSMEngine) Scan(prefix []byte) Iterator {
 			if err == nil {
 				iters = append(iters, sstIter)
 			} else {
-				log.Printf("[Scan] failed to create iterator for SSTable: %v", err)
+				logger.Warn("[Scan] failed to create iterator for SSTable: %v", err)
 			}
 		}
 	}

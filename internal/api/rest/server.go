@@ -18,11 +18,11 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"strings"
 
 	"github.com/f4ga/ScoriaDB/internal/auth"
+	"github.com/f4ga/ScoriaDB/internal/logger"
 	"github.com/f4ga/ScoriaDB/pkg/scoria"
 )
 
@@ -221,7 +221,7 @@ func writeJSON(w http.ResponseWriter, status int, data interface{}) {
 	}
 	w.WriteHeader(status)
 	if _, err := buf.WriteTo(w); err != nil {
-		log.Printf("WARNING: failed to write response: %v", err)
+		logger.Warn("failed to write response: %v", err)
 	}
 }
 
@@ -240,7 +240,7 @@ func writeError(w http.ResponseWriter, status int, code, message string) {
 	w.WriteHeader(status)
 
 	if _, err := buf.WriteTo(w); err != nil {
-		log.Printf("WARNING: failed to write response: %v", err)
+		logger.Warn("failed to write response: %v", err)
 	}
 }
 

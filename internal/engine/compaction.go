@@ -17,12 +17,12 @@ package engine
 import (
 	"bytes"
 	"fmt"
-	"log"
 	"path/filepath"
 	"sort"
 
 	"github.com/f4ga/ScoriaDB/internal/engine/sstable"
 	"github.com/f4ga/ScoriaDB/internal/errors"
+	"github.com/f4ga/ScoriaDB/internal/logger"
 	"github.com/f4ga/ScoriaDB/internal/mvcc"
 )
 
@@ -107,7 +107,7 @@ func (e *LSMEngine) compactLevel0() error {
 		if writer != nil {
 			// If writer hasn't been finished, remove the partial file
 			if err := e.vfs.Remove(sstPath); err != nil {
-				log.Printf("compaction: failed to remove %s: %v", sstPath, err)
+				logger.Warn("compaction: failed to remove %s: %v", sstPath, err)
 			}
 		}
 	}()
@@ -192,7 +192,7 @@ func (e *LSMEngine) compactLevel0() error {
 	reader, err := sstable.Open(sstPath)
 	if err != nil {
 		if err := e.vfs.Remove(sstPath); err != nil {
-			log.Printf("compaction: failed to remove %s: %v", sstPath, err)
+			logger.Warn("compaction: failed to remove %s: %v", sstPath, err)
 		}
 		return fmt.Errorf("failed to open SSTable: %w", err)
 	}
@@ -206,7 +206,7 @@ func (e *LSMEngine) compactLevel0() error {
 	stat, err := e.vfs.Stat(sstPath)
 	if err != nil {
 		if err := e.vfs.Remove(sstPath); err != nil {
-			log.Printf("compaction: failed to remove %s: %v", sstPath, err)
+			logger.Warn("compaction: failed to remove %s: %v", sstPath, err)
 		}
 		return fmt.Errorf("failed to stat SSTable: %w", err)
 	}
@@ -242,7 +242,7 @@ func (e *LSMEngine) compactLevel0() error {
 	// Apply edit to manifest
 	if err := e.manifest.Apply(edit); err != nil {
 		if err := e.vfs.Remove(sstPath); err != nil {
-			log.Printf("compaction: failed to remove %s: %v", sstPath, err)
+			logger.Warn("compaction: failed to remove %s: %v", sstPath, err)
 		}
 		return fmt.Errorf("failed to apply manifest edit: %w", err)
 	}
@@ -253,7 +253,7 @@ func (e *LSMEngine) compactLevel0() error {
 		if i < len(deletedFiles) && deletedFiles[i].FileNum != 0 {
 			oldPath := filepath.Join(e.dataDir, fmt.Sprintf("%06d.sst", deletedFiles[i].FileNum))
 			if err := e.vfs.Remove(oldPath); err != nil {
-				log.Printf("compaction: failed to remove %s: %v", oldPath, err)
+				logger.Warn("compaction: failed to remove %s: %v", oldPath, err)
 			}
 		}
 	}
@@ -279,11 +279,11 @@ func (e *LSMEngine) maybeCompact() {
 		go func() {
 			defer func() {
 				if r := recover(); r != nil {
-					log.Printf("WARNING: compaction panic: %v", r)
+					logger.Warn("compaction panic: %v", r)
 				}
 			}()
 			if err := e.compactLevel0(); err != nil {
-				log.Printf("WARNING: compaction failed: %v", err)
+				logger.Warn("compaction failed: %v", err)
 			}
 		}()
 	}
