@@ -109,10 +109,14 @@ func TestWALCRCError(t *testing.T) {
 		}
 		defer errors.CloseWithFatal(wal, "wal")
 
-		// Записываем корректную запись
-		entry := &WalEntry{Op: OpPut, Key: []byte("key"), Value: []byte("value"), Timestamp: 1}
-		if err := wal.Write(entry); err != nil {
-			t.Fatalf("failed to write: %v", err)
+		// Записываем две корректные записи
+		entry1 := &WalEntry{Op: OpPut, Key: []byte("key1"), Value: []byte("value1"), Timestamp: 1}
+		if err := wal.Write(entry1); err != nil {
+			t.Fatalf("failed to write entry1: %v", err)
+		}
+		entry2 := &WalEntry{Op: OpPut, Key: []byte("key2"), Value: []byte("value2"), Timestamp: 2}
+		if err := wal.Write(entry2); err != nil {
+			t.Fatalf("failed to write entry2: %v", err)
 		}
 
 		// Принудительно сбрасываем буфер, чтобы данные гарантированно попали на диск
@@ -122,13 +126,14 @@ func TestWALCRCError(t *testing.T) {
 			}
 		}
 
-		// Портим файл (изменяем байт в середине)
+		// Портим вторую запись (изменяем байт в середине)
 		file, err := os.OpenFile(path, os.O_RDWR, 0644)
 		if err != nil {
 			t.Fatalf("failed to open file for corruption: %v", err)
 		}
-		// Смещаемся на позицию после заголовка (например, 20 байт)
-		if _, err := file.Seek(20, 0); err != nil {
+		// Первая запись занимает: 1 (op) + 8 (ts) + 2 (keyLen) + 4 (valLen) + 4 (key) + 6 (value) + 4 (CRC) = 29 байт
+		// Смещаемся на позицию после первой записи + небольшой сдвиг, чтобы повредить тело второй записи
+		if _, err := file.Seek(35, 0); err != nil {
 			errors.CloseWithFatal(file, "wal-corrupt-file")
 			t.Fatalf("failed to seek: %v", err)
 		}
@@ -138,12 +143,25 @@ func TestWALCRCError(t *testing.T) {
 		}
 		errors.CloseWithFatal(file, "wal-corrupt-file")
 
-		// Восстановление должно вернуть ошибку CRC
+		// Восстановление должно обработать CRC ошибку gracefully:
+		// - первая запись восстанавливается
+		// - вторая запись пропускается (CRC mismatch)
+		// - Recover() возвращает nil (не ошибку)
+		var recovered []*WalEntry
 		err = wal.Recover(func(entry *WalEntry) error {
+			recovered = append(recovered, entry)
 			return nil
 		})
-		if err == nil {
-			t.Error("expected CRC error, got nil")
+		if err != nil {
+			t.Errorf("expected no error (graceful handling of CRC error), got %v", err)
+		}
+		if len(recovered) != 1 {
+			t.Errorf("expected 1 recovered entry (second was corrupted), got %d", len(recovered))
+		}
+		if len(recovered) == 1 {
+			if string(recovered[0].Key) != "key1" {
+				t.Errorf("expected recovered key 'key1', got %s", recovered[0].Key)
+			}
 		}
 	})
 }

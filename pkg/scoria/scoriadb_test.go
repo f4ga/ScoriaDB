@@ -19,6 +19,7 @@ package scoria
 
 import (
 	"bytes"
+	"fmt"
 	"testing"
 
 	"github.com/f4ga/ScoriaDB/internal/engine"
@@ -827,5 +828,69 @@ func TestScoriaDB_TransactionGetBuffer(t *testing.T) {
 	}
 	if string(val) != "tx-value" {
 		t.Errorf("expected tx-value after commit, got %s", val)
+	}
+}
+
+func TestDefaultOptions(t *testing.T) {
+	opts := DefaultOptions("/tmp/test")
+	if opts.WorkDir != "/tmp/test" {
+		t.Errorf("expected WorkDir /tmp/test, got %s", opts.WorkDir)
+	}
+	if opts.MemTableSize != 64*1024*1024 {
+		t.Errorf("expected MemTableSize 64MB, got %d", opts.MemTableSize)
+	}
+	if opts.Levels != nil {
+		t.Error("expected Levels nil")
+	}
+	if opts.VFS != nil {
+		t.Error("expected VFS nil")
+	}
+	if opts.WALOptions != nil {
+		t.Error("expected WALOptions nil")
+	}
+}
+
+func TestErrorIterator(t *testing.T) {
+	err := fmt.Errorf("test error")
+	it := &errorIterator{err: err}
+
+	if it.Next() {
+		t.Error("Next() should return false")
+	}
+	if it.Key() != nil {
+		t.Error("Key() should return nil")
+	}
+	if it.Value() != nil {
+		t.Error("Value() should return nil")
+	}
+	if it.Err() != err {
+		t.Errorf("Err() expected %v, got %v", err, it.Err())
+	}
+	it.Close() // should not panic
+}
+
+func TestErrorTransaction(t *testing.T) {
+	err := fmt.Errorf("test error")
+	tx := &errorTransaction{err: err}
+
+	_, err2 := tx.Get([]byte("key"))
+	if err2 != err {
+		t.Errorf("Get() expected %v, got %v", err, err2)
+	}
+	err2 = tx.Put([]byte("key"), []byte("val"))
+	if err2 != err {
+		t.Errorf("Put() expected %v, got %v", err, err2)
+	}
+	err2 = tx.Delete([]byte("key"))
+	if err2 != err {
+		t.Errorf("Delete() expected %v, got %v", err, err2)
+	}
+	err2 = tx.Commit()
+	if err2 != err {
+		t.Errorf("Commit() expected %v, got %v", err, err2)
+	}
+	err2 = tx.Rollback()
+	if err2 != nil {
+		t.Errorf("Rollback() expected nil, got %v", err2)
 	}
 }

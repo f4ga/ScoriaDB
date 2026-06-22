@@ -155,8 +155,12 @@ func (e *LSMEngine) startBackgroundTasks() {
 
 // stopBackgroundTasks stops background workers.
 func (e *LSMEngine) stopBackgroundTasks() {
-	close(e.stopCh)
-	e.flushTicker.Stop()
+	if e.stopCh != nil {
+		close(e.stopCh)
+	}
+	if e.flushTicker != nil {
+		e.flushTicker.Stop()
+	}
 	e.wg.Wait()
 	logger.Info("background tasks stopped")
 }

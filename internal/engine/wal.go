@@ -23,6 +23,7 @@ import (
 	"sync"
 
 	"github.com/f4ga/ScoriaDB/internal/errors"
+	"github.com/f4ga/ScoriaDB/internal/logger"
 )
 
 // sync.Pool для переиспользования WalEntry.
@@ -159,6 +160,10 @@ func (w *WAL) Flush() error {
 }
 
 // Recover читает все записи из WAL и вызывает callback для каждой.
+// При обнаружении повреждённой записи (CRC mismatch, unexpected EOF) пропускает
+// оставшуюся часть файла и возвращает nil — частичное восстановление считается
+// успешным. Это гарантирует, что даже при повреждении WAL база данных сможет
+// загрузиться с максимально возможным количеством данных.
 func (w *WAL) Recover(cb func(*WalEntry) error) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -175,7 +180,10 @@ func (w *WAL) Recover(cb func(*WalEntry) error) error {
 			if err == io.EOF {
 				break
 			}
-			return fmt.Errorf("failed to decode wal entry: %w", err)
+			// Corrupted entry: log a warning and stop recovery.
+			// This allows the database to start with the data recovered so far.
+			logger.Warn("wal: corrupted entry during recovery, stopping: %v", err)
+			break
 		}
 		if err := cb(entry); err != nil {
 			return fmt.Errorf("callback error: %w", err)
