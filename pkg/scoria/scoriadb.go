@@ -116,6 +116,7 @@ type mergeIterator struct {
 	engine         *engine.LSMEngine
 	index          int
 	err            error
+	views          []*engine.VLogView // zero-copy views for VLog values
 }
 
 func (it *mergeIterator) Next() bool {
@@ -144,17 +145,23 @@ func (it *mergeIterator) Value() []byte {
 		fileID := binary.BigEndian.Uint64(raw[0:8])
 		offset := binary.BigEndian.Uint32(raw[8:12])
 
-		val, err := it.engine.ReadVLogValue(fileID, offset)
+		// zero-copy read using VLogView
+		view, err := it.engine.ReadVLogView(fileID, offset)
 		if err != nil {
 			it.err = err
 			return nil
 		}
 
+		if it.views == nil {
+			it.views = make([]*engine.VLogView, 0)
+		}
+		it.views = append(it.views, view)
+
 		if it.resolvedValues == nil {
 			it.resolvedValues = make([][]byte, len(it.rawValues))
 		}
-		it.resolvedValues[it.index] = val
-		return val
+		it.resolvedValues[it.index] = view.Data()
+		return view.Data()
 	}
 
 	return raw
@@ -165,6 +172,11 @@ func (it *mergeIterator) Err() error {
 }
 
 func (it *mergeIterator) Close() {
+	// Release all VLog views
+	for _, view := range it.views {
+		view.Release()
+	}
+	it.views = nil
 	it.keys = nil
 	it.rawValues = nil
 	it.resolvedValues = nil

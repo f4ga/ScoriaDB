@@ -52,6 +52,16 @@ func (e *LSMEngine) ReadVLogValue(fileID uint64, offset uint32) ([]byte, error) 
 	return e.vlog.Read(vp)
 }
 
+// ReadVLogView returns a zero-copy VLogView for the given fileID and offset.
+// The caller MUST call Release() on the returned view when done.
+func (e *LSMEngine) ReadVLogView(fileID uint64, offset uint32) (*VLogView, error) {
+	if e.vlog == nil {
+		return nil, fmt.Errorf("vlog not initialized")
+	}
+	vp := ValuePointer{Offset: int64(fileID), Size: int32(offset)}
+	return e.vlog.ReadView(vp)
+}
+
 // decodeStoredValue decodes a stored value (inline or VLog pointer).
 func (e *LSMEngine) decodeStoredValue(stored []byte) ([]byte, error) {
 	if len(stored) == 0 {
