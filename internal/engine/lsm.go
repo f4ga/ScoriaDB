@@ -478,8 +478,9 @@ func (e *LSMEngine) Close() error {
 		}
 	}
 
-	// Close VLog (decrement reference count)
-	e.vlog.DecRef()
+	// VLog is closed via Shutdown() or Close() on the VLog itself.
+	// DecRef() is NOT called here — it is only used when releasing VLogView
+	// instances created via ReadView(). The engine does not hold a View reference.
 
 	// Close WAL
 	if err := e.wal.Close(); err != nil {

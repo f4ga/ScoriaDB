@@ -173,10 +173,14 @@ func (it *mergeIterator) Err() error {
 
 func (it *mergeIterator) Close() {
 	// Release all VLog views
-	for _, view := range it.views {
-		view.Release()
+	if it.views != nil {
+		for _, view := range it.views {
+			if view != nil {
+				view.Release()
+			}
+		}
+		it.views = nil
 	}
-	it.views = nil
 	it.keys = nil
 	it.rawValues = nil
 	it.resolvedValues = nil

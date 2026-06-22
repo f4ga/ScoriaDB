@@ -894,3 +894,76 @@ func TestErrorTransaction(t *testing.T) {
 		t.Errorf("Rollback() expected nil, got %v", err2)
 	}
 }
+func TestScoriaDB_ScanLargeValues(t *testing.T) {
+	db, err := NewScoriaDB(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	// Записываем 100 значений по 4KB
+	for i := 0; i < 100; i++ {
+		key := []byte(fmt.Sprintf("scan:%05d", i))
+		value := make([]byte, 4096)
+		if err := db.Put(key, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	iter := db.Scan([]byte("scan:"))
+	defer iter.Close()
+
+	count := 0
+	for iter.Next() {
+		count++
+		if len(iter.Value()) != 4096 {
+			t.Errorf("expected 4096 bytes, got %d", len(iter.Value()))
+		}
+	}
+	if err := iter.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if count != 100 {
+		t.Errorf("expected 100 keys, got %d", count)
+	}
+}
+
+func TestScoriaDB_ScanViewRelease(t *testing.T) {
+	db, err := NewScoriaDB(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	// Записываем большое значение (идёт в VLog)
+	largeValue := make([]byte, 100)
+	for i := range largeValue {
+		largeValue[i] = byte(i)
+	}
+	if err := db.Put([]byte("large_key"), largeValue); err != nil {
+		t.Fatal(err)
+	}
+
+	iter := db.Scan([]byte("large_key"))
+	if !iter.Next() {
+		t.Fatal("expected at least one key")
+	}
+	if string(iter.Key()) != "large_key" {
+		t.Errorf("expected key 'large_key', got %s", iter.Key())
+	}
+	if len(iter.Value()) != 100 {
+		t.Errorf("expected 100 bytes, got %d", len(iter.Value()))
+	}
+	iter.Close()
+
+	// После Close() все View должны быть освобождены
+	// Проверяем через повторное сканирование — должно работать
+	iter2 := db.Scan([]byte("large_key"))
+	defer iter2.Close()
+	if !iter2.Next() {
+		t.Fatal("expected at least one key after re-scan")
+	}
+	if len(iter2.Value()) != 100 {
+		t.Errorf("expected 100 bytes after re-scan, got %d", len(iter2.Value()))
+	}
+}
