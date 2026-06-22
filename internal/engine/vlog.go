@@ -21,6 +21,7 @@ import (
 	"os"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"syscall"
 
 	"github.com/f4ga/ScoriaDB/internal/engine/vfs"
@@ -37,17 +38,30 @@ const (
 	MaxInlineSize = 64
 )
 
-// VLog представляет Value Log с mmap для zero-copy чтения.
-type VLog struct {
-	mu     sync.RWMutex
-	file   *os.File
-	data   []byte // mmap-регион
-	size   int64  // текущий размер файла
-	closed bool
+// VLogReader is the interface for reading from the Value Log.
+type VLogReader interface {
+	Read(vp ValuePointer) ([]byte, error)
+	Size() int64
+	Close() error
 }
 
+// VLogImpl представляет Value Log с mmap для zero-copy чтения.
+type VLogImpl struct {
+	mu        sync.RWMutex
+	file      *os.File
+	data      []byte // mmap-регион
+	size      int64  // текущий размер файла
+	closed    bool
+	refCount  int32 // atomic
+	// closing   bool // TODO(v0.3.0): used in Prompts 7-9
+	// waitGroup sync.WaitGroup // TODO(v0.3.0): used in Prompts 7-9
+}
+
+// compile-time check that VLogImpl implements VLogReader
+var _ VLogReader = (*VLogImpl)(nil)
+
 // OpenVLog открывает или создает VLog файл.
-func OpenVLog(vfs vfs.VFS, path string) (*VLog, error) {
+func OpenVLog(vfs vfs.VFS, path string) (*VLogImpl, error) {
 	// Открываем файл через VFS
 	file, err := vfs.OpenFile(path, os.O_RDWR|os.O_CREATE, 0644)
 	if err != nil {
@@ -127,7 +141,7 @@ func OpenVLog(vfs vfs.VFS, path string) (*VLog, error) {
 		return nil, fmt.Errorf("failed to mmap vlog file: %w", err)
 	}
 
-	vlog := &VLog{
+	vlog := &VLogImpl{
 		file: osFile,
 		data: data,
 		size: size,
@@ -137,7 +151,7 @@ func OpenVLog(vfs vfs.VFS, path string) (*VLog, error) {
 
 // Write добавляет значение в VLog и возвращает указатель на него.
 // Если значение маленькое (<= MaxInlineSize), возвращает пустой указатель.
-func (v *VLog) Write(value []byte) (ValuePointer, error) {
+func (v *VLogImpl) Write(value []byte) (ValuePointer, error) {
 	if len(value) <= MaxInlineSize {
 		// inline значение, не пишем в VLog
 		return ValuePointer{}, nil
@@ -181,7 +195,7 @@ func (v *VLog) Write(value []byte) (ValuePointer, error) {
 }
 
 // Read читает значение по указателю.
-func (v *VLog) Read(vp ValuePointer) ([]byte, error) {
+func (v *VLogImpl) Read(vp ValuePointer) ([]byte, error) {
 	if vp.Size == 0 {
 		// inline значение, не должно вызываться
 		return nil, fmt.Errorf("zero-sized value pointer")
@@ -224,7 +238,7 @@ func (v *VLog) Read(vp ValuePointer) ([]byte, error) {
 }
 
 // remap перемаппирует файл после увеличения размера.
-func (v *VLog) remap() error {
+func (v *VLogImpl) remap() error {
 	// Удаляем старое отображение
 	if err := syscall.Munmap(v.data); err != nil {
 		return fmt.Errorf("failed to munmap vlog: %w", err)
@@ -240,10 +254,37 @@ func (v *VLog) remap() error {
 }
 
 // Size возвращает текущий размер файла VLog (в байтах).
-func (v *VLog) Size() int64 {
+func (v *VLogImpl) Size() int64 {
 	v.mu.RLock()
 	defer v.mu.RUnlock()
 	return v.size
+}
+
+// IncRef increments the reference count for this VLog.
+func (v *VLogImpl) IncRef() {
+	atomic.AddInt32(&v.refCount, 1)
+}
+
+// DecRef decrements the reference count and releases resources when it reaches zero.
+func (v *VLogImpl) DecRef() {
+	if atomic.AddInt32(&v.refCount, -1) == 0 {
+		v.mu.Lock()
+		defer v.mu.Unlock()
+		if !v.closed {
+			v.release()
+		}
+	}
+}
+
+// release unmaps the mmap region and closes the file.
+func (v *VLogImpl) release() {
+	if err := syscall.Munmap(v.data); err != nil {
+		logger.Error("failed to munmap vlog: %v", err)
+	}
+	if err := v.file.Close(); err != nil {
+		logger.Error("failed to close vlog file: %v", err)
+	}
+	v.closed = true
 }
 
 // GC performs garbage collection on the Value Log.
@@ -251,7 +292,7 @@ func (v *VLog) Size() int64 {
 // It creates a new VLog file, copies all live values to it, and replaces the old file.
 // Returns a map from old ValuePointers to new ValuePointers, and any error.
 // The caller must update references in the LSM tree accordingly.
-func (v *VLog) GC(livePointers map[ValuePointer]struct{}) (map[ValuePointer]ValuePointer, error) {
+func (v *VLogImpl) GC(livePointers map[ValuePointer]struct{}) (map[ValuePointer]ValuePointer, error) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 
@@ -375,7 +416,7 @@ func (v *VLog) GC(livePointers map[ValuePointer]struct{}) (map[ValuePointer]Valu
 
 // readAt reads a value directly from the mmap'ed data at the given offset.
 // Assumes the caller holds the lock.
-func (v *VLog) readAt(offset int64, size int32) ([]byte, error) {
+func (v *VLogImpl) readAt(offset int64, size int32) ([]byte, error) {
 	start := int(offset)
 	end := start + 8 + int(size) // header + value
 	if end > len(v.data) {
@@ -405,12 +446,16 @@ func (v *VLog) readAt(offset int64, size int32) ([]byte, error) {
 }
 
 // Close закрывает VLog и освобождает ресурсы.
-func (v *VLog) Close() error {
+func (v *VLogImpl) Close() error {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 
 	if v.closed {
 		return nil
+	}
+
+	if atomic.LoadInt32(&v.refCount) > 0 {
+		return fmt.Errorf("cannot close VLog: %d active references", v.refCount)
 	}
 
 	v.closed = true

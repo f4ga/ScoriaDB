@@ -65,7 +65,7 @@ It combines:
 
 | Operation | Value size | Time (ns/op) | Throughput (ops/s) |
 |-----------|------------|--------------|--------------------|
-| `engine.Put` (small) | 16 B | **~750** | **~1.33M** |
+| `engine.Put` (small) | 16 B | **~676** | **~1.48M** |
 | `engine.Put` (sync, no Group Commit) | 16 B | **~1,070** | **~935K** |
 | `engine.Put` (large, VLog) | 4 KB | **~4,785** | **~209K** |
 | `engine.Get` (hit, MemTable) | – | **~140** | **~7.1M** |

@@ -17,6 +17,8 @@ package engine
 import (
 	"os"
 	"path/filepath"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/f4ga/ScoriaDB/internal/engine/vfs"
@@ -377,5 +379,122 @@ func TestVLogRecoveryAfterCrash(t *testing.T) {
 			t.Errorf("byte mismatch at index %d: expected %d, got %d", i, newValue[i], read[i])
 			break
 		}
+	}
+}
+
+func TestVLogRefCount(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "vlog.db")
+
+	vlog, err := OpenVLog(vfs.Default, path)
+	if err != nil {
+		t.Fatalf("failed to open vlog: %v", err)
+	}
+	defer errors.CloseWithFatal(vlog, "vlog")
+
+	// Initial refCount should be 0
+	if atomic.LoadInt32(&vlog.refCount) != 0 {
+		t.Errorf("expected initial refCount 0, got %d", vlog.refCount)
+	}
+
+	// IncRef should increase refCount
+	vlog.IncRef()
+	if atomic.LoadInt32(&vlog.refCount) != 1 {
+		t.Errorf("expected refCount 1 after IncRef, got %d", vlog.refCount)
+	}
+
+	// IncRef again
+	vlog.IncRef()
+	if atomic.LoadInt32(&vlog.refCount) != 2 {
+		t.Errorf("expected refCount 2 after second IncRef, got %d", vlog.refCount)
+	}
+
+	// DecRef should decrease refCount
+	vlog.DecRef()
+	if atomic.LoadInt32(&vlog.refCount) != 1 {
+		t.Errorf("expected refCount 1 after DecRef, got %d", vlog.refCount)
+	}
+
+	// Close should fail when refCount > 0
+	err = vlog.Close()
+	if err == nil {
+		t.Error("expected error when closing with active references, got nil")
+	}
+
+	// DecRef to zero should trigger release
+	vlog.DecRef()
+	// After DecRef to 0, vlog should be closed
+	if !vlog.closed {
+		t.Error("expected vlog to be closed after DecRef to 0")
+	}
+}
+
+func TestVLogRefCountConcurrent(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "vlog.db")
+
+	vlog, err := OpenVLog(vfs.Default, path)
+	if err != nil {
+		t.Fatalf("failed to open vlog: %v", err)
+	}
+	defer errors.CloseWithFatal(vlog, "vlog")
+
+	// Concurrent IncRef/DecRef from multiple goroutines
+	const goroutines = 10
+	const iterations = 100
+	var wg sync.WaitGroup
+
+	for i := 0; i < goroutines; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < iterations; j++ {
+				vlog.IncRef()
+				vlog.DecRef()
+			}
+		}()
+	}
+	wg.Wait()
+
+	// After all operations, refCount should be 0
+	if atomic.LoadInt32(&vlog.refCount) != 0 {
+		t.Errorf("expected refCount 0 after concurrent ops, got %d", vlog.refCount)
+	}
+}
+func TestVLogReaderInterface(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "vlog.db")
+
+	vlog, err := OpenVLog(vfs.Default, path)
+	if err != nil {
+		t.Fatalf("failed to open vlog: %v", err)
+	}
+	defer errors.CloseWithFatal(vlog, "vlog")
+
+	// VLogImpl should implement VLogReader
+	var reader VLogReader = vlog
+
+	// Write a large value
+	large := make([]byte, 100)
+	for i := range large {
+		large[i] = byte(i)
+	}
+	vp, err := vlog.Write(large)
+	if err != nil {
+		t.Fatalf("failed to write: %v", err)
+	}
+
+	// Read through the interface
+	read, err := reader.Read(vp)
+	if err != nil {
+		t.Fatalf("failed to read through interface: %v", err)
+	}
+	if len(read) != len(large) {
+		t.Errorf("length mismatch: expected %d, got %d", len(large), len(read))
+	}
+
+	// Size through the interface
+	if reader.Size() <= 0 {
+		t.Error("expected positive size")
 	}
 }

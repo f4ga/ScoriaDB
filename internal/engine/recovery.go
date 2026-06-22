@@ -20,7 +20,7 @@ import (
 )
 
 // recoverFromWAL recovers the database state from WAL.
-func recoverFromWAL(wal *WAL, memTable *MemTable, vlog *VLog) error {
+func recoverFromWAL(wal *WAL, memTable *MemTable, vlog *VLogImpl) error {
 	return wal.Recover(func(entry *WalEntry) error {
 		switch entry.Op {
 		case OpPut:

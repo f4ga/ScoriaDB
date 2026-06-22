@@ -35,7 +35,7 @@ type LSMEngine struct {
 	dataDir             string
 	memTable            *MemTable
 	frozenMemTable      *MemTable
-	vlog                *VLog
+	vlog                *VLogImpl
 	wal                 *WAL
 	manifest            *Manifest
 	vfs                 vfs.VFS
@@ -478,10 +478,8 @@ func (e *LSMEngine) Close() error {
 		}
 	}
 
-	// Close VLog
-	if err := e.vlog.Close(); err != nil {
-		errs = append(errs, err)
-	}
+	// Close VLog (decrement reference count)
+	e.vlog.DecRef()
 
 	// Close WAL
 	if err := e.wal.Close(); err != nil {
