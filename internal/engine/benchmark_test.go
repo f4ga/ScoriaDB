@@ -214,3 +214,25 @@ func BenchmarkBloomFilter(b *testing.B) {
 		bf.MayContain(keys[i%10000])
 	}
 }
+
+// ------------------------------------------------------------
+// Zero‑copy VLog: чтение больших значений (4KB) из VLog
+// ------------------------------------------------------------
+func BenchmarkGetLargeValue(b *testing.B) {
+	db := openBenchDB(b)
+	defer errors.CloseWithFatal(db, "bench-db")
+
+	key := []byte("large:key")
+	value := make([]byte, 4096)
+	ts := db.NextTimestamp()
+	if err := db.PutWithTS(key, value, ts); err != nil {
+		b.Fatal(err)
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := db.GetWithTS(key, math.MaxUint64); err != nil {
+			b.Fatal(err)
+		}
+	}
+}

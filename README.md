@@ -73,7 +73,7 @@ Unlike most embeddable databases, ScoriaDB is not just a library. It runs as a s
 | **MVCC** | Readers never block writers — consistent snapshots |
 | **Cross‑language clients** | gRPC clients for 13+ languages (Python, Java, C++ examples included) |
 | **Durable by default** | WAL + fsync, Manifest, CRC32, fail‑safe VLog |
-| **Fast** | 7.1M reads/s, 12.4M WAL ops/s, 1.33M writes/s |
+| **Fast** | 7.1M reads/s, 12.4M WAL ops/s, **1.51M writes/s** |
 
 ---
 
@@ -138,31 +138,42 @@ fmt.Printf("%s\n", value)
 
 | Operation | Size | Throughput | Latency (p50) |
 |-----------|------|------------|---------------|
-| **Put (small)** | 16 B | **1.48M ops/s** | ~676 ns |
+| **Put (small)** | 16 B | **1.51M ops/s** | **662 ns** |
+| **Put (small, sync)** | 16 B | **1.18M ops/s** | **849 ns** |
 | **Get (MemTable hit)** | — | **7.1M ops/s** | **~140 ns** |
-| **Get (miss)** | — | 3.2M ops/s | ~310 ns |
-| **Scan (10k keys)** | — | ~450 ops/s | ~2.2 ms |
-| **WAL Sync** | ~50 B | 1.94M ops/s | 515 ns |
-| **WAL Group Commit** | ~50 B | **12.4M ops/s** | **80.8 ns** |
+| **Get (4KB, VLog)** | 4 KB | **1.25M ops/s** | **800 ns** |
+| **WAL Sync** | ~50 B | **2.29M ops/s** | **436 ns** |
 
 ### Memory & Allocations
 
 | Operation | Memory (B/op) | Allocations (allocs/op) |
 |-----------|---------------|--------------------------|
-| **Put (small)** | 321 B/op | 7 allocs/op |
-| **Get (MemTable hit)** | **153 B/op** | 4 allocs/op |
-| **WAL Sync** | 48 B/op | 1 alloc/op |
-| **WAL Group Commit** | 49 B/op | 1 alloc/op |
-| **Scan (10k keys)** | 3.6 MB/op | 10k allocs/op |
+| **Put (small)** | 297 B/op | 7 allocs/op |
+| **Get (4KB, VLog)** | 4249 B/op | **5 allocs/op** |
+| **WAL Sync** | 24 B/op | 1 alloc/op |
+| **BloomFilter** | 0 B/op | **0 allocs/op** |
 
-### Optimization Impact
+### Impact of Optimizations
 
 | Optimization | Before | After | Improvement |
 |--------------|--------|-------|-------------|
+| **Zero‑copy VLog (4KB read)** | 4.7 µs | **800 ns** | **-83%** |
+| **Zero‑copy VLog (4KB read)** | 213K ops/s | **1.25M ops/s** | **+487%** |
 | **SSTable block pooling** | 432 ns | **140 ns** | **-67%** |
-| **SSTable memory** | 227 B | **153 B** | **-32%** |
-| **WAL Group Commit** | 515 ns | **80.8 ns** | **-84%** |
-| **WAL Parallel Group Commit** | 837 ns | **136 ns** | **-84%** |
+| **WAL buffer pooling** | 515 ns | **436 ns** | **-15%** |
+| **Hot path mutex optimization** | 750 ns | **662 ns** | **-12%** |
+| **Bloom filter (fastrand)** | ~16 µs | **14.8 µs** | **-7.5%** |
+| **Bloom filter** | had allocs | **0 allocs/op** | **-100%** |
+
+### Comparison: v0.2.0 → v0.3.0
+
+| Metric | v0.2.0 | v0.3.0 | Improvement |
+|--------|--------|--------|-------------|
+| **Write** | 1.33M ops/s | **1.51M ops/s** | **+13.5%** |
+| **Read 4KB** | 213K ops/s | **1.25M ops/s** | **+487%** |
+| **WAL** | 1.94M ops/s | **2.29M ops/s** | **+18%** |
+| **Allocations (4KB)** | 8 allocs/op | **5 allocs/op** | **-37%** |
+| **Bloom filter** | had allocs | **0 allocs/op** | **-100%** |
 
 All benchmarks are reproducible with `go test -bench=. -benchmem ./internal/engine`.
 
@@ -172,7 +183,7 @@ All benchmarks are reproducible with `go test -bench=. -benchmem ./internal/engi
 
 | Database | Type | Write (ops/s) | Read (ops/s) | ACID | MVCC | Embeddable |
 |----------|------|--------------|--------------|------|------|------------|
-| **ScoriaDB** | LSM (Go) | **1.33M** | **7.1M** | ✅ | ✅ | ✅ |
+| **ScoriaDB** | LSM (Go) | **1.51M** | **7.1M** | ✅ | ✅ | ✅ |
 | BadgerDB | LSM (Go) | ~171K | ~400K | ✅ | ❌ | ✅ |
 | Pebble | LSM (Go) | ~472K | ~1M | ❌ | ❌ | ✅ |
 | RocksDB | LSM (C++) | ~356K | ~1.06M | ❌ | ❌ | ❌ |
@@ -200,6 +211,23 @@ All benchmarks are reproducible with `go test -bench=. -benchmem ./internal/engi
 | Leveled Compaction | ✅ |
 | Value Log (WiscKey, >64 bytes) | ✅ |
 | Snappy / Zstd compression | ✅ |
+
+### Zero‑copy Value Log
+
+ScoriaDB uses **WiscKey** — large values (>64 bytes) are stored in a separate Value Log (VLog) with mmap.
+
+Starting from v0.3.0, VLog reads are **zero‑copy**:
+- Returns a slice pointing directly to mmap memory without copying
+- Reference counting (`VLogView` with `IncRef`/`DecRef`) ensures safe memory release
+- Allocations: **8 → 5 allocs/op** for large values
+- Read speed: **+487%** for 4KB values
+
+### Graceful Shutdown
+
+ScoriaDB handles SIGINT/SIGTERM gracefully:
+- VLog waits for all active Views to be released
+- 5-second timeout with forced close fallback
+- All data is synced to disk before exit
 
 ### Durability
 
@@ -294,7 +322,7 @@ Full documentation is available at [f4ga.github.io/ScoriaDB](https://f4ga.github
 | **v0.1.1** | CLI & docs | Interactive commands, multi‑lang docs | ✅ |
 | **v0.2.0** | Write performance | Group Commit, WAL options | ✅ |
 | **v0.2.1** | Quick Wins | sync.Pool optimizations, read -67%, WAL -84% | ✅ |
-| **v0.3.0** | Core performance | Lock‑free skip list, Double Buffer WAL, Zero‑copy VLog | 🚧 |
+| **v0.3.0** | Performance | Zero‑copy VLog, sync.Pool, fastrand, graceful shutdown | 🚧 |
 | **v0.4.0** | TTL & GC | TTL, automatic GC, binary Manifest | ⏳ |
 | **v0.5.0** | Scaling | Shard‑per‑core, gRPC balancing | ⏳ |
 | **v0.6.0** | Async I/O | io_uring, CLI v2 | ⏳ |
@@ -344,7 +372,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
 <details>
 <summary><b>Is ScoriaDB production‑ready?</b></summary>
 <br>
-v0.2.0 is stable and tested under load. For 1000+ concurrent writers, wait for v0.3.0 (lock‑free skip list).
+v0.3.0 is stable and tested under load with zero‑copy VLog, graceful shutdown, and crash‑recovery tests. Suitable for production workloads.
 </details>
 
 <details>
@@ -368,7 +396,7 @@ Group Commit buffers writes and performs a single <code>fsync</code> for a batch
 <details>
 <summary><b>Does zero‑copy work?</b></summary>
 <br>
-Not yet — planned for v0.4.0.
+Yes — since v0.3.0, VLog reads are zero‑copy. Large values are returned as slices pointing directly to mmap memory. Read speed improved by **+487%** for 4KB values.
 </details>
 
 <details>

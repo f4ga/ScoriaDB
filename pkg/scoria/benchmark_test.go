@@ -247,3 +247,37 @@ func BenchmarkPutSize1KBSync(b *testing.B)  { valueSizeBenchmarkSync(b, 1024) }
 func BenchmarkPutSize4KBSync(b *testing.B)  { valueSizeBenchmarkSync(b, 4096) }
 func BenchmarkPutSize16KBSync(b *testing.B) { valueSizeBenchmarkSync(b, 16384) }
 func BenchmarkPutSize64KBSync(b *testing.B) { valueSizeBenchmarkSync(b, 65536) }
+
+// -----------------------------------------------------------------------------
+// Zero‑copy VLog benchmarks (v0.3.0)
+// -----------------------------------------------------------------------------
+
+// BenchmarkScanLargeValues измеряет сканирование 10k значений по 4KB (VLog)
+func BenchmarkScanLargeValues(b *testing.B) {
+	db, err := NewScoriaDB(b.TempDir())
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer errors.CloseWithFatal(db, "bench-db")
+
+	for i := 0; i < 10000; i++ {
+		key := []byte(fmt.Sprintf("scan:%05d", i))
+		value := make([]byte, 4096)
+		if err := db.Put(key, value); err != nil {
+			b.Fatal(err)
+		}
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		iter := db.Scan([]byte("scan:"))
+		count := 0
+		for iter.Next() {
+			count++
+		}
+		iter.Close()
+		if count == 0 {
+			b.Fatal("scan returned 0 entries")
+		}
+	}
+}
