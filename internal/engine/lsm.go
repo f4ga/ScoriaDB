@@ -226,8 +226,8 @@ func (e *LSMEngine) NextTimestamp() uint64 {
 // PutWithTS writes a key-value pair with the given commit timestamp.
 func (e *LSMEngine) PutWithTS(key, value []byte, commitTS uint64) error {
 	e.mu.Lock()
-	defer e.mu.Unlock()
 	if e.closed {
+		e.mu.Unlock()
 		return fmt.Errorf("engine closed")
 	}
 	var vp ValuePointer
@@ -238,6 +238,7 @@ func (e *LSMEngine) PutWithTS(key, value []byte, commitTS uint64) error {
 		var err error
 		vp, err = e.vlog.Write(value)
 		if err != nil {
+			e.mu.Unlock()
 			return fmt.Errorf("failed to write to vlog: %w", err)
 		}
 	}
@@ -255,12 +256,14 @@ func (e *LSMEngine) PutWithTS(key, value []byte, commitTS uint64) error {
 	walEntry.Timestamp = commitTS
 	if err := e.wal.Write(walEntry); err != nil {
 		putWalEntry(walEntry)
+		e.mu.Unlock()
 		return fmt.Errorf("failed to write to wal: %w", err)
 	}
 	putWalEntry(walEntry)
 	e.memTable.Put(mvccKey, storedValue)
 	atomic.AddInt64(&e.memSize, int64(len(key)+len(value)))
 	e.updateLastCommitCache(key, commitTS)
+	e.mu.Unlock()
 	return nil
 }
 
@@ -413,8 +416,8 @@ func (e *LSMEngine) CheckConflict(key []byte, startTS uint64) (bool, error) {
 // DeleteWithTS deletes a key with the given commit timestamp.
 func (e *LSMEngine) DeleteWithTS(key []byte, commitTS uint64) error {
 	e.mu.Lock()
-	defer e.mu.Unlock()
 	if e.closed {
+		e.mu.Unlock()
 		return fmt.Errorf("engine closed")
 	}
 	walEntry := newWalEntry()
@@ -424,6 +427,7 @@ func (e *LSMEngine) DeleteWithTS(key []byte, commitTS uint64) error {
 	walEntry.Timestamp = commitTS
 	if err := e.wal.Write(walEntry); err != nil {
 		putWalEntry(walEntry)
+		e.mu.Unlock()
 		return fmt.Errorf("failed to write to wal: %w", err)
 	}
 	putWalEntry(walEntry)
@@ -431,6 +435,7 @@ func (e *LSMEngine) DeleteWithTS(key []byte, commitTS uint64) error {
 	e.memTable.DeleteWithTS(mvccKey)
 	atomic.AddInt64(&e.memSize, -int64(len(key)))
 	e.updateLastCommitCache(key, commitTS)
+	e.mu.Unlock()
 	return nil
 }
 

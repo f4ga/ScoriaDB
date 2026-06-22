@@ -138,7 +138,7 @@ fmt.Printf("%s\n", value)
 
 | Operation | Size | Throughput | Latency (p50) |
 |-----------|------|------------|---------------|
-| **Put (small)** | 16 B | **1.33M ops/s** | ~750 ns |
+| **Put (small)** | 16 B | **1.48M ops/s** | ~676 ns |
 | **Get (MemTable hit)** | — | **7.1M ops/s** | **~140 ns** |
 | **Get (miss)** | — | 3.2M ops/s | ~310 ns |
 | **Scan (10k keys)** | — | ~450 ops/s | ~2.2 ms |
