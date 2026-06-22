@@ -20,6 +20,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/f4ga/ScoriaDB/internal/engine/vfs"
 	"github.com/f4ga/ScoriaDB/internal/errors"
@@ -795,5 +796,146 @@ func TestVLogViewConcurrentReads(t *testing.T) {
 	// Close vlog after all goroutines are done — Close() waits for refCount == 0
 	if err := vlog.Close(); err != nil {
 		t.Fatalf("failed to close vlog: %v", err)
+	}
+}
+
+func TestVLogShutdownGraceful(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "vlog.db")
+
+	vlog, err := OpenVLog(vfs.Default, path)
+	if err != nil {
+		t.Fatalf("failed to open vlog: %v", err)
+	}
+
+	// Write a large value
+	value := make([]byte, 100)
+	for i := range value {
+		value[i] = byte(i)
+	}
+	vp, err := vlog.Write(value)
+	if err != nil {
+		t.Fatalf("failed to write value: %v", err)
+	}
+
+	// Create a view (holds a reference)
+	view, err := vlog.ReadView(vp)
+	if err != nil {
+		t.Fatalf("ReadView failed: %v", err)
+	}
+
+	// Shutdown should wait for the view to be released
+	// Release the view in a goroutine after a short delay
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		view.Release()
+	}()
+
+	// Shutdown with 1 second timeout (should succeed)
+	if err := vlog.Shutdown(1 * time.Second); err != nil {
+		t.Fatalf("Shutdown failed: %v", err)
+	}
+
+	// After shutdown, vlog should be closed
+	if !vlog.closed {
+		t.Error("expected vlog to be closed after Shutdown")
+	}
+}
+
+func TestVLogShutdownTimeout(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "vlog.db")
+
+	vlog, err := OpenVLog(vfs.Default, path)
+	if err != nil {
+		t.Fatalf("failed to open vlog: %v", err)
+	}
+
+	// Write a large value
+	value := make([]byte, 100)
+	for i := range value {
+		value[i] = byte(i)
+	}
+	vp, err := vlog.Write(value)
+	if err != nil {
+		t.Fatalf("failed to write value: %v", err)
+	}
+
+	// Create a view (holds a reference) — do NOT release it
+	view, err := vlog.ReadView(vp)
+	if err != nil {
+		t.Fatalf("ReadView failed: %v", err)
+	}
+	defer view.Release()
+
+	// Shutdown with very short timeout (should timeout)
+	err = vlog.Shutdown(10 * time.Millisecond)
+	if err == nil {
+		t.Error("expected timeout error from Shutdown, got nil")
+	}
+}
+
+func TestVLogShutdownNoViews(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "vlog.db")
+
+	vlog, err := OpenVLog(vfs.Default, path)
+	if err != nil {
+		t.Fatalf("failed to open vlog: %v", err)
+	}
+
+	// Write a large value
+	value := make([]byte, 100)
+	for i := range value {
+		value[i] = byte(i)
+	}
+	_, err = vlog.Write(value)
+	if err != nil {
+		t.Fatalf("failed to write value: %v", err)
+	}
+
+	// Shutdown with no active views (should succeed immediately)
+	if err := vlog.Shutdown(1 * time.Second); err != nil {
+		t.Fatalf("Shutdown failed: %v", err)
+	}
+
+	if !vlog.closed {
+		t.Error("expected vlog to be closed after Shutdown")
+	}
+}
+
+func TestVLogShutdownRejectsNewViews(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "vlog.db")
+
+	vlog, err := OpenVLog(vfs.Default, path)
+	if err != nil {
+		t.Fatalf("failed to open vlog: %v", err)
+	}
+
+	// Write a large value
+	value := make([]byte, 100)
+	for i := range value {
+		value[i] = byte(i)
+	}
+	vp, err := vlog.Write(value)
+	if err != nil {
+		t.Fatalf("failed to write value: %v", err)
+	}
+
+	// Start shutdown in a goroutine (it will wait because no views are held)
+	go func() {
+		if err := vlog.Shutdown(1 * time.Second); err != nil {
+			t.Errorf("Shutdown failed: %v", err)
+		}
+	}()
+
+	// Give shutdown time to set closing flag
+	time.Sleep(10 * time.Millisecond)
+
+	// ReadView should fail because vlog is closing
+	_, err = vlog.ReadView(vp)
+	if err == nil {
+		t.Error("expected error from ReadView during shutdown, got nil")
 	}
 }

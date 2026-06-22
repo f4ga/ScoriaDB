@@ -450,6 +450,64 @@ func (e *LSMEngine) SetMinActiveSnapshotTS(ts uint64) {
 	atomic.StoreUint64(&e.minActiveSnapshotTS, ts)
 }
 
+// Shutdown gracefully shuts down the engine with a timeout for VLog view release.
+func (e *LSMEngine) Shutdown() error {
+	e.mu.Lock()
+	if e.closed {
+		e.mu.Unlock()
+		return nil
+	}
+	e.closed = true
+	e.mu.Unlock()
+
+	// Stop background tasks
+	e.stopBackgroundTasks()
+
+	var errs []error
+
+	// Close MemTable
+	e.mu.Lock()
+	if e.memTable != nil {
+		e.memTable.Close()
+	}
+	e.mu.Unlock()
+
+	// Close SSTable readers
+	e.mu.RLock()
+	for _, level := range e.levels {
+		for _, reader := range level {
+			if err := reader.Close(); err != nil {
+				errs = append(errs, err)
+			}
+		}
+	}
+	e.mu.RUnlock()
+
+	// Graceful shutdown for VLog with 5 second timeout
+	if e.vlog != nil {
+		if err := e.vlog.Shutdown(5 * time.Second); err != nil {
+			logger.Warn("VLog shutdown warning: %v", err)
+			errs = append(errs, err)
+		}
+	}
+
+	// Close WAL
+	if err := e.wal.Close(); err != nil {
+		errs = append(errs, err)
+	}
+
+	// Close Manifest
+	if err := e.manifest.Close(); err != nil {
+		errs = append(errs, err)
+	}
+
+	if len(errs) > 0 {
+		return fmt.Errorf("errors while shutting down engine: %v", errs)
+	}
+	logger.Info("engine shutdown completed gracefully")
+	return nil
+}
+
 // Close closes the engine and releases all resources.
 func (e *LSMEngine) Close() error {
 	e.mu.Lock()

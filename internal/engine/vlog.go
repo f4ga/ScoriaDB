@@ -24,6 +24,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"syscall"
+	"time"
 
 	"github.com/f4ga/ScoriaDB/internal/engine/vfs"
 	"github.com/f4ga/ScoriaDB/internal/errors"
@@ -501,6 +502,62 @@ func (v *VLogImpl) readAt(offset int64, size int32) ([]byte, error) {
 	result := make([]byte, len(value))
 	copy(result, value)
 	return result, nil
+}
+
+// Shutdown gracefully shuts down the VLog, waiting for all active views
+// to be released within the given timeout. If the timeout expires, the
+// VLog is forcefully closed (which may cause SIGSEGV if views are still active).
+func (v *VLogImpl) Shutdown(timeout time.Duration) error {
+	v.mu.Lock()
+	if v.closed {
+		v.mu.Unlock()
+		return nil
+	}
+	v.closing = true
+	v.mu.Unlock()
+
+	// Wait for all views to be released
+	done := make(chan struct{})
+	go func() {
+		v.waitGroup.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		logger.Info("VLog shutdown completed gracefully")
+		// Now close the VLog
+		v.mu.Lock()
+		defer v.mu.Unlock()
+		if v.closed {
+			return nil
+		}
+		v.closed = true
+		if err := syscall.Munmap(v.data); err != nil {
+			return fmt.Errorf("failed to munmap vlog: %w", err)
+		}
+		v.data = nil
+		if err := v.file.Close(); err != nil {
+			return fmt.Errorf("failed to close vlog file: %w", err)
+		}
+		return nil
+	case <-time.After(timeout):
+		logger.Warn("VLog shutdown timeout after %v, forcing close", timeout)
+		// Force close (may cause SIGSEGV if there are active views)
+		v.mu.Lock()
+		defer v.mu.Unlock()
+		if !v.closed {
+			v.closed = true
+			if err := syscall.Munmap(v.data); err != nil {
+				logger.Error("failed to munmap vlog during force close: %v", err)
+			}
+			v.data = nil
+			if err := v.file.Close(); err != nil {
+				logger.Error("failed to close vlog file during force close: %v", err)
+			}
+		}
+		return fmt.Errorf("shutdown timeout after %v", timeout)
+	}
 }
 
 // Close закрывает VLog и освобождает ресурсы.
