@@ -409,23 +409,23 @@ func TestVLogRefCount(t *testing.T) {
 		t.Errorf("expected refCount 2 after second IncRef, got %d", vlog.refCount)
 	}
 
-	// DecRef should decrease refCount
+	// DecRef should decrease refCount (but NOT close the file)
 	vlog.DecRef()
 	if atomic.LoadInt32(&vlog.refCount) != 1 {
 		t.Errorf("expected refCount 1 after DecRef, got %d", vlog.refCount)
 	}
 
-	// Close should fail when refCount > 0
-	err = vlog.Close()
-	if err == nil {
-		t.Error("expected error when closing with active references, got nil")
+	// Close should block until refCount == 0, then close
+	// Since refCount is 1, we need to DecRef in a goroutine
+	go vlog.DecRef()
+	// Close will wait for refCount to reach 0
+	if err := vlog.Close(); err != nil {
+		t.Fatalf("Close failed: %v", err)
 	}
 
-	// DecRef to zero should trigger release
-	vlog.DecRef()
-	// After DecRef to 0, vlog should be closed
+	// After Close, vlog should be closed
 	if !vlog.closed {
-		t.Error("expected vlog to be closed after DecRef to 0")
+		t.Error("expected vlog to be closed after Close()")
 	}
 }
 
@@ -496,5 +496,304 @@ func TestVLogReaderInterface(t *testing.T) {
 	// Size through the interface
 	if reader.Size() <= 0 {
 		t.Error("expected positive size")
+	}
+}
+
+func TestVLogViewBasic(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "vlog.db")
+
+	vlog, err := OpenVLog(vfs.Default, path)
+	if err != nil {
+		t.Fatalf("failed to open vlog: %v", err)
+	}
+	defer errors.CloseWithFatal(vlog, "vlog")
+
+	// Write a large value (will be stored in VLog)
+	value := make([]byte, 100)
+	for i := range value {
+		value[i] = byte(i)
+	}
+	vp, err := vlog.Write(value)
+	if err != nil {
+		t.Fatalf("failed to write value: %v", err)
+	}
+	if vp.Size == 0 {
+		t.Fatal("expected non-zero size for large value")
+	}
+
+	// ReadView should return a zero-copy view
+	view, err := vlog.ReadView(vp)
+	if err != nil {
+		t.Fatalf("ReadView failed: %v", err)
+	}
+	if view == nil {
+		t.Fatal("expected non-nil view")
+	}
+
+	// Data should match the original
+	read := view.Data()
+	if len(read) != len(value) {
+		t.Errorf("length mismatch: expected %d, got %d", len(value), len(read))
+	}
+	for i := range value {
+		if read[i] != value[i] {
+			t.Errorf("byte mismatch at index %d: expected %d, got %d", i, value[i], read[i])
+		}
+	}
+
+	// Release the view
+	view.Release()
+
+	// After Release, view.Data() should return nil
+	if view.Data() != nil {
+		t.Error("expected nil data after Release")
+	}
+}
+
+func TestVLogViewRefCount(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "vlog.db")
+
+	vlog, err := OpenVLog(vfs.Default, path)
+	if err != nil {
+		t.Fatalf("failed to open vlog: %v", err)
+	}
+	defer errors.CloseWithFatal(vlog, "vlog")
+
+	// Write a large value
+	value := make([]byte, 100)
+	for i := range value {
+		value[i] = byte(i)
+	}
+	vp, err := vlog.Write(value)
+	if err != nil {
+		t.Fatalf("failed to write value: %v", err)
+	}
+
+	// Initial refCount should be 0
+	if atomic.LoadInt32(&vlog.refCount) != 0 {
+		t.Errorf("expected initial refCount 0, got %d", vlog.refCount)
+	}
+
+	// Create a view — refCount should increase
+	view1, err := vlog.ReadView(vp)
+	if err != nil {
+		t.Fatalf("ReadView failed: %v", err)
+	}
+	if atomic.LoadInt32(&vlog.refCount) != 1 {
+		t.Errorf("expected refCount 1 after ReadView, got %d", vlog.refCount)
+	}
+
+	// Create another view — refCount should increase to 2
+	view2, err := vlog.ReadView(vp)
+	if err != nil {
+		t.Fatalf("second ReadView failed: %v", err)
+	}
+	if atomic.LoadInt32(&vlog.refCount) != 2 {
+		t.Errorf("expected refCount 2 after second ReadView, got %d", vlog.refCount)
+	}
+
+	// Release first view — refCount should decrease to 1
+	view1.Release()
+	if atomic.LoadInt32(&vlog.refCount) != 1 {
+		t.Errorf("expected refCount 1 after first Release, got %d", vlog.refCount)
+	}
+
+	// Release second view — refCount should decrease to 0
+	view2.Release()
+	if atomic.LoadInt32(&vlog.refCount) != 0 {
+		t.Errorf("expected refCount 0 after second Release, got %d", vlog.refCount)
+	}
+
+	// Close should succeed when refCount == 0
+	if err := vlog.Close(); err != nil {
+		t.Errorf("Close failed: %v", err)
+	}
+}
+
+func TestVLogViewCRCError(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "vlog.db")
+
+	vlog, err := OpenVLog(vfs.Default, path)
+	if err != nil {
+		t.Fatalf("failed to open vlog: %v", err)
+	}
+	defer errors.CloseWithFatal(vlog, "vlog")
+
+	// Write a value
+	value := []byte("test value for CRC check")
+	vp, err := vlog.Write(value)
+	if err != nil {
+		t.Fatalf("failed to write: %v", err)
+	}
+
+	// Corrupt the data in the file
+	file, err := os.OpenFile(path, os.O_RDWR, 0644)
+	if err != nil {
+		t.Fatalf("failed to open file for corruption: %v", err)
+	}
+	corruptPos := vp.Offset + 8 + 5 // 5th byte of the value
+	if _, err := file.Seek(corruptPos, 0); err != nil {
+		errors.CloseWithFatal(file, "vlog-corrupt-file")
+		t.Fatalf("failed to seek: %v", err)
+	}
+	if _, err := file.Write([]byte{0xFF}); err != nil {
+		errors.CloseWithFatal(file, "vlog-corrupt-file")
+		t.Fatalf("failed to write corruption: %v", err)
+	}
+	errors.CloseWithFatal(file, "vlog-corrupt-file")
+
+	// ReadView should fail with CRC error
+	_, err = vlog.ReadView(vp)
+	if err == nil {
+		t.Error("expected CRC error from ReadView, got nil")
+	}
+}
+
+func TestVLogViewOutOfRange(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "vlog.db")
+
+	vlog, err := OpenVLog(vfs.Default, path)
+	if err != nil {
+		t.Fatalf("failed to open vlog: %v", err)
+	}
+	defer errors.CloseWithFatal(vlog, "vlog")
+
+	// ReadView with invalid pointer should fail
+	_, err = vlog.ReadView(ValuePointer{Offset: 999999, Size: 100})
+	if err == nil {
+		t.Error("expected error for out-of-range pointer, got nil")
+	}
+}
+
+func TestVLogViewDataRemainsValidUntilRelease(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "vlog.db")
+
+	vlog, err := OpenVLog(vfs.Default, path)
+	if err != nil {
+		t.Fatalf("failed to open vlog: %v", err)
+	}
+	defer errors.CloseWithFatal(vlog, "vlog")
+
+	// Write a large value
+	value := make([]byte, 100)
+	for i := range value {
+		value[i] = byte(i)
+	}
+	vp, err := vlog.Write(value)
+	if err != nil {
+		t.Fatalf("failed to write value: %v", err)
+	}
+
+	// Get a zero-copy view
+	view, err := vlog.ReadView(vp)
+	if err != nil {
+		t.Fatalf("ReadView failed: %v", err)
+	}
+
+	// Data should be valid while view is held
+	data := view.Data()
+	if len(data) != len(value) {
+		t.Fatalf("length mismatch: expected %d, got %d", len(value), len(data))
+	}
+	for i := range value {
+		if data[i] != value[i] {
+			t.Fatalf("byte mismatch at index %d: expected %d, got %d", i, value[i], data[i])
+		}
+	}
+
+	// Write more data to VLog (this triggers remap, but our view should still be valid
+	// because we hold a reference)
+	extraValue := make([]byte, 200)
+	for i := range extraValue {
+		extraValue[i] = byte(i + 200)
+	}
+	_, err = vlog.Write(extraValue)
+	if err != nil {
+		t.Fatalf("failed to write extra value: %v", err)
+	}
+
+	// Our view data should still be valid (we hold refCount)
+	if len(data) != len(value) {
+		t.Errorf("data length changed after write: expected %d, got %d", len(value), len(data))
+	}
+	for i := range value {
+		if data[i] != value[i] {
+			t.Errorf("byte mismatch at index %d after write: expected %d, got %d", i, value[i], data[i])
+			break
+		}
+	}
+
+	// Release the view
+	view.Release()
+}
+
+func TestVLogViewConcurrentReads(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "vlog.db")
+
+	vlog, err := OpenVLog(vfs.Default, path)
+	if err != nil {
+		t.Fatalf("failed to open vlog: %v", err)
+	}
+
+	// Write a value
+	value := make([]byte, 100)
+	for i := range value {
+		value[i] = byte(i)
+	}
+	vp, err := vlog.Write(value)
+	if err != nil {
+		t.Fatalf("failed to write value: %v", err)
+	}
+
+	// Concurrent ReadView and Release from multiple goroutines
+	const goroutines = 10
+	const iterations = 50
+	var wg sync.WaitGroup
+
+	for i := 0; i < goroutines; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < iterations; j++ {
+				view, err := vlog.ReadView(vp)
+				if err != nil {
+					t.Errorf("ReadView failed: %v", err)
+					return
+				}
+				// Verify data is valid while holding the view
+				data := view.Data()
+				if len(data) != len(value) {
+					t.Errorf("length mismatch: expected %d, got %d", len(value), len(data))
+					view.Release()
+					return
+				}
+				for k := range value {
+					if data[k] != value[k] {
+						t.Errorf("byte mismatch at index %d", k)
+						view.Release()
+						return
+					}
+				}
+				// Release the view — DecRef() does NOT close the file
+				view.Release()
+			}
+		}()
+	}
+	wg.Wait()
+
+	// After all goroutines, refCount should be 0
+	if atomic.LoadInt32(&vlog.refCount) != 0 {
+		t.Errorf("expected refCount 0 after concurrent reads, got %d", vlog.refCount)
+	}
+
+	// Close vlog after all goroutines are done — Close() waits for refCount == 0
+	if err := vlog.Close(); err != nil {
+		t.Fatalf("failed to close vlog: %v", err)
 	}
 }

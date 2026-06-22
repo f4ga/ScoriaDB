@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"hash/crc32"
 	"os"
+	"runtime"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -53,8 +54,8 @@ type VLogImpl struct {
 	size      int64  // текущий размер файла
 	closed    bool
 	refCount  int32 // atomic
-	// closing   bool // TODO(v0.3.0): used in Prompts 7-9
-	// waitGroup sync.WaitGroup // TODO(v0.3.0): used in Prompts 7-9
+	closing   bool
+	waitGroup sync.WaitGroup
 }
 
 // compile-time check that VLogImpl implements VLogReader
@@ -237,6 +238,76 @@ func (v *VLogImpl) Read(vp ValuePointer) ([]byte, error) {
 	return result, nil
 }
 
+// VLogView представляет zero-copy view на mmap-регион VLog.
+// Данные валидны только до вызова Release().
+type VLogView struct {
+	vlog *VLogImpl
+	data []byte
+	vp   ValuePointer
+}
+
+// ReadView возвращает VLogView, указывающий напрямую на mmap-регион,
+// без копирования данных. Вызывающий должен вызвать Release() после использования.
+func (v *VLogImpl) ReadView(vp ValuePointer) (*VLogView, error) {
+	v.mu.RLock()
+	defer v.mu.RUnlock()
+
+	if v.closed {
+		return nil, fmt.Errorf("vlog is closed")
+	}
+	if v.closing {
+		return nil, fmt.Errorf("vlog is closing")
+	}
+
+	// Проверяем границы
+	start := int(vp.Offset)
+	end := start + 8 + int(vp.Size) // заголовок + значение
+	if end > len(v.data) {
+		return nil, fmt.Errorf("value pointer out of range: offset=%d size=%d data len=%d",
+			vp.Offset, vp.Size, len(v.data))
+	}
+
+	// Проверяем CRC
+	crcStored := binary.BigEndian.Uint32(v.data[start : start+4])
+	sizeStored := binary.BigEndian.Uint32(v.data[start+4 : start+8])
+	if sizeStored != uint32(vp.Size) {
+		return nil, fmt.Errorf("size mismatch: stored=%d, pointer=%d", sizeStored, vp.Size)
+	}
+
+	value := v.data[start+8 : end]
+	crc := crc32.ChecksumIEEE(value)
+	if crc != crcStored {
+		return nil, fmt.Errorf("crc mismatch: stored=%x, computed=%x", crcStored, crc)
+	}
+
+	// Увеличиваем refCount — данные останутся валидными до Release()
+	v.IncRef()
+	v.waitGroup.Add(1)
+
+	return &VLogView{
+		vlog: v,
+		data: value,
+		vp:   vp,
+	}, nil
+}
+
+// Release освобождает VLogView, уменьшая refCount.
+// После вызова Release() данные становятся невалидными.
+func (v *VLogView) Release() {
+	if v.vlog != nil {
+		v.vlog.DecRef()
+		v.vlog.waitGroup.Done()
+		v.vlog = nil
+		v.data = nil
+	}
+}
+
+// Data возвращает срез на mmap-регион с данными.
+// Данные валидны только до вызова Release().
+func (v *VLogView) Data() []byte {
+	return v.data
+}
+
 // remap перемаппирует файл после увеличения размера.
 func (v *VLogImpl) remap() error {
 	// Удаляем старое отображение
@@ -265,26 +336,13 @@ func (v *VLogImpl) IncRef() {
 	atomic.AddInt32(&v.refCount, 1)
 }
 
-// DecRef decrements the reference count and releases resources when it reaches zero.
+// DecRef decrements the reference count.
+// DecRef does NOT close the file — only Close() does that.
 func (v *VLogImpl) DecRef() {
-	if atomic.AddInt32(&v.refCount, -1) == 0 {
-		v.mu.Lock()
-		defer v.mu.Unlock()
-		if !v.closed {
-			v.release()
-		}
+	newRef := atomic.AddInt32(&v.refCount, -1)
+	if newRef < 0 {
+		panic("DecRef called more times than IncRef")
 	}
-}
-
-// release unmaps the mmap region and closes the file.
-func (v *VLogImpl) release() {
-	if err := syscall.Munmap(v.data); err != nil {
-		logger.Error("failed to munmap vlog: %v", err)
-	}
-	if err := v.file.Close(); err != nil {
-		logger.Error("failed to close vlog file: %v", err)
-	}
-	v.closed = true
 }
 
 // GC performs garbage collection on the Value Log.
@@ -446,7 +504,21 @@ func (v *VLogImpl) readAt(offset int64, size int32) ([]byte, error) {
 }
 
 // Close закрывает VLog и освобождает ресурсы.
+// Ожидает освобождения всех активных View (refCount == 0).
 func (v *VLogImpl) Close() error {
+	v.mu.Lock()
+	if v.closed {
+		v.mu.Unlock()
+		return nil
+	}
+	v.closing = true
+	v.mu.Unlock()
+
+	// Ждём, пока все View освободятся
+	for atomic.LoadInt32(&v.refCount) > 0 {
+		runtime.Gosched()
+	}
+
 	v.mu.Lock()
 	defer v.mu.Unlock()
 
@@ -454,14 +526,11 @@ func (v *VLogImpl) Close() error {
 		return nil
 	}
 
-	if atomic.LoadInt32(&v.refCount) > 0 {
-		return fmt.Errorf("cannot close VLog: %d active references", v.refCount)
-	}
-
 	v.closed = true
 	if err := syscall.Munmap(v.data); err != nil {
 		return fmt.Errorf("failed to munmap vlog: %w", err)
 	}
+	v.data = nil
 	if err := v.file.Close(); err != nil {
 		return fmt.Errorf("failed to close vlog file: %w", err)
 	}
