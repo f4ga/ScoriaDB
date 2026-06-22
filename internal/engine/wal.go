@@ -47,6 +47,38 @@ func putWalEntry(entry *WalEntry) {
 	walEntryPool.Put(entry)
 }
 
+// sync.Pool для переиспользования буферов кодирования WAL записей.
+// Каждый буфер — это []byte, который переиспользуется между вызовами encodeWalEntry,
+// что снижает количество аллокаций в горячем пути записи.
+var encodeBufferPool = sync.Pool{
+	New: func() interface{} {
+		buf := make([]byte, 0, 256)
+		return &buf
+	},
+}
+
+// getEncodeBuffer возвращает буфер из пула с минимальной ёмкостью size.
+// Буфер автоматически расширяется при необходимости.
+func getEncodeBuffer(size int) []byte {
+	ptr := encodeBufferPool.Get().(*[]byte)
+	buf := *ptr
+	if cap(buf) < size {
+		buf = make([]byte, size)
+	}
+	return buf[:size]
+}
+
+// putEncodeBuffer возвращает буфер в пул для переиспользования.
+// Буфер обнуляется (затирается), чтобы избежать утечки данных между записями.
+func putEncodeBuffer(buf []byte) {
+	// Затираем буфер, чтобы избежать утечки конфиденциальных данных
+	for i := range buf {
+		buf[i] = 0
+	}
+	ptr := &buf
+	encodeBufferPool.Put(ptr)
+}
+
 // OpType тип операции в WAL.
 type OpType byte
 
@@ -122,6 +154,10 @@ func (w *WAL) Write(entry *WalEntry) error {
 	if err != nil {
 		return fmt.Errorf("failed to encode wal entry: %w", err)
 	}
+	// Буфер из пула — возвращаем после использования.
+	// groupCommitWriter.Write() и file.Write() копируют данные внутрь,
+	// поэтому buf можно безопасно вернуть в пул сразу после записи.
+	defer putEncodeBuffer(buf)
 
 	// Если включён групповой коммит, пишем в буфер
 	if w.group != nil {
@@ -210,6 +246,8 @@ func (w *WAL) Close() error {
 }
 
 // encodeWalEntry сериализует запись в байты с CRC.
+// Возвращает []byte, который НЕЛЬЗЯ изменять после возврата,
+// так как буфер может быть переиспользован в следующих вызовах.
 func encodeWalEntry(entry *WalEntry) ([]byte, error) {
 	// Размеры
 	keyLen := len(entry.Key)
@@ -217,8 +255,8 @@ func encodeWalEntry(entry *WalEntry) ([]byte, error) {
 	// Общий размер: тип (1) + timestamp (8) + keyLen (2) + valLen (4) + ключ + значение
 	totalSize := 1 + 8 + 2 + 4 + keyLen + valLen
 
-	// Буфер
-	buf := make([]byte, totalSize+4) // +4 для CRC
+	// Берём буфер из пула
+	buf := getEncodeBuffer(totalSize + 4) // +4 для CRC
 	pos := 0
 
 	buf[pos] = byte(entry.Op)
