@@ -44,7 +44,8 @@ type LSMEngine struct {
 	minActiveSnapshotTS uint64
 	closed              bool
 	memSize             int64
-	lastCommitCache     sync.Map
+	lastCommitCache     map[string]uint64
+	cacheMu             sync.RWMutex
 
 	// Background tasks
 	flushCh     chan struct{}
@@ -112,15 +113,16 @@ func NewLSMEngine(dataDir string, opts ...WALOptions) (*LSMEngine, error) {
 	}
 
 	engine := &LSMEngine{
-		dataDir:  dataDir,
-		memTable: memTable,
-		vlog:     vlog,
-		wal:      wal,
-		manifest: manifest,
-		vfs:      vfs,
-		levels:   levels,
-		LastTS:   lastTS,
-		memSize:  0,
+		dataDir:         dataDir,
+		memTable:        memTable,
+		vlog:            vlog,
+		wal:             wal,
+		manifest:        manifest,
+		vfs:             vfs,
+		levels:          levels,
+		LastTS:          lastTS,
+		memSize:         0,
+		lastCommitCache: make(map[string]uint64),
 	}
 
 	engine.InvalidateVLogPointers()

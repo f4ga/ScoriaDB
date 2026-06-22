@@ -19,18 +19,15 @@ package engine
 
 // updateLastCommitCache updates the last commit timestamp cache for a key.
 func (e *LSMEngine) updateLastCommitCache(key []byte, commitTS uint64) {
-	e.lastCommitCache.Store(string(key), commitTS)
+	e.cacheMu.Lock()
+	e.lastCommitCache[string(key)] = commitTS
+	e.cacheMu.Unlock()
 }
 
 // getLastCommitCache returns the last commit timestamp for a key from cache.
 func (e *LSMEngine) getLastCommitCache(key []byte) (uint64, bool) {
-	val, ok := e.lastCommitCache.Load(string(key))
-	if !ok {
-		return 0, false
-	}
-	v, ok := val.(uint64)
-	if !ok {
-		return 0, false
-	}
-	return v, true
+	e.cacheMu.RLock()
+	defer e.cacheMu.RUnlock()
+	ts, ok := e.lastCommitCache[string(key)]
+	return ts, ok
 }
