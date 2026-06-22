@@ -22,6 +22,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/f4ga/ScoriaDB/internal/engine/sstable"
 	"github.com/f4ga/ScoriaDB/internal/errors"
 )
 
@@ -197,5 +198,19 @@ func BenchmarkScan(b *testing.B) {
 		if count == 0 {
 			b.Fatal("scan returned 0 entries")
 		}
+	}
+}
+
+func BenchmarkBloomFilter(b *testing.B) {
+	bf := sstable.NewBloomFilter(10000)
+	keys := make([][]byte, 10000)
+	for i := 0; i < 10000; i++ {
+		keys[i] = []byte(fmt.Sprintf("key-%d", i))
+		bf.Add(keys[i])
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		bf.MayContain(keys[i%10000])
 	}
 }

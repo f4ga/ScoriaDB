@@ -15,13 +15,18 @@
 package sstable
 
 import (
-	"hash/fnv"
+	"encoding/binary"
+	_ "unsafe"
 )
+
+//go:linkname fastrand runtime.fastrand
+func fastrand() uint32
 
 // BloomFilter implements a Bloom filter for fast key absence checks.
 type BloomFilter struct {
 	bits []byte
 	k    uint32 // number of hash functions
+	seed uint32 // deterministic seed generated once via fastrand
 }
 
 // NewBloomFilter creates a new Bloom filter with given bits per key.
@@ -36,13 +41,14 @@ func NewBloomFilter(bitsPerKey int) *BloomFilter {
 	return &BloomFilter{
 		bits: make([]byte, size),
 		k:    uint32(bitsPerKey), // simplified; optimal k should be computed
+		seed: fastrand(),         // lock-free seed generation
 	}
 }
 
 // Add adds a key to the Bloom filter.
 func (bf *BloomFilter) Add(key []byte) {
 	// Use double hashing (algorithm from LevelDB)
-	h1, h2 := bloomHash(key)
+	h1, h2 := bloomHash(key, bf.seed)
 	for i := uint32(0); i < bf.k; i++ {
 		pos := (h1 + i*h2) % uint32(len(bf.bits)*8)
 		bf.setBit(pos)
@@ -51,7 +57,7 @@ func (bf *BloomFilter) Add(key []byte) {
 
 // MayContain checks whether the key may be present in the Bloom filter.
 func (bf *BloomFilter) MayContain(key []byte) bool {
-	h1, h2 := bloomHash(key)
+	h1, h2 := bloomHash(key, bf.seed)
 	for i := uint32(0); i < bf.k; i++ {
 		pos := (h1 + i*h2) % uint32(len(bf.bits)*8)
 		if !bf.getBit(pos) {
@@ -86,16 +92,30 @@ func (bf *BloomFilter) getBit(pos uint32) bool {
 }
 
 // Encode returns serialized Bloom filter bytes.
+// Format: seed (4 bytes) + bit array (variable).
 func (bf *BloomFilter) Encode() []byte {
-	// For simplicity, return the bit array as is
-	return bf.bits
+	// 4 bytes for seed + bit array
+	buf := make([]byte, 4+len(bf.bits))
+	binary.LittleEndian.PutUint32(buf[0:4], bf.seed)
+	copy(buf[4:], bf.bits)
+	return buf
 }
 
 // DecodeBloomFilter creates a BloomFilter from serialized data.
+// The first 4 bytes are the seed, followed by the bit array.
 func DecodeBloomFilter(data []byte, k uint32) *BloomFilter {
+	if len(data) < 4 {
+		return &BloomFilter{
+			bits: data,
+			k:    k,
+			seed: fastrand(),
+		}
+	}
+	seed := binary.LittleEndian.Uint32(data[0:4])
 	return &BloomFilter{
-		bits: data,
+		bits: data[4:],
 		k:    k,
+		seed: seed,
 	}
 }
 
@@ -104,14 +124,19 @@ func (bf *BloomFilter) SetK(k uint32) {
 	bf.k = k
 }
 
-// bloomHash returns two 32-bit hashes for a key (LevelDB algorithm).
-func bloomHash(key []byte) (uint32, uint32) {
-	// Use FNV-1a hash for simplicity (LevelDB uses MurmurHash2)
-	h := fnv.New32a()
-	h.Write(key)
-	h1 := h.Sum32()
+// bloomHash returns two 32-bit hashes for a key using inline FNV-1a with a seed.
+// Replaces the previous fnv.New32a() which caused allocations.
+// The seed is generated once via fastrand() and stored in BloomFilter.
+func bloomHash(key []byte, seed uint32) (uint32, uint32) {
+	// Inline FNV-1a with seed
+	h := uint64(seed)
+	for _, c := range key {
+		h ^= uint64(c)
+		h *= 0x01000193
+	}
+	h1 := uint32(h)
 
-	// Second hash is just the first inverted (for MVP)
+	// Second hash derived from first (LevelDB double-hashing style)
 	h2 := h1 ^ 0xbc9f1d34
 	return h1, h2
 }
