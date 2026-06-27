@@ -15,8 +15,9 @@
 package sstable
 
 import (
+	_ "unsafe" // required for go:linkname
+
 	"encoding/binary"
-	_ "unsafe"
 )
 
 //go:linkname fastrand runtime.fastrand

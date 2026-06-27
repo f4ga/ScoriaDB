@@ -22,7 +22,6 @@ import (
 	"github.com/f4ga/ScoriaDB/internal/engine/sstable"
 	"github.com/f4ga/ScoriaDB/internal/errors"
 	"github.com/f4ga/ScoriaDB/internal/logger"
-	// "github.com/f4ga/ScoriaDB/internal/mvcc"  implement or decide where to do it
 )
 
 const (

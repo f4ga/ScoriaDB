@@ -115,8 +115,8 @@ func OpenWAL(path string) (*WAL, error) {
 // и периодически сбрасываются на диск с интервалом GroupCommitInterval.
 // Это значительно повышает пропускную способность, но снижает durability:
 // записи, сделанные после последнего сброса, могут быть потеряны при краше процесса.
-// Для критичных к durability workload'ов оставьте GroupCommitEnabled = false
-// (режим по умолчанию), где каждая запись немедленно синхронизируется с диском.
+// Для критичных к durability workload'ов обязательно напишите GroupCommitEnabled = false,
+// чтобы каждая запись немедленно синхронизируется с диском.
 func OpenWALWithOptions(path string, opts WALOptions) (*WAL, error) {
 	file, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0644)
 	if err != nil {
