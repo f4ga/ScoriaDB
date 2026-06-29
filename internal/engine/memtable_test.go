@@ -15,6 +15,7 @@
 package engine
 
 import (
+	"sync"
 	"testing"
 
 	"github.com/f4ga/ScoriaDB/internal/mvcc"
@@ -184,5 +185,74 @@ func TestMVCCGetWithMultipleVersions(t *testing.T) {
 	}
 	if string(got) != string(v1) {
 		t.Errorf("expected %s, got %s", v1, got)
+	}
+}
+
+func TestMemTableConcurrentPutGet(t *testing.T) {
+	mt := NewMemTable()
+	var wg sync.WaitGroup
+	numWorkers := 10
+	numOps := 100
+
+	// Concurrent writes
+	for i := 0; i < numWorkers; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			for j := 0; j < numOps; j++ {
+				key := mvcc.NewMVCCKey([]byte("key"), uint64(id*numOps+j))
+				mt.Put(key, []byte("value"))
+			}
+		}(i)
+	}
+	wg.Wait()
+
+	// Verify all keys are readable
+	for i := 0; i < numWorkers; i++ {
+		for j := 0; j < numOps; j++ {
+			key := mvcc.NewMVCCKey([]byte("key"), uint64(i*numOps+j))
+			val, found := mt.Get(key)
+			if !found {
+				t.Errorf("key not found: %v", key)
+				continue
+			}
+			if string(val) != "value" {
+				t.Errorf("wrong value for key %v: expected 'value', got '%s'", key, string(val))
+			}
+		}
+	}
+}
+
+func TestMemTableGetWithSnapshot(t *testing.T) {
+	mt := NewMemTable()
+
+	// Insert three versions of the same key
+	mt.Put(mvcc.NewMVCCKey([]byte("foo"), 1), []byte("v1"))
+	mt.Put(mvcc.NewMVCCKey([]byte("foo"), 2), []byte("v2"))
+	mt.Put(mvcc.NewMVCCKey([]byte("foo"), 3), []byte("v3"))
+
+	// Read with different snapshotTS
+	tests := []struct {
+		snapshotTS uint64
+		expected   string
+		found      bool
+	}{
+		{3, "v3", true}, // newest
+		{2, "v2", true}, // middle
+		{1, "v1", true}, // oldest
+		{0, "", false},  // no version
+		{4, "v3", true}, // greater than newest → newest
+	}
+
+	for _, tt := range tests {
+		key := mvcc.NewMVCCKey([]byte("foo"), tt.snapshotTS)
+		val, found := mt.Get(key)
+		if found != tt.found {
+			t.Errorf("snapshot=%d: found=%v, expected=%v", tt.snapshotTS, found, tt.found)
+			continue
+		}
+		if found && string(val) != tt.expected {
+			t.Errorf("snapshot=%d: value='%s', expected='%s'", tt.snapshotTS, string(val), tt.expected)
+		}
 	}
 }

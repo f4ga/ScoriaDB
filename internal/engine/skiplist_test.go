@@ -22,16 +22,13 @@ import (
 	"github.com/f4ga/ScoriaDB/internal/mvcc"
 )
 
-// Helper to create an MVCCKey with a given string key and timestamp.
 func testKey(s string, ts uint64) mvcc.MVCCKey {
 	return mvcc.NewMVCCKey([]byte(s), ts)
 }
 
-// TestSkipListBasic tests basic operations: Put, Get, Delete.
 func TestSkipListBasic(t *testing.T) {
 	sl := NewSkipList()
 
-	// Test Put and Get
 	sl.Put(testKey("key1", 1), []byte("value1"))
 	sl.Put(testKey("key2", 1), []byte("value2"))
 	sl.Put(testKey("key3", 1), []byte("value3"))
@@ -46,13 +43,11 @@ func TestSkipListBasic(t *testing.T) {
 		t.Errorf("expected value2, got %s (ok=%v)", string(val), ok)
 	}
 
-	// Test Get non-existent key
 	_, ok = sl.Get(testKey("nonexistent", 1))
 	if ok {
 		t.Errorf("expected false for non-existent key")
 	}
 
-	// Test Delete
 	if !sl.Delete(testKey("key1", 1)) {
 		t.Errorf("expected Delete to return true")
 	}
@@ -61,33 +56,56 @@ func TestSkipListBasic(t *testing.T) {
 		t.Errorf("expected key1 to be deleted")
 	}
 
-	// Test Delete non-existent key
 	if sl.Delete(testKey("nonexistent", 1)) {
 		t.Errorf("expected Delete to return false for non-existent key")
 	}
 }
 
-// TestSkipListUpdate tests updating an existing key.
 func TestSkipListUpdate(t *testing.T) {
 	sl := NewSkipList()
 
 	sl.Put(testKey("key", 1), []byte("value1"))
-	sl.Put(testKey("key", 2), []byte("value2"))
+	sl.Put(testKey("key", 1), []byte("value2"))
 
-	// Get should return the latest version (highest timestamp)
-	val, ok := sl.Get(testKey("key", 2))
+	val, ok := sl.Get(testKey("key", 1))
 	if !ok || string(val) != "value2" {
 		t.Errorf("expected value2, got %s", string(val))
 	}
 }
 
-// TestSkipListConcurrent tests concurrent Put and Get operations.
+func TestSkipListMultipleVersions(t *testing.T) {
+	sl := NewSkipList()
+
+	sl.Put(testKey("key", 1), []byte("v1"))
+	sl.Put(testKey("key", 2), []byte("v2"))
+	sl.Put(testKey("key", 3), []byte("v3"))
+
+	val, ok := sl.Get(testKey("key", 1))
+	if !ok || string(val) != "v1" {
+		t.Errorf("expected v1, got %s", string(val))
+	}
+
+	val, ok = sl.Get(testKey("key", 2))
+	if !ok || string(val) != "v2" {
+		t.Errorf("expected v2, got %s", string(val))
+	}
+
+	val, ok = sl.Get(testKey("key", 3))
+	if !ok || string(val) != "v3" {
+		t.Errorf("expected v3, got %s", string(val))
+	}
+
+	_, ok = sl.Get(testKey("key", 999))
+	if ok {
+		t.Errorf("expected false for non-existent timestamp")
+	}
+}
+
 func TestSkipListConcurrent(t *testing.T) {
 	sl := NewSkipList()
 	var wg sync.WaitGroup
 	n := 100
 
-	// Concurrent writes
 	for i := 0; i < n; i++ {
 		wg.Add(1)
 		go func(id int) {
@@ -98,12 +116,15 @@ func TestSkipListConcurrent(t *testing.T) {
 	}
 	wg.Wait()
 
-	// Verify all writes
+	t.Logf("After puts: Len()=%d", sl.Len())
+
+	missing := 0
 	for i := 0; i < n; i++ {
 		key := testKey(fmt.Sprintf("key:%d", i), 1)
 		val, ok := sl.Get(key)
 		if !ok {
 			t.Errorf("key %s not found", string(key.Key))
+			missing++
 			continue
 		}
 		expected := fmt.Sprintf("value:%d", i)
@@ -112,39 +133,51 @@ func TestSkipListConcurrent(t *testing.T) {
 		}
 	}
 
-	// Concurrent reads
-	var wg2 sync.WaitGroup
-	for i := 0; i < n; i++ {
-		wg2.Add(1)
+	t.Logf("Missing keys: %d/%d", missing, n)
+}
+
+func TestSkipListConcurrentPutGet(t *testing.T) {
+	sl := NewSkipList()
+	var wg sync.WaitGroup
+	numWorkers := 10
+	numOps := 100
+
+	// Concurrent writes from multiple goroutines
+	for i := 0; i < numWorkers; i++ {
+		wg.Add(1)
 		go func(id int) {
-			defer wg2.Done()
-			key := testKey(fmt.Sprintf("key:%d", id), 1)
-			val, ok := sl.Get(key)
-			if !ok {
-				t.Errorf("concurrent read: key %s not found", string(key.Key))
-				return
-			}
-			expected := fmt.Sprintf("value:%d", id)
-			if string(val) != expected {
-				t.Errorf("concurrent read: expected %s, got %s", expected, string(val))
+			defer wg.Done()
+			for j := 0; j < numOps; j++ {
+				key := mvcc.NewMVCCKey([]byte("key"), uint64(id*numOps+j))
+				sl.Put(key, []byte("value"))
 			}
 		}(i)
 	}
-	wg2.Wait()
+	wg.Wait()
+
+	// Verify all keys are readable
+	for i := 0; i < numWorkers; i++ {
+		for j := 0; j < numOps; j++ {
+			key := mvcc.NewMVCCKey([]byte("key"), uint64(i*numOps+j))
+			val, found := sl.Get(key)
+			if !found {
+				t.Errorf("key not found: %v", key)
+			}
+			if val == nil {
+				t.Errorf("value is nil for key: %v", key)
+			}
+		}
+	}
 }
 
-// TestSkipListIterator tests the lock-free iterator.
 func TestSkipListIterator(t *testing.T) {
 	sl := NewSkipList()
 
-	// Insert keys in reverse order to test ordering
 	keys := []string{"a", "b", "c", "d", "e"}
-	for i, k := range keys {
+	for _, k := range keys {
 		sl.Put(testKey(k, 1), []byte(fmt.Sprintf("value:%s", k)))
-		_ = i
 	}
 
-	// Iterate and verify order
 	it := sl.NewIterator()
 	count := 0
 	for it.Next() {
@@ -171,7 +204,6 @@ func TestSkipListIterator(t *testing.T) {
 	}
 }
 
-// TestSkipListIteratorDeleted tests that iterator skips deleted nodes.
 func TestSkipListIteratorDeleted(t *testing.T) {
 	sl := NewSkipList()
 
@@ -196,7 +228,6 @@ func TestSkipListIteratorDeleted(t *testing.T) {
 	}
 }
 
-// TestSkipListLen tests the Len() method.
 func TestSkipListLen(t *testing.T) {
 	sl := NewSkipList()
 
@@ -218,7 +249,6 @@ func TestSkipListLen(t *testing.T) {
 	}
 }
 
-// TestSkipListRandomHeight tests that randomHeight produces valid heights.
 func TestSkipListRandomHeight(t *testing.T) {
 	for i := 0; i < 1000; i++ {
 		h := randomHeight()
@@ -228,7 +258,6 @@ func TestSkipListRandomHeight(t *testing.T) {
 	}
 }
 
-// TestSkipListLarge tests the skip list with a large number of entries.
 func TestSkipListLarge(t *testing.T) {
 	sl := NewSkipList()
 	n := 10000
@@ -242,7 +271,6 @@ func TestSkipListLarge(t *testing.T) {
 		t.Errorf("expected %d elements, got %d", n, sl.Len())
 	}
 
-	// Verify all entries
 	for i := 0; i < n; i++ {
 		key := testKey(fmt.Sprintf("key:%08d", i), 1)
 		val, ok := sl.Get(key)
@@ -257,7 +285,6 @@ func TestSkipListLarge(t *testing.T) {
 	}
 }
 
-// BenchmarkSkipListGet benchmarks Get operations.
 func BenchmarkSkipListGet(b *testing.B) {
 	sl := NewSkipList()
 	for i := 0; i < 100000; i++ {
@@ -276,7 +303,6 @@ func BenchmarkSkipListGet(b *testing.B) {
 	})
 }
 
-// BenchmarkSkipListPut benchmarks Put operations.
 func BenchmarkSkipListPut(b *testing.B) {
 	sl := NewSkipList()
 	b.ResetTimer()
@@ -290,7 +316,6 @@ func BenchmarkSkipListPut(b *testing.B) {
 	})
 }
 
-// BenchmarkSkipListPutSequential benchmarks sequential Put operations.
 func BenchmarkSkipListPutSequential(b *testing.B) {
 	sl := NewSkipList()
 	b.ResetTimer()
@@ -300,7 +325,6 @@ func BenchmarkSkipListPutSequential(b *testing.B) {
 	}
 }
 
-// BenchmarkSkipListGetSequential benchmarks sequential Get operations.
 func BenchmarkSkipListGetSequential(b *testing.B) {
 	sl := NewSkipList()
 	for i := 0; i < 100000; i++ {

@@ -16,166 +16,181 @@ package engine
 
 import (
 	"bytes"
-	"sync"
+	"sync/atomic"
 
 	"github.com/f4ga/ScoriaDB/internal/mvcc"
-	"github.com/google/btree"
 )
 
-// mvccEntry represents an entry in MemTable.
-type mvccEntry struct {
-	Key     mvcc.MVCCKey
-	Value   []byte
-	Deleted bool
-}
-
-// Less implements btree.Item.
-func (e mvccEntry) Less(than btree.Item) bool {
-	other, ok := than.(mvccEntry)
-	if !ok {
-		return false
-	}
-	return e.Key.Less(other.Key)
-}
-
-// MemTable is a thread-safe in-memory B-tree structure.
+// MemTable is a lock-free in-memory skip list structure.
 type MemTable struct {
-	mu   sync.RWMutex
-	tree *btree.BTree
-	size int
+	sl   *SkipList
+	size int64 // atomic
 }
 
-// NewMemTable creates a new MemTable.
+// NewMemTable creates a new MemTable backed by a lock-free skip list.
 func NewMemTable() *MemTable {
 	return &MemTable{
-		tree: btree.New(32),
+		sl: NewSkipList(),
 	}
 }
 
-// Put adds or updates a key-value pair.
+// Put adds a key-value pair. In LSM, Put always creates a new version.
 func (mt *MemTable) Put(key mvcc.MVCCKey, value []byte) {
-	mt.mu.Lock()
-	defer mt.mu.Unlock()
-
-	entry := mvccEntry{Key: key, Value: value, Deleted: false}
-	if mt.tree.Has(entry) {
-		mt.tree.Delete(entry)
-	} else {
-		mt.size++
-	}
-	mt.tree.ReplaceOrInsert(entry)
+	mt.sl.Put(key, value)
+	atomic.AddInt64(&mt.size, 1)
 }
 
 // DeleteWithTS marks a key as deleted (tombstone).
+// Tombstone is a full entry in MemTable and occupies space until flush.
 func (mt *MemTable) DeleteWithTS(key mvcc.MVCCKey) {
-	mt.mu.Lock()
-	defer mt.mu.Unlock()
-
-	entry := mvccEntry{Key: key, Value: nil, Deleted: true}
-	if mt.tree.Has(entry) {
-		mt.tree.Delete(entry)
-	} else {
-		mt.size++
-	}
-	mt.tree.ReplaceOrInsert(entry)
+	mt.sl.Put(key, nil)
+	mt.sl.Delete(key)
+	// Size is not decremented: tombstone is a real entry that will be
+	// flushed to SSTable as a deleted record.
 }
 
 // Get returns the newest visible version for the given snapshotTS.
 // Returns (value, true) if found and not deleted, otherwise (nil, false).
+//
+// Algorithm:
+//  1. Find the first node with key >= the search key using findGreaterOrEqual.
+//     Use Timestamp = math.MaxUint64 (commitTS=0) to find the first version
+//     of this user key, since inverted timestamps mean smaller commitTS
+//     sorts first in the skip list ordering.
+//  2. If node is nil or user key doesn't match → key doesn't exist.
+//  3. Walk the entire level-0 chain for this user key:
+//     - The chain is sorted by commitTS ascending (oldest first) because
+//     Timestamp is inverted (MaxUint64 - commitTS) and nodeKeyLess returns
+//     a.Timestamp > b.Timestamp for same key, meaning smaller commitTS
+//     (larger Timestamp) sorts first.
+//     - Track the newest visible version (largest commitTS <= snapshotTS).
+//     - Since Timestamp is inverted, commitTS <= snapshotTS is equivalent to
+//     node.key.Timestamp >= key.Timestamp.
+//  4. After walking the chain:
+//     - If no visible version found → key doesn't exist.
+//     - If the newest visible version is a tombstone → key is deleted.
+//     - Otherwise, return the value.
 func (mt *MemTable) Get(key mvcc.MVCCKey) ([]byte, bool) {
-	mt.mu.RLock()
-	defer mt.mu.RUnlock()
+	if mt.sl == nil {
+		return nil, false
+	}
 
-	var result []byte
-	found := false
+	// Use Timestamp = math.MaxUint64 (commitTS=0) to find the first node
+	// for this user key. In the skip list ordering (nodeKeyLess), for the
+	// same user key, a node with smaller commitTS sorts first because
+	// Timestamp is inverted (MaxUint64 - commitTS) and nodeKeyLess returns
+	// a.Timestamp > b.Timestamp. So commitTS=0 (Timestamp=MaxUint64) is
+	// the "smallest" key for this user key, and findGreaterOrEqual will
+	// return the first node in the chain.
+	searchKey := mvcc.MVCCKey{
+		Key:       key.Key,
+		Timestamp: mvcc.InvertTimestamp(0), // math.MaxUint64
+	}
+	node := mt.sl.findGreaterOrEqual(searchKey)
+	if node == nil {
+		return nil, false
+	}
 
-	mt.tree.DescendLessOrEqual(mvccEntry{Key: key}, func(item btree.Item) bool {
-		entry, ok := item.(mvccEntry)
-		if !ok {
-			return true
+	// Check if the user key matches.
+	// If not, the key doesn't exist in this MemTable.
+	if !bytes.Equal(node.key.Key, key.Key) {
+		return nil, false
+	}
+
+	// Walk the entire level-0 chain for this user key.
+	// The chain is sorted by commitTS ascending (oldest first).
+	// We need the newest version with commitTS <= snapshotTS,
+	// so we track the best match as we walk.
+	var bestNode *Node
+	for node != nil && bytes.Equal(node.key.Key, key.Key) {
+		// Timestamp is inverted: node.key.Timestamp = MaxUint64 - commitTS.
+		// We need commitTS <= snapshotTS, which is equivalent to:
+		//   MaxUint64 - node.key.Timestamp <= MaxUint64 - key.Timestamp
+		//   → node.key.Timestamp >= key.Timestamp
+		if node.key.Timestamp >= key.Timestamp {
+			// This version is visible (commitTS <= snapshotTS).
+			// Since the chain is ascending by commitTS, each subsequent
+			// match has a larger commitTS (newer version), so we
+			// overwrite bestNode to keep the newest visible version.
+			bestNode = node
 		}
+		node = node.next[0].Load()
+	}
 
-		if !bytes.Equal(entry.Key.Key, key.Key) {
-			return false
-		}
+	if bestNode == nil {
+		// No visible version found.
+		return nil, false
+	}
 
-		if entry.Key.Timestamp >= key.Timestamp {
-			if entry.Deleted {
-				return false
-			}
-			result = entry.Value
-			found = true
-			return false
-		}
-		return true
-	})
+	if bestNode.deleted.Load() {
+		// Tombstone → key is deleted.
+		return nil, false
+	}
 
-	return result, found
+	val := bestNode.value.Load()
+	if val == nil {
+		return nil, false
+	}
+	return *val, true
 }
 
 // NewIterator returns an iterator over all entries.
 func (mt *MemTable) NewIterator() *MemTableIterator {
-	mt.mu.RLock()
-	defer mt.mu.RUnlock()
-
-	var entries []mvccEntry
-	mt.tree.Ascend(func(item btree.Item) bool {
-		entry, ok := item.(mvccEntry)
-		if ok {
-			entries = append(entries, entry)
-		}
-		return true
-	})
 	return &MemTableIterator{
-		entries: entries,
-		index:   -1,
+		iter: mt.sl.NewIterator(),
 	}
 }
 
 // Size returns the number of entries.
 func (mt *MemTable) Size() int {
-	mt.mu.RLock()
-	defer mt.mu.RUnlock()
-	return mt.size
+	return int(atomic.LoadInt64(&mt.size))
 }
 
-// MemTableIterator iterates over MemTable entries.
-type MemTableIterator struct {
-	entries []mvccEntry
-	index   int
-}
-
-// Next advances the iterator.
-func (it *MemTableIterator) Next() bool {
-	it.index++
-	return it.index < len(it.entries)
-}
-
-// Key returns the current key.
-func (it *MemTableIterator) Key() mvcc.MVCCKey {
-	if it.index < 0 || it.index >= len(it.entries) {
+// LastKey returns the last (maximum) key in the MemTable.
+// Used for range scans and iteration bounds.
+func (mt *MemTable) LastKey() mvcc.MVCCKey {
+	if mt.sl == nil {
 		return mvcc.MVCCKey{}
 	}
-	return it.entries[it.index].Key
-}
-
-// Value returns the current value.
-func (it *MemTableIterator) Value() []byte {
-	if it.index < 0 || it.index >= len(it.entries) {
-		return nil
+	node := mt.sl.findLast()
+	if node == nil || node == mt.sl.head {
+		return mvcc.MVCCKey{}
 	}
-	return it.entries[it.index].Value
-}
-
-// Close releases iterator resources.
-func (it *MemTableIterator) Close() {
-	it.entries = nil
+	return node.key
 }
 
 // Close releases resources held by MemTable.
 func (mt *MemTable) Close() {
-	mt.mu.Lock()
-	defer mt.mu.Unlock()
-	mt.tree = nil
-	mt.size = 0
+	mt.sl = nil
+	atomic.StoreInt64(&mt.size, 0)
+}
+
+// MemTableIterator iterates over MemTable entries.
+type MemTableIterator struct {
+	iter *SkipListIterator
+}
+
+// Next advances the iterator.
+func (it *MemTableIterator) Next() bool {
+	return it.iter.Next()
+}
+
+// Key returns the current key.
+func (it *MemTableIterator) Key() mvcc.MVCCKey {
+	return it.iter.Key()
+}
+
+// Value returns the current value.
+func (it *MemTableIterator) Value() []byte {
+	return it.iter.Value()
+}
+
+// IsDeleted returns true if the current entry is a tombstone.
+func (it *MemTableIterator) IsDeleted() bool {
+	return it.iter.IsDeleted()
+}
+
+// Close releases iterator resources.
+func (it *MemTableIterator) Close() {
+	it.iter.Close()
 }
