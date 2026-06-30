@@ -38,6 +38,13 @@ type WALOptions struct {
 	// При достижении этого размера буфер будет сброшен на диск независимо от таймера.
 	// Полезно для ограничения потребления памяти.
 	MaxBufferSize int
+
+	// SyncMode включает fsync после каждой записи (или после каждого сброса при групповом коммите).
+	// По умолчанию true — гарантирует durability.
+	// Отключение SyncMode даёт значительный прирост производительности в бенчмарках,
+	// но означает потерю данных при краше.
+	// Для продакшена рекомендуется оставить true.
+	SyncMode bool
 }
 
 // DefaultWALOptions возвращает настройки WAL по умолчанию.
@@ -49,6 +56,7 @@ func DefaultWALOptions() WALOptions {
 		GroupCommitEnabled:  true,
 		GroupCommitInterval: 10 * time.Millisecond,
 		MaxBufferSize:       0,
+		SyncMode:            true,
 	}
 }
 
