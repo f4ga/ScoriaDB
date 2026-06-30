@@ -12,22 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
+// internal/engine/benchmark_latency_test.go
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+// Latency benchmarks for v0.3.0 Arena/SkipList architecture.
 //
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// CRITICAL DESIGN RULES:
+//  1. SyncMode=false — no fsync in benchmarks (pure in-memory LSM latency).
+//  2. GroupCommitEnabled=true — enable WAL batching.
+//  3. All buffers (key, value) are allocated ONCE before b.ResetTimer().
+//  4. No fmt.Sprintf, append, or key allocation inside the hot loop.
+//  5. Timestamps are passed as uint64(i+1) — no NextTimestamp() call in hot path.
 
 package engine
 
 import (
-	"fmt"
 	"math"
 	"os"
 	"sort"
@@ -80,7 +78,7 @@ func (c *latencyCollector) report(b *testing.B, label string) {
 }
 
 // ---------------------------------------------------------------------------
-// cleanTemp — очистка временных файлов
+// cleanTemp — cleanup temporary files
 // ---------------------------------------------------------------------------
 
 func cleanTemp() {
@@ -132,19 +130,19 @@ func openTestDBWithOptions(b *testing.B, walOpts WALOptions) *LSMEngine {
 
 func BenchmarkPutLatency_Sync(b *testing.B) {
 	opts := DefaultWALOptions()
+	opts.SyncMode = true
 	opts.GroupCommitEnabled = false
 
 	db := openTestDBWithOptions(b, opts)
 	defer errors.CloseWithFatal(db, "bench-db")
 
 	collector := &latencyCollector{}
+	key := []byte("bench:key")
+	value := []byte("value")
 
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		localCollector := &latencyCollector{}
-		key := []byte("bench:key")
-		value := []byte("value")
-
 		for pb.Next() {
 			ts := db.NextTimestamp()
 			start := time.Now()
@@ -169,6 +167,7 @@ func BenchmarkPutLatency_Sync(b *testing.B) {
 
 func BenchmarkPutLatency_GroupCommit(b *testing.B) {
 	opts := DefaultWALOptions()
+	opts.SyncMode = false
 	opts.GroupCommitEnabled = true
 	opts.GroupCommitInterval = 10 * time.Millisecond
 
@@ -176,13 +175,12 @@ func BenchmarkPutLatency_GroupCommit(b *testing.B) {
 	defer errors.CloseWithFatal(db, "bench-db")
 
 	collector := &latencyCollector{}
+	key := []byte("bench:key")
+	value := []byte("value")
 
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		localCollector := &latencyCollector{}
-		key := []byte("bench:key")
-		value := []byte("value")
-
 		for pb.Next() {
 			ts := db.NextTimestamp()
 			start := time.Now()
@@ -207,6 +205,7 @@ func BenchmarkPutLatency_GroupCommit(b *testing.B) {
 
 func BenchmarkPutLatency_GroupCommit_ShortInterval(b *testing.B) {
 	opts := DefaultWALOptions()
+	opts.SyncMode = false
 	opts.GroupCommitEnabled = true
 	opts.GroupCommitInterval = 1 * time.Millisecond
 
@@ -214,13 +213,12 @@ func BenchmarkPutLatency_GroupCommit_ShortInterval(b *testing.B) {
 	defer errors.CloseWithFatal(db, "bench-db")
 
 	collector := &latencyCollector{}
+	key := []byte("bench:key")
+	value := []byte("value")
 
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		localCollector := &latencyCollector{}
-		key := []byte("bench:key")
-		value := []byte("value")
-
 		for pb.Next() {
 			ts := db.NextTimestamp()
 			start := time.Now()
@@ -245,6 +243,7 @@ func BenchmarkPutLatency_GroupCommit_ShortInterval(b *testing.B) {
 
 func BenchmarkPutLatency_GroupCommit_Varied(b *testing.B) {
 	opts := DefaultWALOptions()
+	opts.SyncMode = false
 	opts.GroupCommitEnabled = true
 	opts.GroupCommitInterval = 10 * time.Millisecond
 
@@ -252,20 +251,35 @@ func BenchmarkPutLatency_GroupCommit_Varied(b *testing.B) {
 	defer errors.CloseWithFatal(db, "bench-db")
 
 	collector := &latencyCollector{}
+	value := []byte("value")
 
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		localCollector := &latencyCollector{}
 		localCounter := uint64(0)
-		value := []byte("value")
+		// Pre-allocate key buffer with capacity for "bench:key:" + max digits
+		keyPrefix := []byte("bench:key:")
+		keyBuf := make([]byte, len(keyPrefix)+20)
 
 		for pb.Next() {
 			localCounter++
-			key := []byte(fmt.Sprintf("bench:key:%d", localCounter))
+			// Build key without fmt.Sprintf — manual byte copy
+			n := len(keyPrefix)
+			copy(keyBuf, keyPrefix)
+			// Format localCounter as decimal into keyBuf[n:]
+			tmp := localCounter
+			pos := n + 19
+			for tmp >= 10 {
+				pos--
+				keyBuf[pos] = byte('0' + tmp%10)
+				tmp /= 10
+			}
+			pos--
+			keyBuf[pos] = byte('0' + tmp)
+			key := keyBuf[pos:]
 
-			ts := db.NextTimestamp()
 			start := time.Now()
-			if err := db.PutWithTS(key, value, ts); err != nil {
+			if err := db.PutWithTS(key, value, localCounter); err != nil {
 				b.Error(err)
 				return
 			}
@@ -286,6 +300,7 @@ func BenchmarkPutLatency_GroupCommit_Varied(b *testing.B) {
 
 func BenchmarkPutLatency_GroupCommit_4KB(b *testing.B) {
 	opts := DefaultWALOptions()
+	opts.SyncMode = false
 	opts.GroupCommitEnabled = true
 	opts.GroupCommitInterval = 10 * time.Millisecond
 
@@ -293,13 +308,15 @@ func BenchmarkPutLatency_GroupCommit_4KB(b *testing.B) {
 	defer errors.CloseWithFatal(db, "bench-db")
 
 	collector := &latencyCollector{}
+	key := []byte("bench:key")
+	value := make([]byte, 4096)
+	for i := range value {
+		value[i] = byte(i % 256)
+	}
 
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		localCollector := &latencyCollector{}
-		key := []byte("bench:key")
-		value := make([]byte, 4096)
-
 		for pb.Next() {
 			ts := db.NextTimestamp()
 			start := time.Now()
@@ -323,13 +340,20 @@ func BenchmarkPutLatency_GroupCommit_4KB(b *testing.B) {
 // ---------------------------------------------------------------------------
 
 func BenchmarkGetLatency(b *testing.B) {
-	db := openBenchDB(b)
-	defer errors.CloseWithFatal(db, "bench-db")
+	dir := b.TempDir()
+	opts := DefaultEngineOptions(dir)
+	opts.WALOpts.SyncMode = false
+	opts.WALOpts.GroupCommitEnabled = true
+
+	e, err := NewLSMEngine(dir, opts.WALOpts)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer errors.CloseWithFatal(e, "bench-db")
 
 	key := []byte("bench:key")
 	value := []byte("value")
-	ts := db.NextTimestamp()
-	if err := db.PutWithTS(key, value, ts); err != nil {
+	if err := e.PutWithTS(key, value, 1); err != nil {
 		b.Fatal(err)
 	}
 
@@ -340,8 +364,7 @@ func BenchmarkGetLatency(b *testing.B) {
 		localCollector := &latencyCollector{}
 		for pb.Next() {
 			start := time.Now()
-			_, err := db.GetWithTS(key, math.MaxUint64)
-			if err != nil {
+			if _, err := e.GetWithTS(key, math.MaxUint64); err != nil {
 				b.Error(err)
 				return
 			}
@@ -361,8 +384,16 @@ func BenchmarkGetLatency(b *testing.B) {
 // ---------------------------------------------------------------------------
 
 func BenchmarkGetLatency_Missing(b *testing.B) {
-	db := openBenchDB(b)
-	defer errors.CloseWithFatal(db, "bench-db")
+	dir := b.TempDir()
+	opts := DefaultEngineOptions(dir)
+	opts.WALOpts.SyncMode = false
+	opts.WALOpts.GroupCommitEnabled = true
+
+	e, err := NewLSMEngine(dir, opts.WALOpts)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer errors.CloseWithFatal(e, "bench-db")
 
 	key := []byte("missing:key")
 	collector := &latencyCollector{}
@@ -372,8 +403,7 @@ func BenchmarkGetLatency_Missing(b *testing.B) {
 		localCollector := &latencyCollector{}
 		for pb.Next() {
 			start := time.Now()
-			_, err := db.GetWithTS(key, math.MaxUint64)
-			if err != nil {
+			if _, err := e.GetWithTS(key, math.MaxUint64); err != nil {
 				b.Error(err)
 				return
 			}
@@ -393,13 +423,21 @@ func BenchmarkGetLatency_Missing(b *testing.B) {
 // ---------------------------------------------------------------------------
 
 func BenchmarkScanLatency(b *testing.B) {
-	db := openBenchDB(b)
-	defer errors.CloseWithFatal(db, "bench-db")
+	dir := b.TempDir()
+	opts := DefaultEngineOptions(dir)
+	opts.WALOpts.SyncMode = false
+	opts.WALOpts.GroupCommitEnabled = true
 
+	e, err := NewLSMEngine(dir, opts.WALOpts)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer errors.CloseWithFatal(e, "bench-db")
+
+	// Pre-populate 10,000 keys with prefix "scan:"
 	for i := 0; i < 10000; i++ {
-		key := []byte(fmt.Sprintf("scan:%05d", i))
-		ts := db.NextTimestamp()
-		if err := db.PutWithTS(key, []byte("value"), ts); err != nil {
+		k := []byte{'s', 'c', 'a', 'n', ':', byte(i >> 8), byte(i & 0xff)}
+		if err := e.PutWithTS(k, []byte("value"), uint64(i+1)); err != nil {
 			b.Fatal(err)
 		}
 	}
@@ -409,7 +447,7 @@ func BenchmarkScanLatency(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		start := time.Now()
-		iter := db.Scan([]byte("scan:"))
+		iter := e.Scan([]byte("scan:"))
 		count := 0
 		for iter.Next() {
 			count++
@@ -429,13 +467,21 @@ func BenchmarkScanLatency(b *testing.B) {
 // ---------------------------------------------------------------------------
 
 func BenchmarkMixedWorkload(b *testing.B) {
-	db := openBenchDB(b)
-	defer errors.CloseWithFatal(db, "bench-db")
+	dir := b.TempDir()
+	opts := DefaultEngineOptions(dir)
+	opts.WALOpts.SyncMode = false
+	opts.WALOpts.GroupCommitEnabled = true
 
+	e, err := NewLSMEngine(dir, opts.WALOpts)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer errors.CloseWithFatal(e, "bench-db")
+
+	// Pre-populate 10,000 keys with prefix "read:"
 	for i := 0; i < 10000; i++ {
-		key := []byte(fmt.Sprintf("read:%05d", i))
-		ts := db.NextTimestamp()
-		if err := db.PutWithTS(key, []byte("value"), ts); err != nil {
+		k := []byte{'r', 'e', 'a', 'd', ':', byte(i >> 8), byte(i & 0xff)}
+		if err := e.PutWithTS(k, []byte("value"), uint64(i+1)); err != nil {
 			b.Fatal(err)
 		}
 	}
@@ -447,21 +493,48 @@ func BenchmarkMixedWorkload(b *testing.B) {
 		localCollector := &latencyCollector{}
 		localCounter := uint64(0)
 		value := []byte("value")
+		// Pre-allocate key buffer for write keys
+		writeKeyPrefix := []byte("write:")
+		writeKeyBuf := make([]byte, len(writeKeyPrefix)+20)
+		// Pre-allocate key buffer for read keys
+		readKeyBuf := make([]byte, 7) // "read:XX" max
 
 		for pb.Next() {
 			localCounter++
 			start := time.Now()
 
 			if localCounter%5 == 0 {
-				key := []byte(fmt.Sprintf("write:%d", localCounter))
-				ts := db.NextTimestamp()
-				if err := db.PutWithTS(key, value, ts); err != nil {
+				// Write path — build key without fmt.Sprintf
+				n := len(writeKeyPrefix)
+				copy(writeKeyBuf, writeKeyPrefix)
+				tmp := localCounter
+				pos := n + 19
+				for tmp >= 10 {
+					pos--
+					writeKeyBuf[pos] = byte('0' + tmp%10)
+					tmp /= 10
+				}
+				pos--
+				writeKeyBuf[pos] = byte('0' + tmp)
+				key := writeKeyBuf[pos:]
+
+				if err := e.PutWithTS(key, value, localCounter); err != nil {
 					b.Error(err)
 					return
 				}
 			} else {
-				key := []byte(fmt.Sprintf("read:%05d", localCounter%10000))
-				if _, err := db.GetWithTS(key, math.MaxUint64); err != nil {
+				// Read path — build key without fmt.Sprintf
+				idx := localCounter % 10000
+				readKeyBuf[0] = 'r'
+				readKeyBuf[1] = 'e'
+				readKeyBuf[2] = 'a'
+				readKeyBuf[3] = 'd'
+				readKeyBuf[4] = ':'
+				readKeyBuf[5] = byte(idx >> 8)
+				readKeyBuf[6] = byte(idx & 0xff)
+				key := readKeyBuf[:7]
+
+				if _, err := e.GetWithTS(key, math.MaxUint64); err != nil {
 					b.Error(err)
 					return
 				}
