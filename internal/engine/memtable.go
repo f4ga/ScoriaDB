@@ -35,9 +35,12 @@ func NewMemTable() *MemTable {
 }
 
 // Put adds a key-value pair. In LSM, Put always creates a new version.
+// Size is incremented only when a genuinely new entry is created
+// (not when an existing entry with the same key+timestamp is updated).
 func (mt *MemTable) Put(key mvcc.MVCCKey, value []byte) {
-	mt.sl.Put(key, value)
-	atomic.AddInt64(&mt.size, 1)
+	if mt.sl.Put(key, value) {
+		atomic.AddInt64(&mt.size, 1)
+	}
 }
 
 // DeleteWithTS marks a key as deleted (tombstone).
@@ -93,7 +96,8 @@ func (mt *MemTable) Get(key mvcc.MVCCKey) ([]byte, bool) {
 
 	// Check if the user key matches.
 	// If not, the key doesn't exist in this MemTable.
-	if !bytes.Equal(node.key.Key, key.Key) {
+	nodeKey := node.Key()
+	if !bytes.Equal(nodeKey.Key, key.Key) {
 		return nil, false
 	}
 
@@ -102,12 +106,16 @@ func (mt *MemTable) Get(key mvcc.MVCCKey) ([]byte, bool) {
 	// We need the newest version with commitTS <= snapshotTS,
 	// so we track the best match as we walk.
 	var bestNode *Node
-	for node != nil && bytes.Equal(node.key.Key, key.Key) {
-		// Timestamp is inverted: node.key.Timestamp = MaxUint64 - commitTS.
+	for node != nil {
+		nodeKey = node.Key()
+		if !bytes.Equal(nodeKey.Key, key.Key) {
+			break
+		}
+		// Timestamp is inverted: nodeKey.Timestamp = MaxUint64 - commitTS.
 		// We need commitTS <= snapshotTS, which is equivalent to:
-		//   MaxUint64 - node.key.Timestamp <= MaxUint64 - key.Timestamp
-		//   → node.key.Timestamp >= key.Timestamp
-		if node.key.Timestamp >= key.Timestamp {
+		//   MaxUint64 - nodeKey.Timestamp <= MaxUint64 - key.Timestamp
+		//   → nodeKey.Timestamp >= key.Timestamp
+		if nodeKey.Timestamp >= key.Timestamp {
 			// This version is visible (commitTS <= snapshotTS).
 			// Since the chain is ascending by commitTS, each subsequent
 			// match has a larger commitTS (newer version), so we
@@ -127,11 +135,7 @@ func (mt *MemTable) Get(key mvcc.MVCCKey) ([]byte, bool) {
 		return nil, false
 	}
 
-	val := bestNode.value.Load()
-	if val == nil {
-		return nil, false
-	}
-	return *val, true
+	return bestNode.Value(), true
 }
 
 // NewIterator returns an iterator over all entries.
@@ -156,7 +160,7 @@ func (mt *MemTable) LastKey() mvcc.MVCCKey {
 	if node == nil || node == mt.sl.head {
 		return mvcc.MVCCKey{}
 	}
-	return node.key
+	return node.Key()
 }
 
 // Close releases resources held by MemTable.

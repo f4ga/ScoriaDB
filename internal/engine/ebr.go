@@ -46,8 +46,6 @@ type EpochManager struct {
 	counter int64
 }
 
-var epochManager = &EpochManager{}
-
 // getGoroutineID returns a unique identifier for the current goroutine.
 func getGoroutineID() uint64 {
 	var buf [64]byte
