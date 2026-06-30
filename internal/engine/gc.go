@@ -23,11 +23,11 @@ import (
 
 // CollectLiveValuePointers collects all live ValuePointers from the LSM tree.
 func (e *LSMEngine) CollectLiveValuePointers() (map[ValuePointer]struct{}, error) {
-	e.mu.RLock()
-	defer e.mu.RUnlock()
-	if e.closed {
+	if e.closed.Load() {
 		return nil, fmt.Errorf("engine closed")
 	}
+	e.mu.RLock()
+	defer e.mu.RUnlock()
 	livePointers := make(map[ValuePointer]struct{})
 	processValue := func(value []byte) {
 		if len(value) == 12 {
@@ -66,11 +66,11 @@ func (e *LSMEngine) CollectLiveValuePointers() (map[ValuePointer]struct{}, error
 
 // InvalidateVLogPointers removes invalid VLog pointers from MemTables.
 func (e *LSMEngine) InvalidateVLogPointers() {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if e.closed {
+	if e.closed.Load() {
 		return
 	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	processTable := func(mt *MemTable) {
 		iter := mt.NewIterator()
 		defer iter.Close()

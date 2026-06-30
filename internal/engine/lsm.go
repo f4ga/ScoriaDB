@@ -21,6 +21,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unsafe"
 
 	"github.com/f4ga/ScoriaDB/internal/engine/sstable"
 	"github.com/f4ga/ScoriaDB/internal/engine/vfs"
@@ -28,6 +29,10 @@ import (
 	"github.com/f4ga/ScoriaDB/internal/logger"
 	"github.com/f4ga/ScoriaDB/internal/mvcc"
 )
+
+// debugPerf enables performance diagnostic output.
+// Set to true to see per-PutWithTS timing breakdown.
+const debugPerf = false
 
 // LSMEngine is the main LSM tree engine.
 type LSMEngine struct {
@@ -37,12 +42,13 @@ type LSMEngine struct {
 	frozenMemTable      *MemTable
 	vlog                *VLogImpl
 	wal                 *WAL
+	unifiedMmap         *UnifiedMmap // unified mmap ring buffer (hot path)
 	manifest            *Manifest
 	vfs                 vfs.VFS
 	levels              [][]*sstable.Reader
 	LastTS              uint64
 	minActiveSnapshotTS uint64
-	closed              bool
+	closed              atomic.Bool
 	memSize             int64
 	lastCommitCache     map[string]uint64
 	cacheMu             sync.RWMutex
@@ -93,6 +99,16 @@ func NewLSMEngine(dataDir string, opts ...WALOptions) (*LSMEngine, error) {
 		return nil, fmt.Errorf("failed to open wal: %w", err)
 	}
 
+	// Open unified mmap ring buffer (hot write path)
+	unifiedPath := filepath.Join(dataDir, "data.mmap")
+	unifiedMmap, err := OpenUnifiedMmap(unifiedPath)
+	if err != nil {
+		errors.CloseWithLog(wal, "wal")
+		errors.CloseWithLog(vlog, "vlog")
+		errors.CloseWithLog(manifest, "manifest")
+		return nil, fmt.Errorf("failed to open unified mmap: %w", err)
+	}
+
 	memTable := NewMemTable()
 	lastTS := uint64(1)
 
@@ -117,6 +133,7 @@ func NewLSMEngine(dataDir string, opts ...WALOptions) (*LSMEngine, error) {
 		memTable:        memTable,
 		vlog:            vlog,
 		wal:             wal,
+		unifiedMmap:     unifiedMmap,
 		manifest:        manifest,
 		vfs:             vfs,
 		levels:          levels,
@@ -226,61 +243,109 @@ func (e *LSMEngine) NextTimestamp() uint64 {
 }
 
 // PutWithTS writes a key-value pair with the given commit timestamp.
+//
+// OPTIMIZATION v0.3.1: Unified MMap Hot Path
+//   - Single write to unified mmap ring buffer (replaces WAL + VLog dual write)
+//   - Zero-copy unsafe memcpy (no bounds checking)
+//   - Atomic offset reservation (no mutex in hot path)
+//   - For large values (>MaxInlineSize), writes full value to unified mmap,
+//     stores 12-byte ValuePointer in MemTable only
+//
+// Zero allocations in hot path:
+//   - Stack-allocated [12]byte for ValuePointer encoding
+//   - Direct mmap write via unsafe pointer arithmetic
+//   - Ring buffer for skip list nodes
 func (e *LSMEngine) PutWithTS(key, value []byte, commitTS uint64) error {
-	e.mu.Lock()
-	if e.closed {
-		e.mu.Unlock()
+	// Fast closed check with atomic — no mutex
+	if e.closed.Load() {
 		return fmt.Errorf("engine closed")
 	}
+
 	var vp ValuePointer
 	var inlineValue []byte
+	var isLarge bool
+
+	// DIAGNOSTIC: measure unified mmap write time
+	var startWal time.Time
+	if debugPerf {
+		startWal = time.Now()
+	}
+
+	// Determine storage strategy based on value size
 	if len(value) <= MaxInlineSize {
 		inlineValue = value
+		isLarge = false
 	} else {
-		var err error
-		vp, err = e.vlog.Write(value)
+		// Large value: write to unified mmap (single write, no VLog call)
+		// The unified mmap uses atomic.AddUint64 — no mutex in hot path
+		offset, err := e.unifiedMmap.WriteEntry(OpPut, key, value, commitTS)
 		if err != nil {
-			e.mu.Unlock()
-			return fmt.Errorf("failed to write to vlog: %w", err)
+			return fmt.Errorf("failed to write to unified mmap: %w", err)
 		}
+		vp = ValuePointer{Offset: int64(offset), Size: int32(len(value))}
+		isLarge = true
 	}
+
 	mvccKey := mvcc.NewMVCCKey(key, commitTS)
+
+	// Encode stored value: either inline bytes or 12-byte ValuePointer
+	// Stack-allocated buffer — zero allocation
+	// NOTE: vpBuf is stack-allocated [12]byte. Using vpBuf[:] creates a slice
+	// header that the compiler may move to heap. We use unsafe to prevent this.
+	var vpBuf [12]byte
 	var storedValue []byte
-	if vp.Size > 0 {
-		storedValue = encodeValuePointer(vp)
+	if isLarge {
+		encodeValuePointer(vp, vpBuf[:])
+		// Use unsafe to create slice without causing vpBuf to escape to heap.
+		// The slice points to the stack-allocated array, and Put() copies the
+		// data into the arena, so the stack lifetime is sufficient.
+		storedValue = unsafe.Slice((*byte)(unsafe.Pointer(&vpBuf)), 12)
 	} else {
 		storedValue = inlineValue
 	}
-	walEntry := newWalEntry()
-	walEntry.Op = OpPut
-	walEntry.Key = key
-	walEntry.Value = storedValue
-	walEntry.Timestamp = commitTS
-	if err := e.wal.Write(walEntry); err != nil {
+
+	// For small values: write to WAL (still needed for durability)
+	// For large values: WAL write is ELIMINATED — data is already in unified mmap
+	if !isLarge {
+		walEntry := newWalEntry()
+		walEntry.Op = OpPut
+		walEntry.Key = key
+		walEntry.Value = storedValue
+		walEntry.Timestamp = commitTS
+		walEntry.IsLarge = false
+
+		if err := e.wal.Write(walEntry); err != nil {
+			putWalEntry(walEntry)
+			return fmt.Errorf("failed to write to wal: %w", err)
+		}
 		putWalEntry(walEntry)
-		e.mu.Unlock()
-		return fmt.Errorf("failed to write to wal: %w", err)
 	}
-	putWalEntry(walEntry)
+
+	// Insert into MemTable — SkipList has its own internal mutex
 	e.memTable.Put(mvccKey, storedValue)
 	atomic.AddInt64(&e.memSize, int64(len(key)+len(value)))
 	e.updateLastCommitCache(key, commitTS)
-	e.mu.Unlock()
+
+	// DIAGNOSTIC: print unified mmap write time
+	if debugPerf {
+		fmt.Printf("[PERF] Unified mmap write: %d ns\n", time.Since(startWal).Nanoseconds())
+	}
 	return nil
 }
 
 // WriteAtomicBatch writes an atomic batch of operations.
 func (e *LSMEngine) WriteAtomicBatch(data []byte, commitTS uint64) error {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if e.closed {
+	if e.closed.Load() {
 		return fmt.Errorf("engine closed")
 	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	walEntry := newWalEntry()
 	walEntry.Op = OpBatch
 	walEntry.Key = nil
 	walEntry.Value = data
 	walEntry.Timestamp = commitTS
+	walEntry.IsLarge = false
 	if err := e.wal.Write(walEntry); err != nil {
 		putWalEntry(walEntry)
 		return fmt.Errorf("failed to write batch to wal: %w", err)
@@ -308,11 +373,11 @@ func (e *LSMEngine) WriteAtomicBatch(data []byte, commitTS uint64) error {
 
 // GetWithTS reads a value with the given snapshot timestamp.
 func (e *LSMEngine) GetWithTS(key []byte, snapshotTS uint64) ([]byte, error) {
-	e.mu.RLock()
-	defer e.mu.RUnlock()
-	if e.closed {
+	if e.closed.Load() {
 		return nil, fmt.Errorf("engine closed")
 	}
+	e.mu.RLock()
+	defer e.mu.RUnlock()
 	mvccKey := mvcc.NewMVCCKey(key, snapshotTS)
 	val, found := e.memTable.Get(mvccKey)
 	if found {
@@ -329,32 +394,50 @@ func (e *LSMEngine) GetWithTS(key []byte, snapshotTS uint64) ([]byte, error) {
 }
 
 // GetLatestInfo returns the latest value and timestamp for a key.
+// OPTIMIZATION: Uses binary search (findGreaterOrEqual) instead of O(N) iterator.
+// O(N) → O(log N) for each key.
 func (e *LSMEngine) GetLatestInfo(key []byte) ([]byte, uint64, error) {
-	e.mu.RLock()
-	defer e.mu.RUnlock()
-	if e.closed {
+	if e.closed.Load() {
 		return nil, 0, fmt.Errorf("engine closed")
 	}
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+
+	// Helper: search MemTable with binary search (O(log N) + chain walk)
 	searchMemTable := func(mt *MemTable) ([]byte, uint64, bool) {
 		if mt == nil {
 			return nil, 0, false
 		}
-		iter := mt.NewIterator()
-		defer iter.Close()
+		// Use findGreaterOrEqual directly — O(log N) instead of O(N) iterator
+		searchKey := mvcc.MVCCKey{Key: key, Timestamp: mvcc.InvertTimestamp(0)}
+		node := mt.sl.findGreaterOrEqual(searchKey)
+		if node == nil {
+			return nil, 0, false
+		}
+		nodeKey := node.Key()
+		if !bytes.Equal(nodeKey.Key, key) {
+			return nil, 0, false
+		}
+
 		var bestValue []byte
 		var bestTS uint64
-		for iter.Next() {
-			mvccKey := iter.Key()
-			if bytes.Equal(mvccKey.Key, key) {
-				commitTS := mvccKey.CommitTS()
+		for node != nil {
+			nodeKey = node.Key()
+			if !bytes.Equal(nodeKey.Key, key) {
+				break
+			}
+			if !node.deleted.Load() {
+				commitTS := nodeKey.CommitTS()
 				if commitTS > bestTS {
 					bestTS = commitTS
-					bestValue = iter.Value()
+					bestValue = node.Value()
 				}
 			}
+			node = node.next[0].Load()
 		}
 		return bestValue, bestTS, bestValue != nil
 	}
+
 	val, ts, found := searchMemTable(e.memTable)
 	if found {
 		decoded, err := e.decodeStoredValue(val)
@@ -365,6 +448,8 @@ func (e *LSMEngine) GetLatestInfo(key []byte) ([]byte, uint64, error) {
 		decoded, err := e.decodeStoredValue(val)
 		return decoded, ts, err
 	}
+
+	// Search SSTables (already O(log N) via block index)
 	for _, level := range e.levels {
 		for _, sst := range level {
 			iter, err := sst.NewIterator()
@@ -417,9 +502,8 @@ func (e *LSMEngine) CheckConflict(key []byte, startTS uint64) (bool, error) {
 
 // DeleteWithTS deletes a key with the given commit timestamp.
 func (e *LSMEngine) DeleteWithTS(key []byte, commitTS uint64) error {
-	e.mu.Lock()
-	if e.closed {
-		e.mu.Unlock()
+	// Fast closed check with atomic — no mutex
+	if e.closed.Load() {
 		return fmt.Errorf("engine closed")
 	}
 	walEntry := newWalEntry()
@@ -427,9 +511,9 @@ func (e *LSMEngine) DeleteWithTS(key []byte, commitTS uint64) error {
 	walEntry.Key = key
 	walEntry.Value = nil
 	walEntry.Timestamp = commitTS
+	walEntry.IsLarge = false
 	if err := e.wal.Write(walEntry); err != nil {
 		putWalEntry(walEntry)
-		e.mu.Unlock()
 		return fmt.Errorf("failed to write to wal: %w", err)
 	}
 	putWalEntry(walEntry)
@@ -437,7 +521,6 @@ func (e *LSMEngine) DeleteWithTS(key []byte, commitTS uint64) error {
 	e.memTable.DeleteWithTS(mvccKey)
 	atomic.AddInt64(&e.memSize, -int64(len(key)))
 	e.updateLastCommitCache(key, commitTS)
-	e.mu.Unlock()
 	return nil
 }
 
@@ -454,13 +537,10 @@ func (e *LSMEngine) SetMinActiveSnapshotTS(ts uint64) {
 
 // Shutdown gracefully shuts down the engine with a timeout for VLog view release.
 func (e *LSMEngine) Shutdown() error {
-	e.mu.Lock()
-	if e.closed {
-		e.mu.Unlock()
+	if e.closed.Load() {
 		return nil
 	}
-	e.closed = true
-	e.mu.Unlock()
+	e.closed.Store(true)
 
 	// Stop background tasks
 	e.stopBackgroundTasks()
@@ -493,6 +573,13 @@ func (e *LSMEngine) Shutdown() error {
 		}
 	}
 
+	// Close unified mmap
+	if e.unifiedMmap != nil {
+		if err := e.unifiedMmap.Close(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+
 	// Close WAL
 	if err := e.wal.Close(); err != nil {
 		errs = append(errs, err)
@@ -512,16 +599,13 @@ func (e *LSMEngine) Shutdown() error {
 
 // Close closes the engine and releases all resources.
 func (e *LSMEngine) Close() error {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if e.closed {
+	if e.closed.Load() {
 		return nil
 	}
+	e.closed.Store(true)
 
 	// Stop background tasks
 	e.stopBackgroundTasks()
-
-	e.closed = true
 	var errs []error
 
 	// Close MemTable
@@ -541,6 +625,13 @@ func (e *LSMEngine) Close() error {
 	// VLog is closed via Shutdown() or Close() on the VLog itself.
 	// DecRef() is NOT called here — it is only used when releasing VLogView
 	// instances created via ReadView(). The engine does not hold a View reference.
+
+	// Close unified mmap
+	if e.unifiedMmap != nil {
+		if err := e.unifiedMmap.Close(); err != nil {
+			errs = append(errs, err)
+		}
+	}
 
 	// Close WAL
 	if err := e.wal.Close(); err != nil {
