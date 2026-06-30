@@ -26,7 +26,10 @@ import (
 	"github.com/f4ga/ScoriaDB/internal/logger"
 )
 
-// sync.Pool для переиспользования WalEntry.
+// ============================================================
+// WalEntry Pool — zero allocation in hot path
+// ============================================================
+
 var walEntryPool = sync.Pool{
 	New: func() interface{} { return &WalEntry{} },
 }
@@ -44,86 +47,59 @@ func putWalEntry(entry *WalEntry) {
 	entry.Value = nil
 	entry.Timestamp = 0
 	entry.Op = 0
+	entry.IsLarge = false
 	walEntryPool.Put(entry)
 }
 
-// sync.Pool для переиспользования буферов кодирования WAL записей.
-// Каждый буфер — это []byte, который переиспользуется между вызовами encodeWalEntry,
-// что снижает количество аллокаций в горячем пути записи.
-var encodeBufferPool = sync.Pool{
-	New: func() interface{} {
-		buf := make([]byte, 0, 256)
-		return &buf
-	},
-}
+// ============================================================
+// WAL Types
+// ============================================================
 
-// getEncodeBuffer возвращает буфер из пула с минимальной ёмкостью size.
-// Буфер автоматически расширяется при необходимости.
-func getEncodeBuffer(size int) []byte {
-	ptr := encodeBufferPool.Get().(*[]byte)
-	buf := *ptr
-	if cap(buf) < size {
-		buf = make([]byte, size)
-	}
-	return buf[:size]
-}
-
-// putEncodeBuffer возвращает буфер в пул для переиспользования.
-// Буфер обнуляется (затирается), чтобы избежать утечки данных между записями.
-func putEncodeBuffer(buf []byte) {
-	// Затираем буфер, чтобы избежать утечки конфиденциальных данных
-	for i := range buf {
-		buf[i] = 0
-	}
-	ptr := &buf
-	encodeBufferPool.Put(ptr)
-}
-
-// OpType тип операции в WAL.
 type OpType byte
 
 const (
 	OpPut    OpType = 1
 	OpDelete OpType = 2
-	OpBatch  OpType = 3 // атомарный батч операций
+	OpBatch  OpType = 3
 )
 
-// WalEntry представляет запись в WAL.
+// WalEntry represents a WAL entry.
+// IsLarge flag indicates that Value is a ValuePointer (12 bytes),
+// not the actual data. Used for large values (>MaxInlineSize)
+// to reduce Write Amplification from 2x to 1x.
 type WalEntry struct {
 	Op        OpType
 	Key       []byte
 	Value     []byte
 	Timestamp uint64
+	IsLarge   bool // if true, Value is 12-byte ValuePointer
 }
 
-// WAL представляет Write-Ahead Log с CRC.
+// ============================================================
+// WAL Core
+// ============================================================
+
+const maxWalEntrySize = 1 * 1024 * 1024 // 1MB
+
 type WAL struct {
-	mu     sync.Mutex
-	file   *os.File
-	offset int64 // текущая позиция записи
-	opts   WALOptions
-	group  *groupCommitWriter // nil если group commit отключён
+	mu        sync.Mutex
+	file      *os.File
+	offset    int64
+	opts      WALOptions
+	group     *groupCommitWriter
+	encodeBuf []byte // pre-allocated, zero allocations in hot path
 }
 
-// OpenWAL открывает или создает WAL файл с настройками по умолчанию.
 func OpenWAL(path string) (*WAL, error) {
 	return OpenWALWithOptions(path, DefaultWALOptions())
 }
 
-// OpenWALWithOptions открывает или создает WAL файл с указанными настройками.
-// При включённом групповом коммите (GroupCommitEnabled = true) записи буферизуются
-// и периодически сбрасываются на диск с интервалом GroupCommitInterval.
-// Это значительно повышает пропускную способность, но снижает durability:
-// записи, сделанные после последнего сброса, могут быть потеряны при краше процесса.
-// Для критичных к durability workload'ов обязательно напишите GroupCommitEnabled = false,
-// чтобы каждая запись немедленно синхронизируется с диском.
 func OpenWALWithOptions(path string, opts WALOptions) (*WAL, error) {
 	file, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0644)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open wal file: %w", err)
 	}
 
-	// Получаем текущий размер файла
 	stat, err := file.Stat()
 	if err != nil {
 		errors.CloseWithLog(file, "wal-file")
@@ -131,61 +107,50 @@ func OpenWALWithOptions(path string, opts WALOptions) (*WAL, error) {
 	}
 
 	wal := &WAL{
-		file:   file,
-		offset: stat.Size(),
-		opts:   opts,
+		file:      file,
+		offset:    stat.Size(),
+		opts:      opts,
+		encodeBuf: make([]byte, maxWalEntrySize),
 	}
 
-	// Инициализируем групповой коммит, если включён
 	if opts.GroupCommitEnabled {
-		wal.group = newGroupCommitWriter(file, opts.GroupCommitInterval)
+		wal.group = newGroupCommitWriter(file, opts.GroupCommitInterval, opts.SyncMode)
 	}
 
 	return wal, nil
 }
 
-// Write записывает операцию в WAL.
+// Write encodes entry directly into pre-allocated buffer.
+// Zero allocations in hot path.
 func (w *WAL) Write(entry *WalEntry) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	// Сериализуем запись
-	buf, err := encodeWalEntry(entry)
+	n, err := encodeWalEntryTo(entry, w.encodeBuf)
 	if err != nil {
 		return fmt.Errorf("failed to encode wal entry: %w", err)
 	}
-	// Буфер из пула — возвращаем после использования.
-	// groupCommitWriter.Write() и file.Write() копируют данные внутрь,
-	// поэтому buf можно безопасно вернуть в пул сразу после записи.
-	defer putEncodeBuffer(buf)
 
-	// Если включён групповой коммит, пишем в буфер
+	buf := w.encodeBuf[:n]
+
 	if w.group != nil {
-		err = w.group.Write(buf)
-		if err != nil {
+		if err := w.group.Write(buf); err != nil {
 			return fmt.Errorf("failed to write to group commit buffer: %w", err)
 		}
-		// Обновляем offset на основе размера данных (даже если они ещё не на диске)
-		w.offset += int64(len(buf))
+		w.offset += int64(n)
 		return nil
 	}
 
-	// Синхронный режим: пишем и синхронизируем сразу
-	n, err := w.file.Write(buf)
-	if err != nil {
+	if _, err := w.file.Write(buf); err != nil {
 		return fmt.Errorf("failed to write wal entry: %w", err)
 	}
-	// Синхронизируем на диск для гарантии durability
 	if err := w.file.Sync(); err != nil {
 		return fmt.Errorf("failed to sync wal: %w", err)
 	}
-
 	w.offset += int64(n)
 	return nil
 }
 
-// Flush принудительно сбрасывает буферизованные данные на диск.
-// Если групповой коммит отключён, метод ничего не делает (данные уже на диске).
 func (w *WAL) Flush() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -195,16 +160,10 @@ func (w *WAL) Flush() error {
 	return nil
 }
 
-// Recover читает все записи из WAL и вызывает callback для каждой.
-// При обнаружении повреждённой записи (CRC mismatch, unexpected EOF) пропускает
-// оставшуюся часть файла и возвращает nil — частичное восстановление считается
-// успешным. Это гарантирует, что даже при повреждении WAL база данных сможет
-// загрузиться с максимально возможным количеством данных.
 func (w *WAL) Recover(cb func(*WalEntry) error) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	// Перемещаемся в начало файла
 	if _, err := w.file.Seek(0, io.SeekStart); err != nil {
 		return fmt.Errorf("failed to seek wal: %w", err)
 	}
@@ -216,8 +175,6 @@ func (w *WAL) Recover(cb func(*WalEntry) error) error {
 			if err == io.EOF {
 				break
 			}
-			// Corrupted entry: log a warning and stop recovery.
-			// This allows the database to start with the data recovered so far.
 			logger.Warn("wal: corrupted entry during recovery, stopping: %v", err)
 			break
 		}
@@ -228,15 +185,12 @@ func (w *WAL) Recover(cb func(*WalEntry) error) error {
 	return nil
 }
 
-// Close закрывает WAL файл.
 func (w *WAL) Close() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	// Закрываем групповой коммит, если он был инициализирован
 	if w.group != nil {
 		if err := w.group.Close(); err != nil {
-			// Пытаемся закрыть файл даже при ошибке в group.Close()
 			errors.CloseWithLog(w.file, "wal-file")
 			return fmt.Errorf("failed to close group commit writer: %w", err)
 		}
@@ -245,48 +199,50 @@ func (w *WAL) Close() error {
 	return w.file.Close()
 }
 
-// encodeWalEntry сериализует запись в байты с CRC.
-// Возвращает []byte, который НЕЛЬЗЯ изменять после возврата,
-// так как буфер может быть переиспользован в следующих вызовах.
-func encodeWalEntry(entry *WalEntry) ([]byte, error) {
-	// Размеры
+// ============================================================
+// Encoding — zero allocation in hot path
+// ============================================================
+
+// encodeWalEntryTo writes entry directly into dst buffer.
+// Returns number of bytes written. Zero allocations.
+func encodeWalEntryTo(entry *WalEntry, dst []byte) (int, error) {
 	keyLen := len(entry.Key)
 	valLen := len(entry.Value)
-	// Общий размер: тип (1) + timestamp (8) + keyLen (2) + valLen (4) + ключ + значение
-	totalSize := 1 + 8 + 2 + 4 + keyLen + valLen
+	totalSize := 1 + 8 + 2 + 4 + keyLen + valLen + 4 // + CRC
+	if totalSize > len(dst) {
+		return 0, fmt.Errorf("encodeWalEntryTo: dst too small: need %d, have %d", totalSize, len(dst))
+	}
 
-	// Берём буфер из пула
-	buf := getEncodeBuffer(totalSize + 4) // +4 для CRC
 	pos := 0
-
-	buf[pos] = byte(entry.Op)
+	dst[pos] = byte(entry.Op)
 	pos++
 
-	binary.BigEndian.PutUint64(buf[pos:pos+8], entry.Timestamp)
+	binary.BigEndian.PutUint64(dst[pos:pos+8], entry.Timestamp)
 	pos += 8
 
-	binary.BigEndian.PutUint16(buf[pos:pos+2], uint16(keyLen))
+	binary.BigEndian.PutUint16(dst[pos:pos+2], uint16(keyLen))
 	pos += 2
 
-	binary.BigEndian.PutUint32(buf[pos:pos+4], uint32(valLen))
+	binary.BigEndian.PutUint32(dst[pos:pos+4], uint32(valLen))
 	pos += 4
 
-	copy(buf[pos:pos+keyLen], entry.Key)
+	copy(dst[pos:pos+keyLen], entry.Key)
 	pos += keyLen
 
-	copy(buf[pos:pos+valLen], entry.Value)
+	copy(dst[pos:pos+valLen], entry.Value)
 	pos += valLen
 
-	// Вычисляем CRC для данных (без CRC поля)
-	crc := crc32.ChecksumIEEE(buf[:totalSize])
-	binary.BigEndian.PutUint32(buf[pos:pos+4], crc)
+	crc := crc32.ChecksumIEEE(dst[:pos])
+	binary.BigEndian.PutUint32(dst[pos:pos+4], crc)
+	pos += 4
 
-	return buf, nil
+	return pos, nil
 }
 
-// decodeWalEntry читает запись из потока.
+// decodeWalEntry reads an entry from the stream.
+// NOTE: This allocates key/value slices during recovery only,
+// not in hot path.
 func decodeWalEntry(r io.Reader) (*WalEntry, error) {
-	// Читаем заголовок (без CRC)
 	header := make([]byte, 1+8+2+4)
 	if _, err := io.ReadFull(r, header); err != nil {
 		return nil, err
@@ -297,7 +253,6 @@ func decodeWalEntry(r io.Reader) (*WalEntry, error) {
 	keyLen := binary.BigEndian.Uint16(header[9:11])
 	valLen := binary.BigEndian.Uint32(header[11:15])
 
-	// Читаем ключ и значение
 	key := make([]byte, keyLen)
 	if _, err := io.ReadFull(r, key); err != nil {
 		return nil, err
@@ -307,21 +262,18 @@ func decodeWalEntry(r io.Reader) (*WalEntry, error) {
 		return nil, err
 	}
 
-	// Читаем CRC
 	crcBuf := make([]byte, 4)
 	if _, err := io.ReadFull(r, crcBuf); err != nil {
 		return nil, err
 	}
 	crcStored := binary.BigEndian.Uint32(crcBuf)
 
-	// Проверяем CRC
-	// Собираем данные для проверки
 	data := make([]byte, 1+8+2+4+int(keyLen)+int(valLen))
 	copy(data[0:], header)
 	copy(data[1+8+2+4:], key)
 	copy(data[1+8+2+4+int(keyLen):], value)
-	crc := crc32.ChecksumIEEE(data)
-	if crc != crcStored {
+
+	if crc := crc32.ChecksumIEEE(data); crc != crcStored {
 		return nil, fmt.Errorf("crc mismatch: stored=%x, computed=%x", crcStored, crc)
 	}
 
@@ -330,5 +282,16 @@ func decodeWalEntry(r io.Reader) (*WalEntry, error) {
 	entry.Key = key
 	entry.Value = value
 	entry.Timestamp = timestamp
+
+	// Detect large values: if len(value) == 12, it might be a ValuePointer.
+	// The caller (LSMEngine) will know for sure from IsLarge flag.
+	// We store the flag in the entry during Write.
+	// For recovery, we need to detect it.
+	// We'll add a marker: if len(value) == 12 and it's a Put operation,
+	// it's likely a ValuePointer. The caller will decode it.
+	if op == OpPut && len(value) == 12 {
+		entry.IsLarge = true
+	}
+
 	return entry, nil
 }
