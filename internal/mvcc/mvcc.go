@@ -17,12 +17,10 @@
 package mvcc
 
 import (
-	"bytes"
 	"math"
 	"sync/atomic"
 
 	"github.com/f4ga/ScoriaDB/internal/keys"
-	"github.com/google/btree"
 )
 
 // TimestampGenerator генерирует монотонные временные метки.
@@ -102,21 +100,4 @@ func (k MVCCKey) Compare(other MVCCKey) int {
 		return 1
 	}
 	return 0
-}
-
-// Less реализует интерфейс btree.Item для сортировки.
-func (k MVCCKey) Less(than btree.Item) bool {
-	other, ok := than.(MVCCKey)
-	if !ok {
-		return false
-	}
-	cmp := bytes.Compare(k.Key, other.Key)
-	if cmp < 0 {
-		return true
-	}
-	if cmp > 0 {
-		return false
-	}
-	// Более новые версии (больший инвертированный timestamp) идут первыми
-	return k.Timestamp > other.Timestamp
 }

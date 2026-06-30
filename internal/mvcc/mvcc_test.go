@@ -195,60 +195,6 @@ func TestInvertRevertTimestamp(t *testing.T) {
 	}
 }
 
-func TestMVCCKeyLess(t *testing.T) {
-	tests := []struct {
-		name     string
-		a, b     MVCCKey
-		expected bool
-	}{
-		{
-			name:     "same key and timestamp",
-			a:        NewMVCCKey([]byte("key"), 100),
-			b:        NewMVCCKey([]byte("key"), 100),
-			expected: false,
-		},
-		{
-			name:     "key a less than b",
-			a:        NewMVCCKey([]byte("apple"), 100),
-			b:        NewMVCCKey([]byte("banana"), 100),
-			expected: true,
-		},
-		{
-			name:     "key a greater than b",
-			a:        NewMVCCKey([]byte("banana"), 100),
-			b:        NewMVCCKey([]byte("apple"), 100),
-			expected: false,
-		},
-		{
-			name:     "same key, newer commitTS has smaller inverted TS, so Less returns false",
-			a:        NewMVCCKey([]byte("key"), 200),
-			b:        NewMVCCKey([]byte("key"), 100),
-			expected: false,
-		},
-		{
-			name:     "same key, older commitTS has larger inverted TS, so Less returns true",
-			a:        NewMVCCKey([]byte("key"), 100),
-			b:        NewMVCCKey([]byte("key"), 200),
-			expected: true,
-		},
-		{
-			name:     "non-MVCCKey item returns false",
-			a:        NewMVCCKey([]byte("key"), 100),
-			b:        MVCCKey{},
-			expected: false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := tt.a.Less(tt.b)
-			if result != tt.expected {
-				t.Errorf("Less() = %v, want %v", result, tt.expected)
-			}
-		})
-	}
-}
-
 func TestMVCCKeyCompareEdgeCases(t *testing.T) {
 	tests := []struct {
 		name     string
