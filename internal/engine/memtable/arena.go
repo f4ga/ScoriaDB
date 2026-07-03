@@ -24,7 +24,7 @@
 //   - Zero GC pressure: all memory is off-heap from Go's perspective
 // ============================================================
 
-package engine
+package memtable
 
 import (
 	"sync"
@@ -61,24 +61,52 @@ func NewArena() *Arena {
 // Alloc reserves a contiguous region of the given size in the arena.
 // Returns a pointer to the reserved memory.
 //
-// Hot path (CAS loop) — no mutex, no heap allocation.
-// Slow path (grow) — acquires mutex to add a new block.
+// Hot path:
+//  1. atomic.LoadUint64(&head) — no mutex
+//  2. mu.Lock() — read blockIdx and blocks
+//  3. mu.Unlock()
+//  4. CAS on head — no mutex
+//
+// Slow path (grow):
+//  1. mu.Lock()
+//  2. Create new block
+//  3. Update blockIdx
+//  4. atomic.StoreUint64(&head, 0)
+//  5. mu.Unlock()
+//
+// Zero allocations in hot path.
+// See: ARCH-11, HOT-05, BL-02
 //
 //go:nosplit
 func (a *Arena) Alloc(size int) unsafe.Pointer {
 	for {
+		// Step 1: Read head atomically (no mutex)
 		currentHead := atomic.LoadUint64(&a.head)
-		// Fast check: does the allocation fit in the current block?
-		if currentHead+uint64(size) <= uint64(len(a.blocks[a.blockIdx])) {
-			// CAS-reserve the space — this is the ONLY atomic in the hot path
+
+		// Step 2: Read current block under mutex
+		a.mu.Lock()
+		blockIdx := a.blockIdx
+		if blockIdx >= len(a.blocks) {
+			a.mu.Unlock()
+			a.grow(size)
+			continue
+		}
+		block := a.blocks[blockIdx]
+		blockLen := uint64(len(block))
+		a.mu.Unlock()
+
+		// Step 3: Check if allocation fits
+		if currentHead+uint64(size) <= blockLen {
+			// Step 4: CAS-reserve the space (no mutex)
 			if atomic.CompareAndSwapUint64(&a.head, currentHead, currentHead+uint64(size)) {
-				return unsafe.Pointer(&a.blocks[a.blockIdx][currentHead])
+				return unsafe.Pointer(&block[currentHead])
 			}
 			// CAS failed — another thread reserved space, retry
-		} else {
-			// Not enough space in current block — grow
-			a.grow(size)
+			continue
 		}
+
+		// Step 5: Not enough space — grow (under mutex)
+		a.grow(size)
 	}
 }
 

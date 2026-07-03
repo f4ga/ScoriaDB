@@ -28,7 +28,7 @@
 //   - Manual memory management: arena grows, never frees until Reset
 // ============================================================
 
-package engine
+package memtable
 
 import (
 	"bytes"

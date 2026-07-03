@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package engine
+package memtable
 
 import (
 	"fmt"
@@ -252,8 +252,8 @@ func TestSkipListLen(t *testing.T) {
 func TestSkipListRandomHeight(t *testing.T) {
 	for i := 0; i < 1000; i++ {
 		h := randomHeight()
-		if h < 1 || h > maxHeight {
-			t.Errorf("height %d out of range [1, %d]", h, maxHeight)
+		if h < 1 || h > MaxHeight {
+			t.Errorf("height %d out of range [1, %d]", h, MaxHeight)
 		}
 	}
 }

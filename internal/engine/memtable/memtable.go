@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package engine
+package memtable
 
 import (
 	"bytes"
@@ -136,6 +136,43 @@ func (mt *MemTable) Get(key mvcc.MVCCKey) ([]byte, bool) {
 	}
 
 	return bestNode.Value(), true
+}
+
+// GetLatest returns the latest (newest) value and its commit timestamp for a user key.
+// Uses binary search (findGreaterOrEqual) — O(log N) instead of O(N) iterator.
+// Returns (value, commitTS, found). The value is the raw stored value (may be a ValuePointer).
+func (mt *MemTable) GetLatest(key []byte) ([]byte, uint64, bool) {
+	if mt.sl == nil {
+		return nil, 0, false
+	}
+	// Use findGreaterOrEqual directly — O(log N) instead of O(N) iterator
+	searchKey := mvcc.MVCCKey{Key: key, Timestamp: mvcc.InvertTimestamp(0)}
+	node := mt.sl.findGreaterOrEqual(searchKey)
+	if node == nil {
+		return nil, 0, false
+	}
+	nodeKey := node.Key()
+	if !bytes.Equal(nodeKey.Key, key) {
+		return nil, 0, false
+	}
+
+	var bestValue []byte
+	var bestTS uint64
+	for node != nil {
+		nodeKey = node.Key()
+		if !bytes.Equal(nodeKey.Key, key) {
+			break
+		}
+		if !node.deleted.Load() {
+			commitTS := nodeKey.CommitTS()
+			if commitTS > bestTS {
+				bestTS = commitTS
+				bestValue = node.Value()
+			}
+		}
+		node = node.next[0].Load()
+	}
+	return bestValue, bestTS, bestValue != nil
 }
 
 // NewIterator returns an iterator over all entries.

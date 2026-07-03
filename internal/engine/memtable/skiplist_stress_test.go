@@ -1,4 +1,4 @@
-package engine
+package memtable
 
 import (
 	"bytes"
