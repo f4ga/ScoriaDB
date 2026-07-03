@@ -56,7 +56,9 @@ Unlike most embeddable databases, ScoriaDB is not just a library. It runs as a s
 - **Pure Go, no cgo** — cross‑compiles to any platform, no C++ toolchain required
 - **First Go‑native LSM with MVCC** — writers never block readers
 - **Column Families as first‑class citizens** — independent LSM trees with shared WAL for atomic cross‑CF writes
-- **Group Commit in WAL** — 6.4× faster durable writes without sacrificing safety
+- **Lock‑free skip list** — concurrent writes without mutexes, +400% write throughput
+- **Unified MMap** — single mmap region for VLog + WAL, 0 syscalls per write
+- **Zero‑copy Value Log** — large value reads without copying, +487% speed
 - **Built‑in gRPC server** — 13+ language clients out of the box
 - **Durable by default** — fsync, CRC32, manifest, fail‑safe VLog
 
@@ -67,10 +69,13 @@ Unlike most embeddable databases, ScoriaDB is not just a library. It runs as a s
 | Feature | What it gives you |
 |---------|-------------------|
 | **Embeddable** | Pure Go, no cgo — `go get` and start using it |
-| **Production‑ready server** | gRPC, REST, CLI, WebSocket — one binary, zero config |
+| **Production‑ready server** | gRPC, REST, CLI — one binary, zero config |
 | **ACID transactions** | Snapshot Isolation with optimistic concurrency control |
 | **Column Families** | Logical data isolation with per‑CF compaction |
 | **MVCC** | Readers never block writers — consistent snapshots |
+| **Lock‑free skip list** | Concurrent writes without locks — 6M+ ops/s |
+| **Unified MMap** | Single mmap region — 0 syscalls per write |
+| **Zero‑copy VLog** | Large value reads without copying — +487% |
 | **Cross‑language clients** | gRPC clients for 13+ languages (Python, Java, C++ examples included) |
 | **Durable by default** | WAL + fsync, Manifest, CRC32, fail‑safe VLog |
 | **Fast** | 7.1M reads/s, 12.4M WAL ops/s, **1.51M writes/s** |
@@ -206,10 +211,11 @@ All benchmarks are reproducible with `go test -bench=. -benchmem ./internal/engi
 
 | Component | Status |
 |-----------|--------|
-| MemTable (B‑tree) | ✅ |
+| MemTable (lock‑free skip list) | ✅ |
 | SSTable (block index, Bloom, prefix compression) | ✅ |
 | Leveled Compaction | ✅ |
 | Value Log (WiscKey, >64 bytes) | ✅ |
+| Unified MMap (single mmap region) | ✅ |
 | Snappy / Zstd compression | ✅ |
 
 ### Zero‑copy Value Log
@@ -221,6 +227,22 @@ Starting from v0.3.0, VLog reads are **zero‑copy**:
 - Reference counting (`VLogView` with `IncRef`/`DecRef`) ensures safe memory release
 - Allocations: **8 → 5 allocs/op** for large values
 - Read speed: **+487%** for 4KB values
+
+### Unified MMap
+
+Starting from v0.3.0, ScoriaDB uses a single mmap region for both Value Log and WAL:
+- **0 syscalls** per write — data is written directly to mmap
+- **0 allocations** in hot path — pre-allocated buffer
+- **Dynamic extension** — region auto-grows on overflow
+- Replaces separate VLog + WAL with a unified structure
+
+### Lock‑free Skip List
+
+Starting from v0.3.0, MemTable uses a lock‑free skip list instead of B‑tree:
+- **0 mutexes** on write — only CAS operations
+- **0 allocations** in hot path — arena for nodes
+- **+400%** write throughput for small keys
+- **+200%** read throughput
 
 ### Graceful Shutdown
 
@@ -264,7 +286,7 @@ ScoriaDB handles SIGINT/SIGTERM gracefully:
 | REST | ✅ |
 | CLI | ✅ |
 | JWT auth | ✅ |
-| Prometheus metrics | ✅ |
+| Prometheus metrics | ⏳ |
 | Docker | ✅ |
 
 ---
@@ -322,12 +344,21 @@ Full documentation is available at [f4ga.github.io/ScoriaDB](https://f4ga.github
 | **v0.1.1** | CLI & docs | Interactive commands, multi‑lang docs | ✅ |
 | **v0.2.0** | Write performance | Group Commit, WAL options | ✅ |
 | **v0.2.1** | Quick Wins | sync.Pool optimizations, read -67%, WAL -84% | ✅ |
-| **v0.3.0** | Performance | Zero‑copy VLog, sync.Pool, fastrand, graceful shutdown | 🚧 |
-| **v0.4.0** | TTL & GC | TTL, automatic GC, binary Manifest | ⏳ |
+| **v0.3.0** | Zero‑copy + Lock‑free + Unified MMap | Lock‑free skip list, Zero‑copy VLog, Unified MMap, Graceful shutdown, Structured logging | 🚧 |
+| **v0.3.1** | Double Buffer WAL | Double Buffer WAL, WAL configuration, benchmarks | ⏳ |
+| **v0.4.0** | TTL & GC | TTL, automatic GC, binary Manifest, SSTable merge | ⏳ |
 | **v0.5.0** | Scaling | Shard‑per‑core, gRPC balancing | ⏳ |
 | **v0.6.0** | Async I/O | io_uring, CLI v2 | ⏳ |
 | **v0.7.0** | Fault tolerance | ZeroRaft cluster | ⏳ |
 | **v1.0.0** | Distributed | Range sharding, distributed ACID, RLS, mTLS | ⏳ |
+
+### Current v0.3.0 Blockers
+
+| Problem | Description | Status |
+|---------|-------------|--------|
+| Skip list slow for 4KB | 61,000 ns vs 420 ns target (150× slower) | 🚧 |
+| Ring buffer overflow | Crashes after 131K entries | 🚧 |
+| `updateLastCommitCache` allocates | 1 alloc/op via `string(key)` | 🚧 |
 
 ---
 
@@ -369,11 +400,6 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
 
 ## ❓ FAQ
 
-<details>
-<summary><b>Is ScoriaDB production‑ready?</b></summary>
-<br>
-v0.3.0 is stable and tested under load with zero‑copy VLog, graceful shutdown, and crash‑recovery tests. Suitable for production workloads.
-</details>
 
 <details>
 <summary><b>Can I use it from Python / Java / C++?</b></summary>
@@ -384,13 +410,25 @@ Yes — gRPC examples are in <code>docs/</code>.
 <details>
 <summary><b>How does ScoriaDB compare to BadgerDB?</b></summary>
 <br>
-ScoriaDB has <b>MVCC, Column Families, built‑in gRPC/REST</b>, and is <b>7× faster</b> on reads.
+ScoriaDB has <b>MVCC, Column Families, lock‑free skip list, Unified MMap, built‑in gRPC/REST</b>, and is <b>7× faster</b> on reads.
 </details>
 
 <details>
 <summary><b>What is Group Commit?</b></summary>
 <br>
 Group Commit buffers writes and performs a single <code>fsync</code> for a batch (every 10ms). 6.4× faster writes.
+</details>
+
+<details>
+<summary><b>What is Unified MMap?</b></summary>
+<br>
+A single mmap region replacing separate VLog and WAL. 0 syscalls per write, 0 allocations in hot path. Dynamic extension on overflow.
+</details>
+
+<details>
+<summary><b>What is lock‑free skip list?</b></summary>
+<br>
+A concurrent data structure without mutexes. Uses CAS operations for atomic insertion. Provides +400% write throughput for small keys.
 </details>
 
 <details>

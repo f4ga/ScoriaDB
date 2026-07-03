@@ -22,7 +22,6 @@ scoria
 scoria-server
 scoria-cli
 server
-cli
 sstable.test
 engine.test
 *.so
@@ -189,7 +188,6 @@ models/
 outputs/
 logs/
 mlruns/
-benchmarks/
 
 # Frontend build
 node_modules/

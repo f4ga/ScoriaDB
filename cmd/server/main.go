@@ -16,13 +16,17 @@ package main
 
 import (
 	"log"
+	"net"
 	"net/http"
 	"os"
 
+	grpcapi "github.com/f4ga/ScoriaDB/internal/api/grpc"
 	"github.com/f4ga/ScoriaDB/internal/api/rest"
 	"github.com/f4ga/ScoriaDB/internal/auth"
 	"github.com/f4ga/ScoriaDB/internal/errors"
 	"github.com/f4ga/ScoriaDB/pkg/scoria"
+	"github.com/f4ga/ScoriaDB/scoriadb/proto"
+	"google.golang.org/grpc"
 )
 
 func main() {
@@ -54,6 +58,35 @@ func main() {
 
 	ensureAdminUser(db)
 
+	// ====== gRPC SERVER ======
+	grpcSrv := grpc.NewServer(
+		grpc.UnaryInterceptor(auth.AuthInterceptor(jwtSecret, map[string]bool{
+			"/scoriadb.ScoriaDB/Authenticate": true,
+		})),
+	)
+	proto.RegisterScoriaDBServer(grpcSrv, grpcapi.NewServer(db, jwtSecret))
+
+	lis, err := net.Listen("tcp", ":50051")
+	if err != nil {
+		log.Printf("[SERVER] ERROR: failed to listen on :50051: %v", err)
+		log.Printf("[SERVER] WARNING: gRPC server disabled due to listen error")
+		// Не падаем, продолжаем работу с REST
+	} else {
+		go func() {
+			log.Printf("[SERVER] gRPC server starting on :50051")
+			if err := grpcSrv.Serve(lis); err != nil {
+				log.Printf("[SERVER] ERROR: gRPC server failed: %v", err)
+			}
+		}()
+	}
+	go func() {
+		log.Printf("[SERVER] gRPC server starting on :50051")
+		if err := grpcSrv.Serve(lis); err != nil {
+			log.Fatalf("[SERVER] gRPC server failed: %v", err)
+		}
+	}()
+
+	// ====== REST SERVER ======
 	restServer := rest.NewServer(db, jwtSecret)
 
 	skipPaths := map[string]bool{

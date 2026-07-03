@@ -120,3 +120,88 @@ func benchmarkWALWriteParallel(b *testing.B, groupCommit bool) {
 		}
 	}
 }
+
+// BenchmarkWALWriteWithFlush_GroupCommit измеряет полный цикл: запись + flush.
+// В отличие от BenchmarkWALWrite_GroupCommit, этот бенчмарк принудительно вызывает
+// Flush() после каждой записи, что имитирует синхронный режим, но через механизм
+// группового коммита. Это позволяет корректно сравнить производительность
+// синхронного режима и группового коммита с учётом времени fsync.
+func BenchmarkWALWriteWithFlush_GroupCommit(b *testing.B) {
+	dir := b.TempDir()
+	path := filepath.Join(dir, "wal.log")
+
+	opts := DefaultWALOptions()
+	opts.GroupCommitEnabled = true
+	opts.GroupCommitInterval = 100 * time.Millisecond // большой интервал, чтобы flush не срабатывал автоматически
+
+	wal, err := OpenWALWithOptions(path, opts)
+	if err != nil {
+		b.Fatalf("failed to open wal: %v", err)
+	}
+	defer errors.CloseWithFatal(wal, "wal")
+
+	entry := &WalEntry{
+		Op:        OpPut,
+		Key:       []byte("test-key"),
+		Value:     []byte("test-value"),
+		Timestamp: 1,
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		entry.Timestamp = uint64(i) + 1
+		if err := wal.Write(entry); err != nil {
+			b.Fatalf("write failed: %v", err)
+		}
+		// Принудительный flush для каждой записи (имитация синхронного режима)
+		// В реальном Group Commit flush происходит раз в N записей
+		if err := wal.Flush(); err != nil {
+			b.Fatalf("flush failed: %v", err)
+		}
+	}
+	b.StopTimer()
+}
+
+// BenchmarkWALWriteBatch_GroupCommit измеряет батчевую запись с групповым коммитом.
+// Это реальный сценарий использования Group Commit: пишем батч записей,
+// затем один flush на весь батч. Бенчмарк показывает, сколько времени занимает
+// одна запись в среднем при групповом коммите с учётом времени fsync.
+func BenchmarkWALWriteBatch_GroupCommit(b *testing.B) {
+	dir := b.TempDir()
+	path := filepath.Join(dir, "wal.log")
+
+	opts := DefaultWALOptions()
+	opts.GroupCommitEnabled = true
+	opts.GroupCommitInterval = 10 * time.Millisecond
+
+	wal, err := OpenWALWithOptions(path, opts)
+	if err != nil {
+		b.Fatalf("failed to open wal: %v", err)
+	}
+	defer errors.CloseWithFatal(wal, "wal")
+
+	entry := &WalEntry{
+		Op:        OpPut,
+		Key:       []byte("test-key"),
+		Value:     []byte("test-value"),
+		Timestamp: 1,
+	}
+
+	// Пишем батчами по 100 записей
+	const batchSize = 100
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i += batchSize {
+		for j := 0; j < batchSize && i+j < b.N; j++ {
+			entry.Timestamp = uint64(i+j) + 1
+			if err := wal.Write(entry); err != nil {
+				b.Fatalf("write failed: %v", err)
+			}
+		}
+		// Один flush на батч
+		if err := wal.Flush(); err != nil {
+			b.Fatalf("flush failed: %v", err)
+		}
+	}
+	b.StopTimer()
+}
