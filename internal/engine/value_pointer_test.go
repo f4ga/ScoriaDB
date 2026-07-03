@@ -20,9 +20,10 @@ import (
 
 func TestEncodeDecodeValuePointer(t *testing.T) {
 	original := ValuePointer{Offset: 12345, Size: 6789}
-	encoded := encodeValuePointer(original)
+	var buf [12]byte
+	encodeValuePointer(original, buf[:])
 
-	decoded, ok := decodeValuePointer(encoded)
+	decoded, ok := decodeValuePointer(buf[:])
 	if !ok {
 		t.Fatal("decodeValuePointer failed")
 	}
@@ -49,8 +50,9 @@ func TestDecodeValuePointerInvalid(t *testing.T) {
 
 func TestValuePointerZero(t *testing.T) {
 	vp := ValuePointer{Offset: 0, Size: 0}
-	encoded := encodeValuePointer(vp)
-	decoded, ok := decodeValuePointer(encoded)
+	var buf [12]byte
+	encodeValuePointer(vp, buf[:])
+	decoded, ok := decodeValuePointer(buf[:])
 	if !ok {
 		t.Fatal("decodeValuePointer failed for zero pointer")
 	}

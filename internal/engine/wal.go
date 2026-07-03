@@ -283,13 +283,13 @@ func decodeWalEntry(r io.Reader) (*WalEntry, error) {
 	entry.Value = value
 	entry.Timestamp = timestamp
 
-	// Detect large values: if len(value) == 12, it might be a ValuePointer.
+	// Detect large values: if len(value) == ValuePointerSize, it might be a ValuePointer.
 	// The caller (LSMEngine) will know for sure from IsLarge flag.
 	// We store the flag in the entry during Write.
 	// For recovery, we need to detect it.
-	// We'll add a marker: if len(value) == 12 and it's a Put operation,
+	// We'll add a marker: if len(value) == ValuePointerSize and it's a Put operation,
 	// it's likely a ValuePointer. The caller will decode it.
-	if op == OpPut && len(value) == 12 {
+	if op == OpPut && len(value) == ValuePointerSize {
 		entry.IsLarge = true
 	}
 

@@ -15,17 +15,18 @@
 package engine
 
 import (
+	"github.com/f4ga/ScoriaDB/internal/engine/memtable"
 	"github.com/f4ga/ScoriaDB/internal/logger"
 	"github.com/f4ga/ScoriaDB/internal/mvcc"
 )
 
 // recoverFromWAL recovers the database state from WAL.
-func recoverFromWAL(wal *WAL, memTable *MemTable, vlog *VLogImpl) error {
+func recoverFromWAL(wal *WAL, memTable *memtable.MemTable, vlog *VLogImpl) error {
 	return wal.Recover(func(entry *WalEntry) error {
 		switch entry.Op {
 		case OpPut:
 			mvccKey := mvcc.NewMVCCKey(entry.Key, entry.Timestamp)
-			if len(entry.Value) == 12 {
+			if len(entry.Value) == ValuePointerSize {
 				if vp, ok := decodeValuePointer(entry.Value); ok {
 					if vp.Offset < 0 || vp.Size <= 0 || vp.Offset+int64(vp.Size)+8 > vlog.Size() {
 						logger.Warn("wal: skipping entry with invalid VLog pointer offset=%d size=%d vlogSize=%d",
@@ -50,7 +51,7 @@ func recoverFromWAL(wal *WAL, memTable *MemTable, vlog *VLogImpl) error {
 					memTable.Put(mvccKey, nil)
 					continue
 				}
-				if len(op.Value) == 12 {
+				if len(op.Value) == ValuePointerSize {
 					if vp, ok := decodeValuePointer(op.Value); ok {
 						if vp.Offset < 0 || vp.Size <= 0 || vp.Offset+int64(vp.Size)+8 > vlog.Size() {
 							logger.Warn("wal: skipping batch entry with invalid VLog pointer offset=%d size=%d vlogSize=%d",

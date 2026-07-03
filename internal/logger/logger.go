@@ -38,10 +38,29 @@ const (
 	ERROR
 )
 
+// Component defines the subsystem that is logging.
+type Component string
+
+const (
+	ComponentEngine     Component = "engine"
+	ComponentCompaction Component = "compaction"
+	ComponentFlush      Component = "flush"
+	ComponentWAL        Component = "wal"
+	ComponentVLog       Component = "vlog"
+	ComponentAPI        Component = "api"
+	ComponentAuth       Component = "auth"
+)
+
 var (
 	currentLevel = INFO
 	component    = "scoriadb"
 )
+
+// skipInfoComponents defines which components should NOT log at INFO level.
+var skipInfoComponents = map[Component]bool{
+	ComponentCompaction: true,
+	ComponentFlush:      true,
+}
 
 func init() {
 	// Check LOG_LEVEL environment variable on startup.
@@ -93,6 +112,29 @@ func logMessage(level Level, levelStr string, format string, args ...interface{}
 	}
 }
 
+// logMessageWithComponent writes a formatted log message with level, component, source location.
+func logMessageWithComponent(level Level, comp Component, levelStr string, format string, args ...interface{}) {
+	if level < currentLevel {
+		return
+	}
+	// Skip INFO-level logs for components in the skip list.
+	if level == INFO && skipInfoComponents[comp] {
+		return
+	}
+	msg := fmt.Sprintf(format, args...)
+
+	_, file, line, ok := runtime.Caller(2)
+	if ok {
+		parts := strings.Split(file, "/")
+		if len(parts) > 3 {
+			file = strings.Join(parts[len(parts)-3:], "/")
+		}
+		log.Printf("[%s] [%s] %s:%d: %s", component, levelStr, file, line, msg)
+	} else {
+		log.Printf("[%s] [%s] %s", component, levelStr, msg)
+	}
+}
+
 // Debug logs a message at DEBUG level.
 func Debug(format string, args ...interface{}) {
 	logMessage(DEBUG, "DEBUG", format, args...)
@@ -117,6 +159,26 @@ func Error(format string, args ...interface{}) {
 func Fatal(format string, args ...interface{}) {
 	logMessage(ERROR, "FATAL", format, args...)
 	os.Exit(1)
+}
+
+// DebugComponent logs a message at DEBUG level for a specific component.
+func DebugComponent(comp Component, format string, args ...interface{}) {
+	logMessageWithComponent(DEBUG, comp, "DEBUG", format, args...)
+}
+
+// InfoComponent logs a message at INFO level for a specific component.
+func InfoComponent(comp Component, format string, args ...interface{}) {
+	logMessageWithComponent(INFO, comp, "INFO", format, args...)
+}
+
+// WarnComponent logs a message at WARN level for a specific component.
+func WarnComponent(comp Component, format string, args ...interface{}) {
+	logMessageWithComponent(WARN, comp, "WARN", format, args...)
+}
+
+// ErrorComponent logs a message at ERROR level for a specific component.
+func ErrorComponent(comp Component, format string, args ...interface{}) {
+	logMessageWithComponent(ERROR, comp, "ERROR", format, args...)
 }
 
 // ErrorfWithContext wraps an error with additional context, producing

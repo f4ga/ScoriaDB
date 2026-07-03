@@ -322,7 +322,7 @@ func TestGroupCommitWriterFlushLockedError(t *testing.T) {
 	}
 	defer f.Close()
 
-	gcw := newGroupCommitWriter(f, 10*time.Millisecond)
+	gcw := newGroupCommitWriter(f, 10*time.Millisecond, true)
 	defer gcw.Close()
 
 	// Write some data

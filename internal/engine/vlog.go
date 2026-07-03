@@ -616,20 +616,11 @@ func (v *VLogImpl) Shutdown(timeout time.Duration) error {
 	}
 }
 
-// Close — закрывает VLog.
+// Close — закрывает VLog немедленно.
+// В отличие от Shutdown, Close не ждёт освобождения активных view.
+// Вызывающий код должен гарантировать, что все view отпущены до вызова Close,
+// либо использовать Shutdown с таймаутом для graceful shutdown.
 func (v *VLogImpl) Close() error {
-	v.mu.Lock()
-	if v.closed {
-		v.mu.Unlock()
-		return nil
-	}
-	v.closing = true
-	v.mu.Unlock()
-
-	for atomic.LoadInt32(&v.refCount) > 0 {
-		// busy-wait — но это нормально, так как Close вызывается редко
-	}
-
 	v.mu.Lock()
 	defer v.mu.Unlock()
 
@@ -637,6 +628,7 @@ func (v *VLogImpl) Close() error {
 		return nil
 	}
 	v.closed = true
+
 	if err := syscall.Munmap(v.data); err != nil {
 		return fmt.Errorf("failed to munmap vlog: %w", err)
 	}
