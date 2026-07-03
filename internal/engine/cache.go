@@ -17,10 +17,25 @@
 // and background flush/compaction workers.
 package engine
 
+import "unsafe"
+
+// unsafeToString converts []byte to string without allocation.
+// WARNING: The returned string shares memory with the input byte slice.
+// Modifying the byte slice after conversion will corrupt the string.
+// This is safe for map lookups/updates where the key is not retained
+// beyond the caller's lifetime.
+//
+//go:nosplit
+//go:inline
+func unsafeToString(b []byte) string {
+	return *(*string)(unsafe.Pointer(&b))
+}
+
 // updateLastCommitCache updates the last commit timestamp cache for a key.
+// Uses unsafeToString to avoid string allocation from []byte.
 func (e *LSMEngine) updateLastCommitCache(key []byte, commitTS uint64) {
 	e.cacheMu.Lock()
-	e.lastCommitCache[string(key)] = commitTS
+	e.lastCommitCache[unsafeToString(key)] = commitTS
 	e.cacheMu.Unlock()
 }
 
@@ -28,6 +43,6 @@ func (e *LSMEngine) updateLastCommitCache(key []byte, commitTS uint64) {
 func (e *LSMEngine) getLastCommitCache(key []byte) (uint64, bool) {
 	e.cacheMu.RLock()
 	defer e.cacheMu.RUnlock()
-	ts, ok := e.lastCommitCache[string(key)]
+	ts, ok := e.lastCommitCache[unsafeToString(key)]
 	return ts, ok
 }

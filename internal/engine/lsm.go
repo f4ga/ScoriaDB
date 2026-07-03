@@ -23,6 +23,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/f4ga/ScoriaDB/internal/engine/memtable"
 	"github.com/f4ga/ScoriaDB/internal/engine/sstable"
 	"github.com/f4ga/ScoriaDB/internal/engine/vfs"
 	"github.com/f4ga/ScoriaDB/internal/errors"
@@ -38,8 +39,8 @@ const debugPerf = false
 type LSMEngine struct {
 	mu                  sync.RWMutex
 	dataDir             string
-	memTable            *MemTable
-	frozenMemTable      *MemTable
+	memTable            *memtable.MemTable
+	frozenMemTable      *memtable.MemTable
 	vlog                *VLogImpl
 	wal                 *WAL
 	unifiedMmap         *UnifiedMmap // unified mmap ring buffer (hot path)
@@ -109,7 +110,7 @@ func NewLSMEngine(dataDir string, opts ...WALOptions) (*LSMEngine, error) {
 		return nil, fmt.Errorf("failed to open unified mmap: %w", err)
 	}
 
-	memTable := NewMemTable()
+	memTable := memtable.NewMemTable()
 	lastTS := uint64(1)
 
 	levels := make([][]*sstable.Reader, 10)
@@ -290,16 +291,16 @@ func (e *LSMEngine) PutWithTS(key, value []byte, commitTS uint64) error {
 
 	// Encode stored value: either inline bytes or 12-byte ValuePointer
 	// Stack-allocated buffer — zero allocation
-	// NOTE: vpBuf is stack-allocated [12]byte. Using vpBuf[:] creates a slice
+	// NOTE: vpBuf is stack-allocated [ValuePointerSize]byte. Using vpBuf[:] creates a slice
 	// header that the compiler may move to heap. We use unsafe to prevent this.
-	var vpBuf [12]byte
+	var vpBuf [ValuePointerSize]byte
 	var storedValue []byte
 	if isLarge {
 		encodeValuePointer(vp, vpBuf[:])
 		// Use unsafe to create slice without causing vpBuf to escape to heap.
 		// The slice points to the stack-allocated array, and Put() copies the
 		// data into the arena, so the stack lifetime is sufficient.
-		storedValue = unsafe.Slice((*byte)(unsafe.Pointer(&vpBuf)), 12)
+		storedValue = unsafe.Slice((*byte)(unsafe.Pointer(&vpBuf)), ValuePointerSize)
 	} else {
 		storedValue = inlineValue
 	}
@@ -403,47 +404,14 @@ func (e *LSMEngine) GetLatestInfo(key []byte) ([]byte, uint64, error) {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 
-	// Helper: search MemTable with binary search (O(log N) + chain walk)
-	searchMemTable := func(mt *MemTable) ([]byte, uint64, bool) {
-		if mt == nil {
-			return nil, 0, false
-		}
-		// Use findGreaterOrEqual directly — O(log N) instead of O(N) iterator
-		searchKey := mvcc.MVCCKey{Key: key, Timestamp: mvcc.InvertTimestamp(0)}
-		node := mt.sl.findGreaterOrEqual(searchKey)
-		if node == nil {
-			return nil, 0, false
-		}
-		nodeKey := node.Key()
-		if !bytes.Equal(nodeKey.Key, key) {
-			return nil, 0, false
-		}
-
-		var bestValue []byte
-		var bestTS uint64
-		for node != nil {
-			nodeKey = node.Key()
-			if !bytes.Equal(nodeKey.Key, key) {
-				break
-			}
-			if !node.deleted.Load() {
-				commitTS := nodeKey.CommitTS()
-				if commitTS > bestTS {
-					bestTS = commitTS
-					bestValue = node.Value()
-				}
-			}
-			node = node.next[0].Load()
-		}
-		return bestValue, bestTS, bestValue != nil
-	}
-
-	val, ts, found := searchMemTable(e.memTable)
+	val, ts, found := e.memTable.GetLatest(key)
 	if found {
 		decoded, err := e.decodeStoredValue(val)
 		return decoded, ts, err
 	}
-	val, ts, found = searchMemTable(e.frozenMemTable)
+	if e.frozenMemTable != nil {
+		val, ts, found = e.frozenMemTable.GetLatest(key)
+	}
 	if found {
 		decoded, err := e.decodeStoredValue(val)
 		return decoded, ts, err
@@ -525,10 +493,10 @@ func (e *LSMEngine) DeleteWithTS(key []byte, commitTS uint64) error {
 }
 
 // ActiveMemTable returns the active MemTable.
-func (e *LSMEngine) ActiveMemTable() *MemTable { return e.memTable }
+func (e *LSMEngine) ActiveMemTable() *memtable.MemTable { return e.memTable }
 
 // FrozenMemTable returns the frozen MemTable.
-func (e *LSMEngine) FrozenMemTable() *MemTable { return e.frozenMemTable }
+func (e *LSMEngine) FrozenMemTable() *memtable.MemTable { return e.frozenMemTable }
 
 // SetMinActiveSnapshotTS sets the minimum active snapshot timestamp.
 func (e *LSMEngine) SetMinActiveSnapshotTS(ts uint64) {
@@ -648,4 +616,28 @@ func (e *LSMEngine) Close() error {
 	}
 	logger.Info("engine closed successfully")
 	return nil
+}
+
+// decodeStoredValue decodes a stored value (inline, VLog pointer, or unified mmap pointer).
+// Checks unified mmap first, then falls back to VLog.
+// Uses ReadDirect for zero-copy internal reads.
+func (e *LSMEngine) decodeStoredValue(stored []byte) ([]byte, error) {
+	if len(stored) == 0 {
+		return nil, nil
+	}
+	if vp, ok := decodeValuePointer(stored); ok {
+		if vp.Offset < 0 || vp.Size <= 0 {
+			return stored, nil
+		}
+		// Check unified mmap first (v0.3.1+ hot path)
+		if e.unifiedMmap != nil && vp.Offset < e.unifiedMmap.Size() {
+			return e.unifiedMmap.ReadValue(uint64(vp.Offset), vp.Size)
+		}
+		// Fall back to VLog (legacy path)
+		if vp.Offset+int64(vp.Size)+8 <= e.vlog.Size() {
+			return e.vlog.ReadDirect(vp)
+		}
+		return stored, nil
+	}
+	return stored, nil
 }

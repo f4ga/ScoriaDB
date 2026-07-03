@@ -17,9 +17,9 @@ package engine
 import (
 	"bytes"
 
-	"github.com/f4ga/ScoriaDB/internal/logger"
-
+	"github.com/f4ga/ScoriaDB/internal/engine/memtable"
 	"github.com/f4ga/ScoriaDB/internal/engine/sstable"
+	"github.com/f4ga/ScoriaDB/internal/logger"
 	"github.com/f4ga/ScoriaDB/internal/mvcc"
 )
 
@@ -66,7 +66,7 @@ func (it *engineIteratorAdapter) Close() error {
 
 // memTableIteratorAdapter adapts MemTableIterator to sstable.Iterator.
 type memTableIteratorAdapter struct {
-	inner *MemTableIterator
+	inner *memtable.MemTableIterator
 }
 
 func (it *memTableIteratorAdapter) Next() bool {

@@ -17,6 +17,7 @@ package engine
 import (
 	"fmt"
 
+	"github.com/f4ga/ScoriaDB/internal/engine/memtable"
 	"github.com/f4ga/ScoriaDB/internal/logger"
 	"github.com/f4ga/ScoriaDB/internal/mvcc"
 )
@@ -30,7 +31,7 @@ func (e *LSMEngine) CollectLiveValuePointers() (map[ValuePointer]struct{}, error
 	defer e.mu.RUnlock()
 	livePointers := make(map[ValuePointer]struct{})
 	processValue := func(value []byte) {
-		if len(value) == 12 {
+		if len(value) == ValuePointerSize {
 			if vp, ok := decodeValuePointer(value); ok {
 				livePointers[vp] = struct{}{}
 			}
@@ -71,7 +72,7 @@ func (e *LSMEngine) InvalidateVLogPointers() {
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	processTable := func(mt *MemTable) {
+	processTable := func(mt *memtable.MemTable) {
 		iter := mt.NewIterator()
 		defer iter.Close()
 		var toDelete []mvcc.MVCCKey

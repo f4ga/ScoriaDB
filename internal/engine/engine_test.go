@@ -544,8 +544,9 @@ func TestMemTableClose(t *testing.T) {
 func TestEncodeDecodeValuePointerEdgeCases(t *testing.T) {
 	// Max values
 	vp := ValuePointer{Offset: 1<<63 - 1, Size: 1<<31 - 1}
-	encoded := encodeValuePointer(vp)
-	decoded, ok := decodeValuePointer(encoded)
+	var buf [12]byte
+	encodeValuePointer(vp, buf[:])
+	decoded, ok := decodeValuePointer(buf[:])
 	if !ok {
 		t.Fatal("decodeValuePointer failed for max values")
 	}
@@ -639,21 +640,6 @@ func TestActiveFrozenMemTable(t *testing.T) {
 	}
 }
 
-func TestReadVLogValue(t *testing.T) {
-	dir := t.TempDir()
-	eng, err := NewLSMEngine(dir)
-	if err != nil {
-		t.Fatalf("failed to create engine: %v", err)
-	}
-	defer errors.CloseWithFatal(eng, "engine")
-
-	// ReadVLogValue with invalid parameters should not panic
-	_, err = eng.ReadVLogValue(0, 0)
-	if err != nil {
-		t.Logf("ReadVLogValue(0,0) returned expected error: %v", err)
-	}
-}
-
 func TestDefaultEngineOptions(t *testing.T) {
 	dir := t.TempDir()
 	opts := DefaultEngineOptions(dir)
@@ -697,7 +683,7 @@ func TestGroupCommitWriterError(t *testing.T) {
 	}
 	defer f.Close()
 
-	gcw := newGroupCommitWriter(f, 10*time.Millisecond)
+	gcw := newGroupCommitWriter(f, 10*time.Millisecond, true)
 	defer gcw.Close()
 
 	// Error should be nil initially
@@ -1188,21 +1174,6 @@ func TestRegisterSnapshotEdgeCases(t *testing.T) {
 	eng.UnregisterSnapshot(50)
 	if min := eng.GetMinActiveSnapshotTS(); min != 0 {
 		t.Errorf("expected min 0 after unregister, got %d", min)
-	}
-}
-
-func TestReadVLogValueErrors(t *testing.T) {
-	dir := t.TempDir()
-	eng, err := NewLSMEngine(dir)
-	if err != nil {
-		t.Fatalf("failed to create engine: %v", err)
-	}
-	defer errors.CloseWithFatal(eng, "engine")
-
-	// ReadVLogValue with zero size should fail
-	_, err = eng.ReadVLogValue(0, 0)
-	if err == nil {
-		t.Error("expected error for zero size")
 	}
 }
 

@@ -16,8 +16,15 @@ package engine
 
 import (
 	"encoding/binary"
-	"fmt"
+	"unsafe"
 )
+
+// ValuePointerSize is the encoded size of a ValuePointer in bytes.
+// Computed as unsafe.Sizeof(int64(0)) + unsafe.Sizeof(int32(0)) = 8 + 4 = 12 bytes.
+// Using unsafe.Sizeof makes the relationship to the struct fields explicit:
+//   - Offset int64 → unsafe.Sizeof(int64(0)) bytes
+//   - Size   int32 → unsafe.Sizeof(int32(0)) bytes
+const ValuePointerSize = int(unsafe.Sizeof(int64(0)) + unsafe.Sizeof(int32(0))) // 12 bytes
 
 // ValuePointer points to a value in the Value Log.
 type ValuePointer struct {
@@ -25,53 +32,23 @@ type ValuePointer struct {
 	Size   int32
 }
 
-// encodeValuePointer encodes a ValuePointer into 12 bytes.
-func encodeValuePointer(vp ValuePointer) []byte {
-	buf := make([]byte, 12)
+// encodeValuePointer encodes a ValuePointer into buf (must be at least ValuePointerSize bytes).
+// Returns the number of bytes written. Zero allocations.
+// buf length is NOT checked in hot path — caller must ensure capacity.
+//
+//go:inline
+func encodeValuePointer(vp ValuePointer, buf []byte) int {
 	binary.BigEndian.PutUint64(buf[0:8], uint64(vp.Offset))
-	binary.BigEndian.PutUint32(buf[8:12], uint32(vp.Size))
-	return buf
+	binary.BigEndian.PutUint32(buf[8:ValuePointerSize], uint32(vp.Size))
+	return ValuePointerSize
 }
 
-// decodeValuePointer decodes 12 bytes into a ValuePointer.
+// decodeValuePointer decodes ValuePointerSize bytes into a ValuePointer.
 func decodeValuePointer(data []byte) (ValuePointer, bool) {
-	if len(data) != 12 {
+	if len(data) != ValuePointerSize {
 		return ValuePointer{}, false
 	}
 	offset := binary.BigEndian.Uint64(data[0:8])
-	size := binary.BigEndian.Uint32(data[8:12])
+	size := binary.BigEndian.Uint32(data[8:ValuePointerSize])
 	return ValuePointer{Offset: int64(offset), Size: int32(size)}, true
-}
-
-// ReadVLogValue reads a value from VLog by fileID and offset.
-func (e *LSMEngine) ReadVLogValue(fileID uint64, offset uint32) ([]byte, error) {
-	if e.vlog == nil {
-		return nil, fmt.Errorf("vlog not initialized")
-	}
-	vp := ValuePointer{Offset: int64(fileID), Size: int32(offset)}
-	return e.vlog.Read(vp)
-}
-
-// ReadVLogView returns a zero-copy VLogView for the given fileID and offset.
-// The caller MUST call Release() on the returned view when done.
-func (e *LSMEngine) ReadVLogView(fileID uint64, offset uint32) (*VLogView, error) {
-	if e.vlog == nil {
-		return nil, fmt.Errorf("vlog not initialized")
-	}
-	vp := ValuePointer{Offset: int64(fileID), Size: int32(offset)}
-	return e.vlog.ReadView(vp)
-}
-
-// decodeStoredValue decodes a stored value (inline or VLog pointer).
-func (e *LSMEngine) decodeStoredValue(stored []byte) ([]byte, error) {
-	if len(stored) == 0 {
-		return nil, nil
-	}
-	if vp, ok := decodeValuePointer(stored); ok {
-		if vp.Offset < 0 || vp.Size <= 0 || vp.Offset+int64(vp.Size)+8 > e.vlog.Size() {
-			return stored, nil
-		}
-		return e.vlog.Read(vp)
-	}
-	return stored, nil
 }

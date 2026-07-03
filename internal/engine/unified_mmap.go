@@ -241,7 +241,7 @@ func (um *UnifiedMmap) ReadEntry(offset uint64) (*WalEntry, error) {
 	entry.Key = key
 	entry.Value = value
 	entry.Timestamp = timestamp
-	if op == OpPut && len(value) == 12 {
+	if op == OpPut && len(value) == ValuePointerSize {
 		entry.IsLarge = true
 	}
 
