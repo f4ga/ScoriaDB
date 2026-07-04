@@ -18,7 +18,6 @@
 package memtable
 
 import (
-	"runtime"
 	"sync"
 	"sync/atomic"
 	"unsafe"
@@ -40,55 +39,62 @@ const (
 	maxEpochs = 3 // 0, 1, 2 — active, previous, old
 )
 
+// goid returns the current goroutine ID via runtime.goid.
+// Uses //go:linkname for zero-allocation, sub-10ns performance.
+// See: BL-08, PERF-01
+//
+//go:linkname goid runtime.goid
+func goid() uint64
+
 // EpochManager manages epoch-based reclamation of nodes.
 type EpochManager struct {
 	global  atomic.Int64
-	threads sync.Map // goroutineID → epoch
+	threads map[uint64]int64 // goroutineID → epoch, protected by mu
+	mu      sync.RWMutex
 	retired [maxEpochs][]unsafe.Pointer
-	mu      sync.Mutex
+	cleanMu sync.Mutex
 	counter int64
 }
 
-// getGoroutineID returns a unique identifier for the current goroutine.
-func getGoroutineID() uint64 {
-	var buf [64]byte
-	n := runtime.Stack(buf[:], false)
-	var id uint64
-	for i := 0; i < n; i++ {
-		if buf[i] == ' ' {
-			for j := i + 1; j < n; j++ {
-				if buf[j] >= '0' && buf[j] <= '9' {
-					id = id*10 + uint64(buf[j]-'0')
-				} else {
-					return id
-				}
-			}
-			return id
-		}
+// NewEpochManager creates a new EpochManager.
+func NewEpochManager() *EpochManager {
+	return &EpochManager{
+		threads: make(map[uint64]int64, 64), // pre-allocate for typical concurrency
 	}
-	return 0
 }
 
 // EnterEpoch registers the current goroutine in the current global epoch.
 // Returns the epoch number.
+// Zero allocations in hot path.
+// See: BL-09, PERF-01
 func (em *EpochManager) EnterEpoch() int64 {
-	id := getGoroutineID()
+	id := goid()
 	epoch := em.global.Load()
-	em.threads.Store(id, epoch)
+
+	em.mu.Lock()
+	em.threads[id] = epoch
+	em.mu.Unlock()
+
 	return epoch
 }
 
 // ExitEpoch removes the current goroutine from the epoch mapping.
+// Zero allocations in hot path.
+// See: BL-09, PERF-01
 func (em *EpochManager) ExitEpoch() {
-	id := getGoroutineID()
-	em.threads.Delete(id)
+	id := goid()
+
+	em.mu.Lock()
+	delete(em.threads, id)
+	em.mu.Unlock()
 }
 
 // Retire adds a node pointer to the retirement list for the current epoch.
 // The node will be freed once no thread is in its epoch.
 func (em *EpochManager) Retire(ptr unsafe.Pointer) {
-	em.mu.Lock()
-	defer em.mu.Unlock()
+	em.cleanMu.Lock()
+	defer em.cleanMu.Unlock()
+
 	epoch := em.global.Load() % maxEpochs
 	em.retired[epoch] = append(em.retired[epoch], ptr)
 
@@ -100,16 +106,16 @@ func (em *EpochManager) Retire(ptr unsafe.Pointer) {
 }
 
 // cleanLocked frees all nodes whose epoch is no longer active.
-// Must be called with em.mu held.
+// Must be called with em.cleanMu held.
 func (em *EpochManager) cleanLocked() {
-	// Collect active epochs
+	// Collect active epochs from threads map
 	activeEpochs := make(map[int64]struct{})
-	em.threads.Range(func(_, value any) bool {
-		if epoch, ok := value.(int64); ok {
-			activeEpochs[epoch] = struct{}{}
-		}
-		return true
-	})
+
+	em.mu.RLock()
+	for _, epoch := range em.threads {
+		activeEpochs[epoch] = struct{}{}
+	}
+	em.mu.RUnlock()
 
 	// Free nodes in epochs that have no active threads
 	for epoch := 0; epoch < maxEpochs; epoch++ {
@@ -126,8 +132,8 @@ func (em *EpochManager) cleanLocked() {
 
 // Clean triggers a cleanup of retired nodes.
 func (em *EpochManager) Clean() {
-	em.mu.Lock()
-	defer em.mu.Unlock()
+	em.cleanMu.Lock()
+	defer em.cleanMu.Unlock()
 	em.cleanLocked()
 }
 
