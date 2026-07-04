@@ -39,6 +39,10 @@ import (
 // Large enough to amortize grow() calls, small enough for tests.
 const ArenaBlockSize = 64 * 1024 * 1024 // 64 MB
 
+// arenaAlignment is the required alignment for atomic operations on pointers.
+// atomic.Pointer requires 8-byte alignment on all supported platforms.
+const arenaAlignment = 8
+
 // Arena is a linear, grow-only allocator.
 // Allocations are lock-free in the common case (CAS on head).
 // Only block expansion acquires a mutex.
@@ -82,6 +86,12 @@ func NewArena() *Arena {
 //
 //go:nosplit
 func (a *Arena) Alloc(size int) unsafe.Pointer {
+	// Align size to 8 bytes for atomic.Pointer safety.
+	// atomic.Pointer requires 8-byte alignment; without this,
+	// checkptr panics on misaligned atomic operations.
+	// See: checkptr: misaligned pointer conversion
+	alignedSize := (size + arenaAlignment - 1) & ^(arenaAlignment - 1)
+
 	for {
 		// Step 1: Read head atomically (no mutex)
 		currentHead := atomic.LoadUint64(&a.head)
@@ -91,7 +101,7 @@ func (a *Arena) Alloc(size int) unsafe.Pointer {
 		blockIdx := a.blockIdx
 		if blockIdx >= len(a.blocks) {
 			a.mu.Unlock()
-			a.grow(size)
+			a.grow(alignedSize)
 			continue
 		}
 		block := a.blocks[blockIdx]
@@ -99,9 +109,9 @@ func (a *Arena) Alloc(size int) unsafe.Pointer {
 		a.mu.Unlock()
 
 		// Step 3: Check if allocation fits
-		if currentHead+uint64(size) <= blockLen {
+		if currentHead+uint64(alignedSize) <= blockLen {
 			// Step 4: CAS-reserve the space (no mutex)
-			if atomic.CompareAndSwapUint64(&a.head, currentHead, currentHead+uint64(size)) {
+			if atomic.CompareAndSwapUint64(&a.head, currentHead, currentHead+uint64(alignedSize)) {
 				return unsafe.Pointer(&block[currentHead])
 			}
 			// CAS failed — another thread reserved space, retry
@@ -109,7 +119,7 @@ func (a *Arena) Alloc(size int) unsafe.Pointer {
 		}
 
 		// Step 5: Not enough space — grow (under mutex)
-		a.grow(size)
+		a.grow(alignedSize)
 	}
 }
 

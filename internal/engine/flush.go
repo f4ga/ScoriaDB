@@ -18,7 +18,9 @@ import (
 	"bytes"
 	"fmt"
 	"path/filepath"
+	"sync/atomic"
 
+	"github.com/f4ga/ScoriaDB/internal/engine/memtable"
 	"github.com/f4ga/ScoriaDB/internal/engine/sstable"
 	"github.com/f4ga/ScoriaDB/internal/errors"
 	"github.com/f4ga/ScoriaDB/internal/logger"
@@ -132,10 +134,11 @@ func (e *LSMEngine) flushMemTable() error {
 	// Add reader to level 0
 	e.levels[0] = append(e.levels[0], reader)
 
-	// Reset MemTable (in reality we should create a new empty MemTable)
-	// For now leave as is - MemTable clearing will happen after successful flush
-	// e.memTable = NewMemTable()
-	// e.memSize = 0
+	// CRITICAL: Create new MemTable after successful flush.
+	// This resets the active MemTable for new writes.
+	// See: BLD-06, ARCH-03
+	e.memTable = memtable.NewMemTable()
+	atomic.StoreInt64(&e.memSize, 0)
 
 	return nil
 }

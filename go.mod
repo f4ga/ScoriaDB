@@ -24,5 +24,3 @@ require (
 	golang.org/x/text v0.38.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260618152121-87f3d3e198d3 // indirect
 )
-
-replace github.com/f4ga/ScoriaDB => ./ScoriaDB
