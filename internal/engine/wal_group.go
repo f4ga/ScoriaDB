@@ -19,6 +19,8 @@ import (
 	"os"
 	"sync"
 	"time"
+
+	"github.com/f4ga/ScoriaDB/internal/logger"
 )
 
 const (
@@ -180,7 +182,9 @@ func (w *groupCommitWriter) syncLoop() {
 			}
 		case <-w.done:
 			// Final sync before exit
-			_ = w.file.Sync()
+			if err := w.file.Sync(); err != nil {
+				logger.Warn("wal_group: final sync failed: %v", err)
+			}
 			return
 		}
 	}

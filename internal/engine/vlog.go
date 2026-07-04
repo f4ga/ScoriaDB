@@ -149,7 +149,9 @@ func OpenVLog(vfs vfs.VFS, path string) (*VLogImpl, error) {
 	// READ-WRITE mmap (для записи через Write)
 	writeData, err := syscall.Mmap(int(osFile.Fd()), 0, int(mmapSize), syscall.PROT_READ|syscall.PROT_WRITE, syscall.MAP_SHARED)
 	if err != nil {
-		_ = syscall.Munmap(readData)
+		if munmapErr := syscall.Munmap(readData); munmapErr != nil {
+			logger.Warn("vlog: failed to munmap read data: %v", munmapErr)
+		}
 		errors.CloseWithLog(osFile, "vlog-osfile")
 		return nil, fmt.Errorf("failed to mmap vlog (write): %w", err)
 	}
@@ -259,7 +261,9 @@ func (v *VLogImpl) extendMmap(newDataSize int64) error {
 	oldWriteData := v.writeData
 	newWriteData, err := syscall.Mmap(int(v.file.Fd()), 0, int(newMmapSize), syscall.PROT_READ|syscall.PROT_WRITE, syscall.MAP_SHARED)
 	if err != nil {
-		_ = syscall.Munmap(newReadData)
+		if munmapErr := syscall.Munmap(newReadData); munmapErr != nil {
+			logger.Warn("vlog: failed to munmap new read data: %v", munmapErr)
+		}
 		return fmt.Errorf("failed to remap vlog (write): %w", err)
 	}
 	if err := syscall.Munmap(oldWriteData); err != nil {
@@ -547,7 +551,9 @@ func (v *VLogImpl) GC(livePointers map[ValuePointer]struct{}) (map[ValuePointer]
 	}
 	writeData, err := syscall.Mmap(int(newFile.Fd()), 0, int(newSize), syscall.PROT_READ|syscall.PROT_WRITE, syscall.MAP_SHARED)
 	if err != nil {
-		_ = syscall.Munmap(readData)
+		if munmapErr := syscall.Munmap(readData); munmapErr != nil {
+			logger.Warn("vlog: failed to munmap read data during gc: %v", munmapErr)
+		}
 		errors.CloseWithLog(newFile, "vlog-gc-newfile")
 		return nil, fmt.Errorf("failed to mmap write new vlog: %w", err)
 	}
@@ -606,11 +612,17 @@ func (v *VLogImpl) Shutdown(timeout time.Duration) error {
 		defer v.mu.Unlock()
 		if !v.closed {
 			v.closed = true
-			_ = syscall.Munmap(v.data)
-			_ = syscall.Munmap(v.writeData)
+			if munmapErr := syscall.Munmap(v.data); munmapErr != nil {
+				logger.Warn("vlog: failed to munmap data during force close: %v", munmapErr)
+			}
+			if munmapErr := syscall.Munmap(v.writeData); munmapErr != nil {
+				logger.Warn("vlog: failed to munmap writeData during force close: %v", munmapErr)
+			}
 			v.data = nil
 			v.writeData = nil
-			_ = v.file.Close()
+			if closeErr := v.file.Close(); closeErr != nil {
+				logger.Warn("vlog: failed to close file during force close: %v", closeErr)
+			}
 		}
 		return fmt.Errorf("shutdown timeout after %v", timeout)
 	}
