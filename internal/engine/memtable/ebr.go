@@ -12,9 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package memtable provides an in-memory table implementation using a lock-free
-// skip list with a linear arena allocator. It supports concurrent reads and writes
-// with zero heap allocations in the hot path.
 package memtable
 
 import (
@@ -24,128 +21,73 @@ import (
 )
 
 // ============================================================
-// Epoch-Based Reclamation (EBR)
+// EpochManager — Minimal EBR for Future Use
 // ============================================================
 //
-// EBR provides safe memory reclamation for lock-free data structures.
-// It works by dividing time into epochs. A node can only be freed
-// when no thread is in an epoch that might reference it.
+// In the current architecture, EBR is NOT needed for correctness:
+//   - Arena is grow-only: nodes are never freed until Reset()
+//   - Reset() is called when no goroutines are accessing the skip list
+//   - Delete() only sets a tombstone flag, the node remains in memory
 //
-// Threads announce their active epoch on entry and unannounce on exit.
-// Retired nodes are batched per epoch and freed when the epoch is
-// no longer active.
-
-const (
-	maxEpochs = 3 // 0, 1, 2 — active, previous, old
-)
-
-//go:linkname runtime_getg runtime.getg
-func runtime_getg() unsafe.Pointer
-
-// getGoroutineID returns the current goroutine ID.
-// Uses runtime.getg via //go:linkname — zero allocations, sub-10ns.
-// See: BL-08, PERF-01
+// EBR is kept as infrastructure for future use (e.g., node-level compaction).
+// EnterEpoch/ExitEpoch are no-ops — zero cost in the hot path.
+// Retire is also a no-op since arena memory is never reclaimed mid-session.
 //
-//go:nosplit
-func getGoroutineID() uint64 {
-	// runtime.getg() returns *g struct; goid is the first int64 field.
-	// This is stable across Go versions and avoids runtime.Stack overhead.
-	return uint64(*(*int64)(runtime_getg()))
-}
+// See: PROMPT-EBR-FIX-V2, ARCH-11, BL-02, GL-08
 
-// EpochManager manages epoch-based reclamation of nodes.
+const maxEpochs = 3
+
+// EpochManager manages epoch-based reclamation.
+// Currently a no-op placeholder — EnterEpoch/ExitEpoch cost nothing.
 type EpochManager struct {
-	global  atomic.Int64
-	threads map[uint64]int64 // goroutineID → epoch, protected by mu
-	mu      sync.RWMutex
-	retired [maxEpochs][]unsafe.Pointer
-	cleanMu sync.Mutex
-	counter int64
+	global    atomic.Int64
+	mu        sync.Mutex
+	retired   [maxEpochs][]unsafe.Pointer
+	counter   int64
+	threshold int64
 }
 
 // NewEpochManager creates a new EpochManager.
-func NewEpochManager() *EpochManager {
+func NewEpochManager(threshold int) *EpochManager {
 	return &EpochManager{
-		threads: make(map[uint64]int64, 64), // pre-allocate for typical concurrency
+		threshold: int64(threshold),
 	}
 }
 
-// EnterEpoch registers the current goroutine in the current global epoch.
-// Returns the epoch number.
-// Zero allocations in hot path.
-// See: BL-09, PERF-01
+// EnterEpoch is a no-op in the current architecture.
+// Arena is grow-only, so no memory reclamation happens during reads.
+// Zero cost in hot path.
+//
+//go:nosplit
 func (em *EpochManager) EnterEpoch() int64 {
-	id := getGoroutineID()
-	epoch := em.global.Load()
-
-	em.mu.Lock()
-	em.threads[id] = epoch
-	em.mu.Unlock()
-
-	return epoch
+	return em.global.Load()
 }
 
-// ExitEpoch removes the current goroutine from the epoch mapping.
-// Zero allocations in hot path.
-// See: BL-09, PERF-01
+// ExitEpoch is a no-op in the current architecture.
+// Zero cost in hot path.
+//
+//go:nosplit
 func (em *EpochManager) ExitEpoch() {
-	id := getGoroutineID()
-
-	em.mu.Lock()
-	delete(em.threads, id)
-	em.mu.Unlock()
+	// no-op
 }
 
-// Retire adds a node pointer to the retirement list for the current epoch.
-// The node will be freed once no thread is in its epoch.
+// Retire is a no-op in the current architecture.
+// Arena memory is never reclaimed until Reset().
 func (em *EpochManager) Retire(ptr unsafe.Pointer) {
-	em.cleanMu.Lock()
-	defer em.cleanMu.Unlock()
-
-	epoch := em.global.Load() % maxEpochs
-	em.retired[epoch] = append(em.retired[epoch], ptr)
-
-	// Trigger cleanup every 1000 retirements
-	em.counter++
-	if em.counter%1000 == 0 {
-		em.cleanLocked()
-	}
+	// no-op: arena is grow-only, nodes are never freed mid-session
 }
 
-// cleanLocked frees all nodes whose epoch is no longer active.
-// Must be called with em.cleanMu held.
-func (em *EpochManager) cleanLocked() {
-	// Collect active epochs from threads map
-	activeEpochs := make(map[int64]struct{})
-
-	em.mu.RLock()
-	for _, epoch := range em.threads {
-		activeEpochs[epoch] = struct{}{}
-	}
-	em.mu.RUnlock()
-
-	// Free nodes in epochs that have no active threads
-	for epoch := 0; epoch < maxEpochs; epoch++ {
-		if _, active := activeEpochs[int64(epoch)]; active {
-			continue
-		}
-		// Release references so GC can collect them
-		for _, ptr := range em.retired[epoch] {
-			_ = (*Node)(ptr)
-		}
-		em.retired[epoch] = nil
-	}
-}
-
-// Clean triggers a cleanup of retired nodes.
+// Clean is a no-op in the current architecture.
 func (em *EpochManager) Clean() {
-	em.cleanMu.Lock()
-	defer em.cleanMu.Unlock()
-	em.cleanLocked()
+	// no-op
 }
 
-// AdvanceEpoch advances the global epoch and triggers cleanup.
+// AdvanceEpoch advances the global epoch.
 func (em *EpochManager) AdvanceEpoch() {
 	em.global.Add(1)
-	em.Clean()
+}
+
+// Stats returns the number of active slots and retired nodes (for monitoring).
+func (em *EpochManager) Stats() (active int, retired int) {
+	return 0, 0
 }

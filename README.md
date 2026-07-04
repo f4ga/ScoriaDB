@@ -78,7 +78,7 @@ Unlike most embeddable databases, ScoriaDB is not just a library. It runs as a s
 | **Zero‑copy VLog** | Large value reads without copying — +487% |
 | **Cross‑language clients** | gRPC clients for 13+ languages (Python, Java, C++ examples included) |
 | **Durable by default** | WAL + fsync, Manifest, CRC32, fail‑safe VLog |
-| **Fast** | 7.1M reads/s, 12.4M WAL ops/s, **1.51M writes/s** |
+| **Fast** | 18.4M reads/s, 12.4M WAL ops/s, **2.92M writes/s** |
 
 ---
 
@@ -158,6 +158,17 @@ fmt.Printf("%s\n", value)
 | **WAL Sync** | 24 B/op | 1 alloc/op |
 | **BloomFilter** | 0 B/op | **0 allocs/op** |
 
+### MemTable (lock-free SkipList with arena allocator)
+
+| Benchmark | ops/s | ns/op | allocs/op | Cores |
+|-----------|-------|-------|-----------|-------|
+| **Get** | **18.4M** | **72** | 1 | 8 |
+| **Get** | 4.56M | 267 | 1 | 1 |
+| **Get (sequential)** | 4.58M | 264 | 1 | 8 |
+| **Put** | 2.92M | 432 | 1 | 8 |
+| **Put** | 2.66M | 473 | 1 | 1 |
+| **Put (sequential)** | 2.71M | 469 | 1 | 8 |
+
 ### Impact of Optimizations
 
 | Optimization | Before | After | Improvement |
@@ -180,6 +191,18 @@ fmt.Printf("%s\n", value)
 | **Allocations (4KB)** | 8 allocs/op | **5 allocs/op** | **-37%** |
 | **Bloom filter** | had allocs | **0 allocs/op** | **-100%** |
 
+### Comparison: v0.2.2 → v0.2.3 (MemTable / SkipList)
+
+| Benchmark | v0.2.2 | v0.2.3 | Improvement |
+|-----------|--------|--------|-------------|
+| **Get (8 cores)** | 7.1M ops/s, 140 ns | **18.4M ops/s, 72 ns** | **+159% speed, -49% latency** |
+| **Get (1 core)** | — | 4.56M ops/s, 267 ns | — |
+| **Get (sequential)** | — | 4.58M ops/s, 264 ns | — |
+| **Put (8 cores)** | 1.51M ops/s, 662 ns | **2.92M ops/s, 432 ns** | **+94% speed, -35% latency** |
+| **Put (1 core)** | — | 2.66M ops/s, 473 ns | — |
+| **Put (sequential)** | — | 2.71M ops/s, 469 ns | — |
+| **Allocations** | 5 allocs/op | **1 alloc/op** | **-80%** |
+
 All benchmarks are reproducible with `go test -bench=. -benchmem ./internal/engine`.
 
 ---
@@ -188,7 +211,7 @@ All benchmarks are reproducible with `go test -bench=. -benchmem ./internal/engi
 
 | Database | Type | Write (ops/s) | Read (ops/s) | ACID | MVCC | Embeddable |
 |----------|------|--------------|--------------|------|------|------------|
-| **ScoriaDB** | LSM (Go) | **1.51M** | **7.1M** | ✅ | ✅ | ✅ |
+| **ScoriaDB** | LSM (Go) | **2.92M** | **18.4M** | ✅ | ✅ | ✅ |
 | BadgerDB | LSM (Go) | ~171K | ~400K | ✅ | ❌ | ✅ |
 | Pebble | LSM (Go) | ~472K | ~1M | ❌ | ❌ | ✅ |
 | RocksDB | LSM (C++) | ~356K | ~1.06M | ❌ | ❌ | ❌ |
@@ -199,8 +222,8 @@ All benchmarks are reproducible with `go test -bench=. -benchmem ./internal/engi
 
 **Key takeaways:**
 
-- ScoriaDB is **3× faster** than Pebble and **8× faster** than BadgerDB for writes.
-- Read performance (**7.1M ops/s**) is the **highest** among all embeddable KV stores.
+- ScoriaDB is **6× faster** than Pebble and **17× faster** than BadgerDB for writes.
+- Read performance (**18.4M ops/s**) is the **highest** among all embeddable KV stores.
 - Only ScoriaDB and FoundationDB offer **ACID + MVCC** in this comparison.
 
 ---

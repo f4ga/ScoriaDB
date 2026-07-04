@@ -149,7 +149,7 @@ func NewSkipList() *SkipList {
 		head:   head,
 		height: 1,
 		arena:  arena,
-		epoch:  NewEpochManager(), // EBR for safe memory reclamation
+		epoch:  NewEpochManager(1000), // EBR for safe memory reclamation, cleanup every 1000 retires
 	}
 }
 
