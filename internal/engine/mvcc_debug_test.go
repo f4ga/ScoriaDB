@@ -1,8 +1,23 @@
+// Copyright 2026 Ekaterina Godulyan
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package engine
 
 import (
 	"testing"
 
+	"github.com/f4ga/ScoriaDB/internal/engine/memtable"
 	"github.com/f4ga/ScoriaDB/internal/mvcc"
 )
 
@@ -10,7 +25,7 @@ import (
 // tombstone at commitTS=20, then query at snapshotTS=25 (should be deleted)
 // and snapshotTS=15 (should see v1).
 func TestMVCC_Tombstone_Debug(t *testing.T) {
-	mt := NewMemTable()
+	mt := memtable.NewMemTable()
 
 	key := []byte("testkey")
 
@@ -36,18 +51,17 @@ func TestMVCC_Tombstone_Debug(t *testing.T) {
 	val15, found15 := mt.Get(queryKey15)
 	t.Logf("[DEBUG] Query TS=15: Found? %v, Value= %q.", found15, string(val15))
 
-	// Step 5: Dump the entire level-0 chain for this key
+	// Step 5: Dump the entire level-0 chain for this key using the public iterator API
 	t.Logf("[DEBUG] Node chain for key %q:", key)
-	searchKey := mvcc.MVCCKey{Key: key, Timestamp: mvcc.InvertTimestamp(0)}
-	node := mt.sl.findGreaterOrEqual(searchKey)
-	for node != nil {
-		nk := node.Key()
-		if string(nk.Key) != string(key) {
-			break
+	iter := mt.NewIterator()
+	defer iter.Close()
+	for iter.Next() {
+		k := iter.Key()
+		if string(k.Key) != string(key) {
+			continue
 		}
-		commitTS := nk.CommitTS()
-		t.Logf("[DEBUG]   (TS=%d, Deleted=%v, Value=%q)", commitTS, node.deleted.Load(), string(node.Value()))
-		node = node.next[0].Load()
+		commitTS := k.CommitTS()
+		t.Logf("[DEBUG]   (TS=%d, Deleted=%v, Value=%q)", commitTS, iter.IsDeleted(), string(iter.Value()))
 	}
 
 	// Step 6: Assertions to catch the bug

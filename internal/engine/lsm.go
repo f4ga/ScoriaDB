@@ -296,7 +296,7 @@ func (e *LSMEngine) PutWithTS(key, value []byte, commitTS uint64) error {
 	var vpBuf [ValuePointerSize]byte
 	var storedValue []byte
 	if isLarge {
-		encodeValuePointer(vp, vpBuf[:])
+		EncodeValuePointer(vp, vpBuf[:])
 		// Use unsafe to create slice without causing vpBuf to escape to heap.
 		// The slice points to the stack-allocated array, and Put() copies the
 		// data into the arena, so the stack lifetime is sufficient.
@@ -625,7 +625,7 @@ func (e *LSMEngine) decodeStoredValue(stored []byte) ([]byte, error) {
 	if len(stored) == 0 {
 		return nil, nil
 	}
-	if vp, ok := decodeValuePointer(stored); ok {
+	if vp, ok := DecodeValuePointer(stored); ok {
 		if vp.Offset < 0 || vp.Size <= 0 {
 			return stored, nil
 		}
@@ -640,4 +640,7 @@ func (e *LSMEngine) decodeStoredValue(stored []byte) ([]byte, error) {
 		return stored, nil
 	}
 	return stored, nil
+}
+func (e *LSMEngine) ReadVLogView(vp *ValuePointer) (*VLogView, error) {
+	return e.vlog.ReadView(*vp)
 }

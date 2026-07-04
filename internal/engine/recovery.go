@@ -27,7 +27,7 @@ func recoverFromWAL(wal *WAL, memTable *memtable.MemTable, vlog *VLogImpl) error
 		case OpPut:
 			mvccKey := mvcc.NewMVCCKey(entry.Key, entry.Timestamp)
 			if len(entry.Value) == ValuePointerSize {
-				if vp, ok := decodeValuePointer(entry.Value); ok {
+				if vp, ok := DecodeValuePointer(entry.Value); ok {
 					if vp.Offset < 0 || vp.Size <= 0 || vp.Offset+int64(vp.Size)+8 > vlog.Size() {
 						logger.Warn("wal: skipping entry with invalid VLog pointer offset=%d size=%d vlogSize=%d",
 							vp.Offset, vp.Size, vlog.Size())
@@ -52,7 +52,7 @@ func recoverFromWAL(wal *WAL, memTable *memtable.MemTable, vlog *VLogImpl) error
 					continue
 				}
 				if len(op.Value) == ValuePointerSize {
-					if vp, ok := decodeValuePointer(op.Value); ok {
+					if vp, ok := DecodeValuePointer(op.Value); ok {
 						if vp.Offset < 0 || vp.Size <= 0 || vp.Offset+int64(vp.Size)+8 > vlog.Size() {
 							logger.Warn("wal: skipping batch entry with invalid VLog pointer offset=%d size=%d vlogSize=%d",
 								vp.Offset, vp.Size, vlog.Size())

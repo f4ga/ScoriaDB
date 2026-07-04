@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/f4ga/ScoriaDB/internal/engine/memtable"
 	"github.com/f4ga/ScoriaDB/internal/engine/vfs"
 	"github.com/f4ga/ScoriaDB/internal/errors"
 	"github.com/f4ga/ScoriaDB/internal/mvcc"
@@ -502,7 +503,7 @@ func TestDecodeStoredValue(t *testing.T) {
 }
 
 func TestMemTableDeleteWithTS(t *testing.T) {
-	mt := NewMemTable()
+	mt := memtable.NewMemTable()
 
 	key := []byte("delete_me")
 	mvccKey := mvcc.NewMVCCKey(key, 100)
@@ -535,7 +536,7 @@ func TestMemTableDeleteWithTS(t *testing.T) {
 }
 
 func TestMemTableClose(t *testing.T) {
-	mt := NewMemTable()
+	mt := memtable.NewMemTable()
 	mt.Put(mvcc.NewMVCCKey([]byte("key"), 1), []byte("val"))
 	// Close should not panic
 	mt.Close()
@@ -545,10 +546,10 @@ func TestEncodeDecodeValuePointerEdgeCases(t *testing.T) {
 	// Max values
 	vp := ValuePointer{Offset: 1<<63 - 1, Size: 1<<31 - 1}
 	var buf [12]byte
-	encodeValuePointer(vp, buf[:])
-	decoded, ok := decodeValuePointer(buf[:])
+	EncodeValuePointer(vp, buf[:])
+	decoded, ok := DecodeValuePointer(buf[:])
 	if !ok {
-		t.Fatal("decodeValuePointer failed for max values")
+		t.Fatal("DecodeValuePointer failed for max values")
 	}
 	if decoded.Offset != vp.Offset {
 		t.Errorf("Offset mismatch: %d vs %d", decoded.Offset, vp.Offset)
@@ -1178,7 +1179,7 @@ func TestRegisterSnapshotEdgeCases(t *testing.T) {
 }
 
 func TestMemTableIteratorKeyValue(t *testing.T) {
-	mt := NewMemTable()
+	mt := memtable.NewMemTable()
 
 	// Empty iterator
 	iter := mt.NewIterator()

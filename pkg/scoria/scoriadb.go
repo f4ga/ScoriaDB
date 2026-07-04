@@ -16,7 +16,6 @@ package scoria
 
 import (
 	"bytes"
-	"encoding/binary"
 	"fmt"
 	"math"
 	"sort"
@@ -24,6 +23,7 @@ import (
 
 	"github.com/f4ga/ScoriaDB/internal/cf"
 	"github.com/f4ga/ScoriaDB/internal/engine"
+	"github.com/f4ga/ScoriaDB/internal/engine/memtable"
 	"github.com/f4ga/ScoriaDB/internal/mvcc"
 	"github.com/f4ga/ScoriaDB/internal/txn"
 )
@@ -130,7 +130,6 @@ func (it *mergeIterator) Key() []byte {
 	}
 	return it.keys[it.index].Key
 }
-
 func (it *mergeIterator) Value() []byte {
 	if it.index < 0 || it.index >= len(it.rawValues) {
 		return nil
@@ -141,12 +140,15 @@ func (it *mergeIterator) Value() []byte {
 	}
 
 	raw := it.rawValues[it.index]
-	if len(raw) == 12 {
-		fileID := binary.BigEndian.Uint64(raw[0:8])
-		offset := binary.BigEndian.Uint32(raw[8:12])
+	if len(raw) == engine.ValuePointerSize {
+		vp, ok := engine.DecodeValuePointer(raw)
+		if !ok {
+			it.err = fmt.Errorf("failed to decode value pointer")
+			return nil
+		}
 
 		// zero-copy read using VLogView
-		view, err := it.engine.ReadVLogView(fileID, offset)
+		view, err := it.engine.ReadVLogView(&vp)
 		if err != nil {
 			it.err = err
 			return nil
@@ -194,7 +196,7 @@ func newMergeIterator(eng *engine.LSMEngine, prefix []byte) *mergeIterator {
 	latestKeys := make(map[string]mvcc.MVCCKey)
 	latestValues := make(map[string][]byte)
 
-	processMemTable := func(mt *engine.MemTable) {
+	processMemTable := func(mt *memtable.MemTable) {
 		if mt == nil {
 			return
 		}

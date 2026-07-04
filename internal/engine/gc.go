@@ -32,7 +32,7 @@ func (e *LSMEngine) CollectLiveValuePointers() (map[ValuePointer]struct{}, error
 	livePointers := make(map[ValuePointer]struct{})
 	processValue := func(value []byte) {
 		if len(value) == ValuePointerSize {
-			if vp, ok := decodeValuePointer(value); ok {
+			if vp, ok := DecodeValuePointer(value); ok {
 				livePointers[vp] = struct{}{}
 			}
 		}

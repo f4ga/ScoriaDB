@@ -21,11 +21,11 @@ import (
 func TestEncodeDecodeValuePointer(t *testing.T) {
 	original := ValuePointer{Offset: 12345, Size: 6789}
 	var buf [12]byte
-	encodeValuePointer(original, buf[:])
+	EncodeValuePointer(original, buf[:])
 
-	decoded, ok := decodeValuePointer(buf[:])
+	decoded, ok := DecodeValuePointer(buf[:])
 	if !ok {
-		t.Fatal("decodeValuePointer failed")
+		t.Fatal("DecodeValuePointer failed")
 	}
 
 	if decoded.Offset != original.Offset {
@@ -37,24 +37,24 @@ func TestEncodeDecodeValuePointer(t *testing.T) {
 }
 
 func TestDecodeValuePointerInvalid(t *testing.T) {
-	_, ok := decodeValuePointer([]byte{1, 2, 3})
+	_, ok := DecodeValuePointer([]byte{1, 2, 3})
 	if ok {
-		t.Error("decodeValuePointer should return false for short data")
+		t.Error("DecodeValuePointer should return false for short data")
 	}
 
-	_, ok = decodeValuePointer(nil)
+	_, ok = DecodeValuePointer(nil)
 	if ok {
-		t.Error("decodeValuePointer should return false for nil")
+		t.Error("DecodeValuePointer should return false for nil")
 	}
 }
 
 func TestValuePointerZero(t *testing.T) {
 	vp := ValuePointer{Offset: 0, Size: 0}
 	var buf [12]byte
-	encodeValuePointer(vp, buf[:])
-	decoded, ok := decodeValuePointer(buf[:])
+	EncodeValuePointer(vp, buf[:])
+	decoded, ok := DecodeValuePointer(buf[:])
 	if !ok {
-		t.Fatal("decodeValuePointer failed for zero pointer")
+		t.Fatal("DecodeValuePointer failed for zero pointer")
 	}
 	if decoded.Offset != 0 || decoded.Size != 0 {
 		t.Errorf("expected zero pointer, got %+v", decoded)

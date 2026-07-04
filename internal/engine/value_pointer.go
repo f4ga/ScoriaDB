@@ -32,19 +32,19 @@ type ValuePointer struct {
 	Size   int32
 }
 
-// encodeValuePointer encodes a ValuePointer into buf (must be at least ValuePointerSize bytes).
+// EncodeValuePointer encodes a ValuePointer into buf (must be at least ValuePointerSize bytes).
 // Returns the number of bytes written. Zero allocations.
 // buf length is NOT checked in hot path — caller must ensure capacity.
 //
 //go:inline
-func encodeValuePointer(vp ValuePointer, buf []byte) int {
+func EncodeValuePointer(vp ValuePointer, buf []byte) int {
 	binary.BigEndian.PutUint64(buf[0:8], uint64(vp.Offset))
 	binary.BigEndian.PutUint32(buf[8:ValuePointerSize], uint32(vp.Size))
 	return ValuePointerSize
 }
 
-// decodeValuePointer decodes ValuePointerSize bytes into a ValuePointer.
-func decodeValuePointer(data []byte) (ValuePointer, bool) {
+// DecodeValuePointer decodes ValuePointerSize bytes into a ValuePointer.
+func DecodeValuePointer(data []byte) (ValuePointer, bool) {
 	if len(data) != ValuePointerSize {
 		return ValuePointer{}, false
 	}
