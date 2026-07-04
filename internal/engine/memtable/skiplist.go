@@ -28,6 +28,9 @@
 //   - Manual memory management: arena grows, never frees until Reset
 // ============================================================
 
+// Package memtable provides an in-memory table implementation using a lock-free
+// skip list with a linear arena allocator. It supports concurrent reads and writes
+// with zero heap allocations in the hot path.
 package memtable
 
 import (
@@ -54,8 +57,10 @@ const (
 	// which is sufficient for billions of nodes.
 	MaxHeight = 20
 
-	// threshold = 0.25 * 0xFFFFFFFF — gives probability 1/4 per level
-	threshold = 1073741824
+	// threshold is the probability cutoff for generating a skip list level.
+	// Probability 1/4 per level: 0.25 * 0xFFFFFFFF.
+	// Computed explicitly so the relationship to the probability is clear.
+	threshold = uint32(0.25 * float32(0xFFFFFFFF))
 )
 
 // randomHeight generates a random height for a new node.

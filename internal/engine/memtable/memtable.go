@@ -12,6 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// Package memtable provides an in-memory table implementation using a lock-free
+// skip list with a linear arena allocator. It supports concurrent reads and writes
+// with zero heap allocations in the hot path.
 package memtable
 
 import (

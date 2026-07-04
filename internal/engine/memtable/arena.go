@@ -24,6 +24,9 @@
 //   - Zero GC pressure: all memory is off-heap from Go's perspective
 // ============================================================
 
+// Package memtable provides an in-memory table implementation using a lock-free
+// skip list with a linear arena allocator. It supports concurrent reads and writes
+// with zero heap allocations in the hot path.
 package memtable
 
 import (
