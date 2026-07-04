@@ -136,7 +136,8 @@ type SkipList struct {
 	height int32
 	length int64
 	arena  *Arena
-	mu     sync.Mutex // protects write operations (Put, Delete)
+	epoch  *EpochManager // EBR for safe memory reclamation in lock-free reads
+	mu     sync.Mutex    // protects write operations (Put, Delete)
 }
 
 // NewSkipList creates a new empty skip list with an arena allocator.
@@ -148,6 +149,7 @@ func NewSkipList() *SkipList {
 		head:   head,
 		height: 1,
 		arena:  arena,
+		epoch:  NewEpochManager(), // EBR for safe memory reclamation
 	}
 }
 
@@ -194,8 +196,11 @@ func (a *Arena) NewNode(key, value []byte, height int) *Node {
 }
 
 // findGreaterOrEqual returns the first node with key >= the given key.
-// Lock-free traversal for reads.
+// Lock-free traversal for reads, protected by EBR epoch.
+// See: GL-08, ARCH-11
 func (s *SkipList) findGreaterOrEqual(key mvcc.MVCCKey) *Node {
+	s.epoch.EnterEpoch()
+
 	x := s.head
 	level := atomic.LoadInt32(&s.height) - 1
 
@@ -226,15 +231,21 @@ func (s *SkipList) findGreaterOrEqual(key mvcc.MVCCKey) *Node {
 					fmt.Printf("[DEBUG] find: Returning nil (end of list)\n")
 				}
 			}
+			s.epoch.ExitEpoch()
 			return next
 		}
 		level--
 	}
+	s.epoch.ExitEpoch()
 	return nil
 }
 
 // findLast returns the last (maximum) node in the skip list.
+// Protected by EBR epoch for safe lock-free traversal.
+// See: GL-08, ARCH-11
 func (s *SkipList) findLast() *Node {
+	s.epoch.EnterEpoch()
+
 	x := s.head
 	level := atomic.LoadInt32(&s.height) - 1
 
@@ -242,6 +253,7 @@ func (s *SkipList) findLast() *Node {
 		next := x.next[level].Load()
 		if next == nil {
 			if level == 0 {
+				s.epoch.ExitEpoch()
 				return x
 			}
 			level--
@@ -249,6 +261,7 @@ func (s *SkipList) findLast() *Node {
 			x = next
 		}
 	}
+	s.epoch.ExitEpoch()
 	return x
 }
 
@@ -371,6 +384,7 @@ func (s *SkipList) Delete(key mvcc.MVCCKey) bool {
 	}
 
 	node.deleted.Store(true)
+	s.epoch.Retire(unsafe.Pointer(node)) // EBR: safe deferred reclamation
 	atomic.AddInt64(&s.length, -1)
 	return true
 }

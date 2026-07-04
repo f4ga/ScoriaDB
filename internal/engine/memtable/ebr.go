@@ -39,12 +39,19 @@ const (
 	maxEpochs = 3 // 0, 1, 2 — active, previous, old
 )
 
-// goid returns the current goroutine ID via runtime.goid.
-// Uses //go:linkname for zero-allocation, sub-10ns performance.
+//go:linkname runtime_getg runtime.getg
+func runtime_getg() unsafe.Pointer
+
+// getGoroutineID returns the current goroutine ID.
+// Uses runtime.getg via //go:linkname — zero allocations, sub-10ns.
 // See: BL-08, PERF-01
 //
-//go:linkname goid runtime.goid
-func goid() uint64
+//go:nosplit
+func getGoroutineID() uint64 {
+	// runtime.getg() returns *g struct; goid is the first int64 field.
+	// This is stable across Go versions and avoids runtime.Stack overhead.
+	return uint64(*(*int64)(runtime_getg()))
+}
 
 // EpochManager manages epoch-based reclamation of nodes.
 type EpochManager struct {
@@ -68,7 +75,7 @@ func NewEpochManager() *EpochManager {
 // Zero allocations in hot path.
 // See: BL-09, PERF-01
 func (em *EpochManager) EnterEpoch() int64 {
-	id := goid()
+	id := getGoroutineID()
 	epoch := em.global.Load()
 
 	em.mu.Lock()
@@ -82,7 +89,7 @@ func (em *EpochManager) EnterEpoch() int64 {
 // Zero allocations in hot path.
 // See: BL-09, PERF-01
 func (em *EpochManager) ExitEpoch() {
-	id := goid()
+	id := getGoroutineID()
 
 	em.mu.Lock()
 	delete(em.threads, id)
