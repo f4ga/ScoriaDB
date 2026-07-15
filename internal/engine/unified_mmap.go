@@ -46,7 +46,7 @@ import (
 	"fmt"
 	"hash/crc32"
 	"os"
-	"sync/atomic"
+	"sync"
 	"syscall"
 	"unsafe"
 
@@ -67,14 +67,17 @@ const (
 // UnifiedMmap is a single mmap-backed ring buffer for the hot write path.
 // It replaces both WAL and VLog writes in PutWithTS.
 //
-// Thread-safety: offset is managed via atomic.AddUint64.
-// Only extendMmap() acquires a mutex (rare, ~1 per 16K entries).
+// Thread-safety: WriteEntry is serialized via mu to prevent SIGBUS
+// when extendMmap remaps um.data during a write. The mutex is held
+// for the entire write operation, ensuring um.data is stable.
+// extendMmap is called under the same mutex.
 type UnifiedMmap struct {
 	file     *os.File
 	data     []byte // mmap region, READ-WRITE
 	mmapSize int64  // current mmap size
-	head     uint64 // atomic write offset
+	head     uint64 // write offset (protected by mu)
 	closed   bool
+	mu       sync.Mutex // protects WriteEntry and extendMmap
 }
 
 // OpenUnifiedMmap opens or creates the unified mmap file.
@@ -127,17 +130,22 @@ func OpenUnifiedMmap(path string) (*UnifiedMmap, error) {
 // WriteEntry serializes and writes a single entry into the mmap ring buffer.
 // Returns the offset of the value data within the entry (for direct reading).
 //
-// This is the HOT PATH — zero allocations, zero syscalls, zero mutex.
-// Uses atomic.AddUint64 for lock-free offset reservation.
+// Thread-safety: serialized via um.mu to prevent SIGBUS when extendMmap
+// remaps um.data during a write. The mutex is held for the entire write
+// operation, ensuring um.data is stable.
 //
-//go:nosplit
+// Zero allocations, zero syscalls in the common case (no extension).
 func (um *UnifiedMmap) WriteEntry(op OpType, key, value []byte, timestamp uint64) (uint64, error) {
+	um.mu.Lock()
+	defer um.mu.Unlock()
+
 	keyLen := len(key)
 	valLen := len(value)
 	totalSize := 1 + 8 + 2 + 4 + keyLen + valLen + 4 // + CRC
 
-	// Reserve space atomically — this is the ONLY atomic in the hot path
-	offset := atomic.AddUint64(&um.head, uint64(totalSize)) - uint64(totalSize)
+	// Reserve space
+	offset := um.head
+	um.head += uint64(totalSize)
 
 	// Check if we need to extend (rare, ~1 per 16K entries for 4KB values)
 	if int64(offset)+int64(totalSize) > um.mmapSize {
@@ -250,7 +258,9 @@ func (um *UnifiedMmap) ReadEntry(offset uint64) (*WalEntry, error) {
 
 // Size returns the current write head (logical end of data).
 func (um *UnifiedMmap) Size() int64 {
-	return int64(atomic.LoadUint64(&um.head))
+	um.mu.Lock()
+	defer um.mu.Unlock()
+	return int64(um.head)
 }
 
 // Close unmaps and closes the file.
