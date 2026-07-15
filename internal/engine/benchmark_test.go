@@ -23,10 +23,12 @@
 //  4. The b.N loop contains ONLY the engine API call (PutWithTS / GetWithTS).
 //  5. No fmt.Println, log.Println, time.Sleep, or defer inside the loop.
 //  6. Timestamps are passed as uint64(i+1) — no NextTimestamp() call in hot path.
+//  7. Logs are suppressed via logger.SetLevel(logger.ERROR) at the start of each benchmark.
 
 package engine
 
 import (
+	"fmt"
 	"math"
 	"os"
 	"runtime/debug"
@@ -35,6 +37,7 @@ import (
 
 	"github.com/f4ga/ScoriaDB/internal/engine/sstable"
 	"github.com/f4ga/ScoriaDB/internal/errors"
+	"github.com/f4ga/ScoriaDB/internal/logger"
 )
 
 // openBenchDB creates a temporary database for benchmarks.
@@ -42,6 +45,7 @@ import (
 // use the per-benchmark options directly.
 func openBenchDB(b *testing.B) *LSMEngine {
 	b.Helper()
+	logger.SetLevel(logger.ERROR)
 	dir, err := os.MkdirTemp("", "scoriadb-bench-*")
 	if err != nil {
 		b.Fatal(err)
@@ -56,9 +60,228 @@ func openBenchDB(b *testing.B) *LSMEngine {
 }
 
 // ------------------------------------------------------------
+// BenchmarkEnginePut — small value (16B), parallel, zero fsync
+// ------------------------------------------------------------
+func BenchmarkEnginePut(b *testing.B) {
+	logger.SetLevel(logger.ERROR)
+	dir := b.TempDir()
+	opts := DefaultEngineOptions(dir)
+	opts.WALOpts.SyncMode = false
+	opts.WALOpts.GroupCommitEnabled = true
+
+	e, err := NewLSMEngine(dir, opts.WALOpts)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer e.Close()
+
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		i := 0
+		for pb.Next() {
+			key := []byte(fmt.Sprintf("key:%d", i))
+			value := []byte(fmt.Sprintf("val:%d", i))
+			if err := e.PutWithTS(key, value, uint64(i+1)); err != nil {
+				b.Fatal(err)
+			}
+			i++
+		}
+	})
+	b.StopTimer()
+}
+
+// ------------------------------------------------------------
+// BenchmarkEnginePutLarge — large value (4KB), parallel, zero fsync
+// ------------------------------------------------------------
+func BenchmarkEnginePutLarge(b *testing.B) {
+	logger.SetLevel(logger.ERROR)
+	dir := b.TempDir()
+	opts := DefaultEngineOptions(dir)
+	opts.WALOpts.SyncMode = false
+	opts.WALOpts.GroupCommitEnabled = true
+
+	e, err := NewLSMEngine(dir, opts.WALOpts)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer e.Close()
+
+	value := make([]byte, 4096)
+	for i := range value {
+		value[i] = byte(i % 256)
+	}
+
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		i := 0
+		for pb.Next() {
+			key := []byte(fmt.Sprintf("key:%d", i))
+			if err := e.PutWithTS(key, value, uint64(i+1)); err != nil {
+				b.Fatal(err)
+			}
+			i++
+		}
+	})
+	b.StopTimer()
+}
+
+// ------------------------------------------------------------
+// BenchmarkEngineGet — existing key (MemTable hit), parallel
+// ------------------------------------------------------------
+func BenchmarkEngineGet(b *testing.B) {
+	logger.SetLevel(logger.ERROR)
+	dir := b.TempDir()
+	opts := DefaultEngineOptions(dir)
+	opts.WALOpts.SyncMode = false
+	opts.WALOpts.GroupCommitEnabled = true
+
+	e, err := NewLSMEngine(dir, opts.WALOpts)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer e.Close()
+
+	for i := 0; i < 100000; i++ {
+		key := []byte(fmt.Sprintf("key:%d", i))
+		if err := e.PutWithTS(key, []byte("value"), uint64(i+1)); err != nil {
+			b.Fatal(err)
+		}
+	}
+
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		i := 0
+		for pb.Next() {
+			key := []byte(fmt.Sprintf("key:%d", i%100000))
+			if _, err := e.GetWithTS(key, math.MaxUint64); err != nil {
+				b.Fatal(err)
+			}
+			i++
+		}
+	})
+	b.StopTimer()
+}
+
+// ------------------------------------------------------------
+// BenchmarkEngineGetLarge — large value (4KB from VLog), parallel
+// ------------------------------------------------------------
+func BenchmarkEngineGetLarge(b *testing.B) {
+	logger.SetLevel(logger.ERROR)
+	dir := b.TempDir()
+	opts := DefaultEngineOptions(dir)
+	opts.WALOpts.SyncMode = false
+	opts.WALOpts.GroupCommitEnabled = true
+
+	e, err := NewLSMEngine(dir, opts.WALOpts)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer e.Close()
+
+	largeVal := make([]byte, 4096)
+	for i := range largeVal {
+		largeVal[i] = byte(i % 256)
+	}
+
+	for i := 0; i < 100000; i++ {
+		key := []byte(fmt.Sprintf("key:%d", i))
+		if err := e.PutWithTS(key, largeVal, uint64(i+1)); err != nil {
+			b.Fatal(err)
+		}
+	}
+
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		i := 0
+		for pb.Next() {
+			key := []byte(fmt.Sprintf("key:%d", i%100000))
+			if _, err := e.GetWithTS(key, math.MaxUint64); err != nil {
+				b.Fatal(err)
+			}
+			i++
+		}
+	})
+	b.StopTimer()
+}
+
+// ------------------------------------------------------------
+// BenchmarkEngineGetMissing — missing key, parallel
+// ------------------------------------------------------------
+func BenchmarkEngineGetMissing(b *testing.B) {
+	logger.SetLevel(logger.ERROR)
+	dir := b.TempDir()
+	opts := DefaultEngineOptions(dir)
+	opts.WALOpts.SyncMode = false
+	opts.WALOpts.GroupCommitEnabled = true
+
+	e, err := NewLSMEngine(dir, opts.WALOpts)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer e.Close()
+
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		i := 0
+		for pb.Next() {
+			key := []byte(fmt.Sprintf("missing:%d", i))
+			if _, err := e.GetWithTS(key, math.MaxUint64); err != nil {
+				b.Fatal(err)
+			}
+			i++
+		}
+	})
+	b.StopTimer()
+}
+
+// ------------------------------------------------------------
+// BenchmarkEngineScan — scan 100 keys by prefix, parallel
+// ------------------------------------------------------------
+func BenchmarkEngineScan(b *testing.B) {
+	logger.SetLevel(logger.ERROR)
+	dir := b.TempDir()
+	opts := DefaultEngineOptions(dir)
+	opts.WALOpts.SyncMode = false
+	opts.WALOpts.GroupCommitEnabled = true
+
+	e, err := NewLSMEngine(dir, opts.WALOpts)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer e.Close()
+
+	for i := 0; i < 100000; i++ {
+		key := []byte(fmt.Sprintf("scan:%d", i))
+		if err := e.PutWithTS(key, []byte("value"), uint64(i+1)); err != nil {
+			b.Fatal(err)
+		}
+	}
+
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			iter := e.Scan([]byte("scan:"))
+			count := 0
+			for iter.Next() {
+				count++
+				if count >= 100 {
+					break
+				}
+			}
+			if err := iter.Err(); err != nil {
+				b.Fatal(err)
+			}
+			iter.Close()
+		}
+	})
+	b.StopTimer()
+}
+
+// ------------------------------------------------------------
 // Put small value — zero fsync, zero alloc in hot path
 // ------------------------------------------------------------
 func BenchmarkPutSmallValue(b *testing.B) {
+	logger.SetLevel(logger.ERROR)
 	dir := b.TempDir()
 	opts := DefaultEngineOptions(dir)
 	opts.WALOpts.SyncMode = false
@@ -86,6 +309,7 @@ func BenchmarkPutSmallValue(b *testing.B) {
 // Put large value (4KB) — zero fsync, zero alloc in hot path
 // ------------------------------------------------------------
 func BenchmarkPutLargeValue(b *testing.B) {
+	logger.SetLevel(logger.ERROR)
 	dir := b.TempDir()
 	opts := DefaultEngineOptions(dir)
 	opts.WALOpts.SyncMode = false
@@ -116,6 +340,7 @@ func BenchmarkPutLargeValue(b *testing.B) {
 // Put small value with fsync — for comparison with sync DBs
 // ------------------------------------------------------------
 func BenchmarkPutSmallValue_Sync(b *testing.B) {
+	logger.SetLevel(logger.ERROR)
 	dir := b.TempDir()
 	opts := DefaultEngineOptions(dir)
 	opts.WALOpts.SyncMode = true
@@ -143,6 +368,7 @@ func BenchmarkPutSmallValue_Sync(b *testing.B) {
 // Put large value (4KB) with fsync — for comparison with sync DBs
 // ------------------------------------------------------------
 func BenchmarkPutLargeValue_Sync(b *testing.B) {
+	logger.SetLevel(logger.ERROR)
 	dir := b.TempDir()
 	opts := DefaultEngineOptions(dir)
 	opts.WALOpts.SyncMode = true
@@ -173,6 +399,7 @@ func BenchmarkPutLargeValue_Sync(b *testing.B) {
 // Get existing key (MemTable hit)
 // ------------------------------------------------------------
 func BenchmarkGetExisting(b *testing.B) {
+	logger.SetLevel(logger.ERROR)
 	dir := b.TempDir()
 	opts := DefaultEngineOptions(dir)
 	opts.WALOpts.SyncMode = false
@@ -203,6 +430,7 @@ func BenchmarkGetExisting(b *testing.B) {
 // Get missing key (MemTable miss)
 // ------------------------------------------------------------
 func BenchmarkGetMissing(b *testing.B) {
+	logger.SetLevel(logger.ERROR)
 	dir := b.TempDir()
 	opts := DefaultEngineOptions(dir)
 	opts.WALOpts.SyncMode = false
@@ -229,6 +457,7 @@ func BenchmarkGetMissing(b *testing.B) {
 // Scan by prefix
 // ------------------------------------------------------------
 func BenchmarkScan(b *testing.B) {
+	logger.SetLevel(logger.ERROR)
 	dir := b.TempDir()
 	opts := DefaultEngineOptions(dir)
 	opts.WALOpts.SyncMode = false
@@ -267,6 +496,7 @@ func BenchmarkScan(b *testing.B) {
 // Bloom filter benchmark
 // ------------------------------------------------------------
 func BenchmarkBloomFilter(b *testing.B) {
+	logger.SetLevel(logger.ERROR)
 	bf := sstable.NewBloomFilter(10000)
 	keys := make([][]byte, 10000)
 	for i := 0; i < 10000; i++ {
@@ -284,6 +514,7 @@ func BenchmarkBloomFilter(b *testing.B) {
 // Get large value (4KB) from VLog — zero-copy read path
 // ------------------------------------------------------------
 func BenchmarkGetLargeValue(b *testing.B) {
+	logger.SetLevel(logger.ERROR)
 	dir := b.TempDir()
 	opts := DefaultEngineOptions(dir)
 	opts.WALOpts.SyncMode = false
@@ -318,6 +549,8 @@ func BenchmarkGetLargeValue(b *testing.B) {
 // Expected: ~9.3 GB/s (as advertised in README)
 // ------------------------------------------------------------
 func BenchmarkPutLargeValue_GroupCommit(b *testing.B) {
+	logger.SetLevel(logger.ERROR)
+
 	// Disable GC entirely for the benchmark — zero GC interference.
 	gcPercent := debug.SetGCPercent(-1)
 	b.Cleanup(func() { debug.SetGCPercent(gcPercent) })

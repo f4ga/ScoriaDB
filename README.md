@@ -133,79 +133,83 @@ value, _ := db.Get([]byte("hello"))
 fmt.Printf("%s\n", value)
 ```
 
+
 ---
 
-## 📊 Performance
+## 📊 Performance (v0.2.3)
 
-**Hardware:** Intel Core i3-1215U (8 threads), NVMe SSD, Go 1.23+, Linux amd64.
+*All benchmarks run on Intel Core i3-1215U (8 threads), NVMe SSD, Go 1.23+, Linux amd64.*
 
-### Throughput & Latency
+### MemTable (lock‑free SkipList with arena allocator)
 
-| Operation | Size | Throughput | Latency (p50) |
-|-----------|------|------------|---------------|
-| **Put (small)** | 16 B | **1.51M ops/s** | **662 ns** |
-| **Put (small, sync)** | 16 B | **1.18M ops/s** | **849 ns** |
-| **Get (MemTable hit)** | — | **7.1M ops/s** | **~140 ns** |
-| **Get (4KB, VLog)** | 4 KB | **1.25M ops/s** | **800 ns** |
-| **WAL Sync** | ~50 B | **2.29M ops/s** | **436 ns** |
+This is the **in‑memory layer** — where all writes go first.  
+Since v0.3.0, it uses a lock‑free skip list with zero‑copy arena allocation.
 
-### Memory & Allocations
+| Benchmark | ops/s | ns/op | B/op | allocs/op | Cores |
+|-----------|-------|-------|------|-----------|-------|
+| **Get** | **18.4M** | **72** | 23 | 1 | 8 |
+| **Get** | 4.56M | 267 | 23 | 1 | 1 |
+| **Get (sequential)** | 4.58M | 264 | 23 | 1 | 8 |
+| **Put** | **2.92M** | **432** | 23 | 1 | 8 |
+| **Put** | 2.66M | 473 | 23 | 1 | 1 |
+| **Put (sequential)** | 2.71M | 469 | 23 | 1 | 8 |
 
-| Operation | Memory (B/op) | Allocations (allocs/op) |
-|-----------|---------------|--------------------------|
-| **Put (small)** | 297 B/op | 7 allocs/op |
-| **Get (4KB, VLog)** | 4249 B/op | **5 allocs/op** |
-| **WAL Sync** | 24 B/op | 1 alloc/op |
-| **BloomFilter** | 0 B/op | **0 allocs/op** |
+**Key improvements over v0.2.2:**
+- Get: **+159%** throughput (7.1M → 18.4M), **-49%** latency (140 → 72 ns)
+- Put: **+94%** throughput (1.51M → 2.92M), **-35%** latency (662 → 432 ns)
+- Allocations: **-80%** (5 → 1 allocs/op)
 
-### MemTable (lock-free SkipList with arena allocator)
+---
 
-| Benchmark | ops/s | ns/op | allocs/op | Cores |
-|-----------|-------|-------|-----------|-------|
-| **Get** | **18.4M** | **72** | 1 | 8 |
-| **Get** | 4.56M | 267 | 1 | 1 |
-| **Get (sequential)** | 4.58M | 264 | 1 | 8 |
-| **Put** | 2.92M | 432 | 1 | 8 |
-| **Put** | 2.66M | 473 | 1 | 1 |
-| **Put (sequential)** | 2.71M | 469 | 1 | 8 |
+### Engine (LSM + WAL + VLog)
 
-### Impact of Optimizations
+Full storage engine — includes WAL durability, MVCC, and value log.
 
-| Optimization | Before | After | Improvement |
-|--------------|--------|-------|-------------|
-| **Zero‑copy VLog (4KB read)** | 4.7 µs | **800 ns** | **-83%** |
-| **Zero‑copy VLog (4KB read)** | 213K ops/s | **1.25M ops/s** | **+487%** |
-| **SSTable block pooling** | 432 ns | **140 ns** | **-67%** |
-| **WAL buffer pooling** | 515 ns | **436 ns** | **-15%** |
-| **Hot path mutex optimization** | 750 ns | **662 ns** | **-12%** |
-| **Bloom filter (fastrand)** | ~16 µs | **14.8 µs** | **-7.5%** |
-| **Bloom filter** | had allocs | **0 allocs/op** | **-100%** |
+| Operation | Throughput | Latency | Allocs | Notes |
+|-----------|------------|---------|--------|-------|
+| **Get (existing key)** | ~10M ops/s | ~100 ns | 1 alloc | Fast path (MemTable hit) |
+| **Get (4KB, VLog)** | ~8.5M ops/s | ~118 ns | 1 alloc | Zero‑copy read from mmap |
+| **Put (16B)** | 1.12M ops/s | 889 ns | 6 allocs | **WIP** — target 420 ns |
+| **WAL Group Commit** | 17.5M ops/s | 57 ns | 0 allocs | ✅ **3× faster than target** |
+| **WAL Sync** | 2.74M ops/s | 365 ns | 0 allocs | ⚠️ target 170 ns |
+| **Scan (100 keys)** | — | 4.8 µs | **107 allocs** | ❌ needs rewrite |
 
-### Comparison: v0.2.0 → v0.3.0
+**Known issues (being fixed):**
+- `PutLarge` → **SIGBUS** (writing beyond mmap)
+- `Scan` → **107 allocs/op** (iterator must be rewritten)
+- `VLog` → **disk quota / SIGBUS** (under investigation)
 
-| Metric | v0.2.0 | v0.3.0 | Improvement |
+---
+
+### Comparison with v0.2.2
+
+| Metric | v0.2.2 | v0.3.0 | Improvement |
 |--------|--------|--------|-------------|
-| **Write** | 1.33M ops/s | **1.51M ops/s** | **+13.5%** |
-| **Read 4KB** | 213K ops/s | **1.25M ops/s** | **+487%** |
-| **WAL** | 1.94M ops/s | **2.29M ops/s** | **+18%** |
-| **Allocations (4KB)** | 8 allocs/op | **5 allocs/op** | **-37%** |
-| **Bloom filter** | had allocs | **0 allocs/op** | **-100%** |
-
-### Comparison: v0.2.2 → v0.2.3 (MemTable / SkipList)
-
-| Benchmark | v0.2.2 | v0.2.3 | Improvement |
-|-----------|--------|--------|-------------|
-| **Get (8 cores)** | 7.1M ops/s, 140 ns | **18.4M ops/s, 72 ns** | **+159% speed, -49% latency** |
-| **Get (1 core)** | — | 4.56M ops/s, 267 ns | — |
-| **Get (sequential)** | — | 4.58M ops/s, 264 ns | — |
-| **Put (8 cores)** | 1.51M ops/s, 662 ns | **2.92M ops/s, 432 ns** | **+94% speed, -35% latency** |
-| **Put (1 core)** | — | 2.66M ops/s, 473 ns | — |
-| **Put (sequential)** | — | 2.71M ops/s, 469 ns | — |
-| **Allocations** | 5 allocs/op | **1 alloc/op** | **-80%** |
-
-All benchmarks are reproducible with `go test -bench=. -benchmem ./internal/engine`.
+| **Get (8 cores)** | 7.1M ops/s | **18.4M ops/s** | **+159%** |
+| **Put (8 cores)** | 1.51M ops/s | **2.92M ops/s** | **+94%** |
+| **Allocs (Get)** | 5 allocs/op | **1 alloc/op** | **-80%** |
+| **WAL Group Commit** | 12.4M ops/s | **17.5M ops/s** | **+41%** |
 
 ---
+
+### Impact of major optimizations
+
+| Optimization | Before | After | Gain |
+|--------------|--------|-------|------|
+| **Zero‑copy VLog (4KB read)** | 213K ops/s | **1.25M ops/s** | **+487%** |
+| **Lock‑free SkipList** | 1.51M ops/s | **2.92M ops/s** | **+94%** |
+| **Unified MMap** | 2 syscalls/write | **0 syscalls** | **-100%** |
+| **SSTable block pooling** | 432 ns | 140 ns | **-67%** |
+| **WAL buffer pooling** | 515 ns | 436 ns | **-15%** |
+
+---
+
+All benchmarks are reproducible with:
+
+```bash
+go test -bench=. -benchmem -benchtime=1s -count=3 -cpu=1,8 ./internal/engine/...
+```
+
 
 ## 📊 Comparison with Competitors
 
