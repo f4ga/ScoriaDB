@@ -256,3 +256,535 @@ func TestMemTableGetWithSnapshot(t *testing.T) {
 		}
 	}
 }
+
+// ============================================================
+// Arena tests
+// ============================================================
+
+func TestArenaNewArena(t *testing.T) {
+	a := NewArena()
+	if a == nil {
+		t.Fatal("NewArena() returned nil")
+	}
+	if a.NumBlocks() != 1 {
+		t.Errorf("expected 1 block, got %d", a.NumBlocks())
+	}
+	if a.Size() != 0 {
+		t.Errorf("expected Size()=0 for new arena, got %d", a.Size())
+	}
+}
+
+func TestArenaAllocAndSize(t *testing.T) {
+	a := NewArena()
+
+	p1 := a.Alloc(8)
+	if p1 == nil {
+		t.Fatal("Alloc(8) returned nil")
+	}
+	size1 := a.Size()
+	if size1 < 8 {
+		t.Errorf("expected Size() >= 8, got %d", size1)
+	}
+
+	p2 := a.Alloc(16)
+	if p2 == nil {
+		t.Fatal("Alloc(16) returned nil")
+	}
+	size2 := a.Size()
+	if size2 < size1+16 {
+		t.Errorf("expected Size() >= %d, got %d", size1+16, size2)
+	}
+
+	// Allocate zero bytes
+	p3 := a.Alloc(0)
+	if p3 == nil {
+		t.Fatal("Alloc(0) returned nil")
+	}
+}
+
+func TestArenaReset(t *testing.T) {
+	a := NewArena()
+
+	// Allocate some nodes
+	p1 := a.Alloc(64)
+	p2 := a.Alloc(128)
+	_ = p1
+	_ = p2
+
+	if a.Size() == 0 {
+		t.Error("expected Size() > 0 after allocations")
+	}
+	if a.NumBlocks() != 1 {
+		t.Errorf("expected 1 block, got %d", a.NumBlocks())
+	}
+
+	// Reset
+	a.Reset()
+
+	if a.Size() != 0 {
+		t.Errorf("expected Size()=0 after Reset, got %d", a.Size())
+	}
+	if a.NumBlocks() != 1 {
+		t.Errorf("expected 1 block after Reset, got %d", a.NumBlocks())
+	}
+
+	// After Reset, new allocations should work
+	p3 := a.Alloc(32)
+	if p3 == nil {
+		t.Fatal("Alloc after Reset returned nil")
+	}
+	if a.Size() < 32 {
+		t.Errorf("expected Size() >= 32 after new alloc, got %d", a.Size())
+	}
+}
+
+func TestArenaResetEmpty(t *testing.T) {
+	a := NewArena()
+	// Reset on empty arena should not panic
+	a.Reset()
+	if a.Size() != 0 {
+		t.Errorf("expected Size()=0 after Reset on empty, got %d", a.Size())
+	}
+	if a.NumBlocks() != 1 {
+		t.Errorf("expected 1 block after Reset on empty, got %d", a.NumBlocks())
+	}
+}
+
+func TestArenaMultipleBlocks(t *testing.T) {
+	a := NewArena()
+
+	// Allocate enough to exceed one block (64 MB)
+	blockSize := ArenaBlockSize
+	numAllocs := 3
+	for i := 0; i < numAllocs; i++ {
+		// Allocate half a block each time
+		_ = a.Alloc(blockSize / 2)
+	}
+
+	if a.NumBlocks() < 2 {
+		t.Errorf("expected at least 2 blocks after large allocations, got %d", a.NumBlocks())
+	}
+
+	totalSize := a.Size()
+	if totalSize == 0 {
+		t.Error("expected Size() > 0 after large allocations")
+	}
+}
+
+func TestArenaNewNode(t *testing.T) {
+	a := NewArena()
+
+	key := []byte("test_key")
+	value := []byte("test_value")
+	node := a.NewNode(key, value, 10)
+
+	if node == nil {
+		t.Fatal("NewNode returned nil")
+	}
+
+	// Check key
+	nodeKey := node.Key()
+	if string(nodeKey.Key) != string(key) {
+		t.Errorf("expected key %s, got %s", key, nodeKey.Key)
+	}
+
+	// Check value
+	nodeVal := node.Value()
+	if string(nodeVal) != string(value) {
+		t.Errorf("expected value %s, got %s", value, nodeVal)
+	}
+
+	// Check height
+	if node.height != 10 {
+		t.Errorf("expected height 10, got %d", node.height)
+	}
+
+	// Check deleted flag
+	if node.deleted.Load() {
+		t.Error("expected deleted=false for new node")
+	}
+}
+
+func TestArenaNewNodeNilKeyValue(t *testing.T) {
+	a := NewArena()
+
+	node := a.NewNode(nil, nil, 1)
+	if node == nil {
+		t.Fatal("NewNode with nil key/value returned nil")
+	}
+
+	nodeKey := node.Key()
+	if nodeKey.Key != nil {
+		t.Errorf("expected nil key, got %v", nodeKey.Key)
+	}
+
+	nodeVal := node.Value()
+	if nodeVal != nil {
+		t.Errorf("expected nil value, got %v", nodeVal)
+	}
+}
+
+func TestArenaSizeAfterResetAndRealloc(t *testing.T) {
+	a := NewArena()
+
+	// Allocate, reset, allocate again
+	_ = a.Alloc(100)
+	a.Reset()
+
+	if a.Size() != 0 {
+		t.Errorf("expected Size()=0 after Reset, got %d", a.Size())
+	}
+
+	// Allocate again
+	_ = a.Alloc(200)
+	if a.Size() < 200 {
+		t.Errorf("expected Size() >= 200 after realloc, got %d", a.Size())
+	}
+}
+
+func TestArenaNumBlocks(t *testing.T) {
+	a := NewArena()
+
+	if a.NumBlocks() != 1 {
+		t.Errorf("expected 1 block initially, got %d", a.NumBlocks())
+	}
+
+	// Force growth by allocating large chunks
+	halfBlock := ArenaBlockSize / 2
+	_ = a.Alloc(halfBlock)
+	_ = a.Alloc(halfBlock) // fills the first block exactly (64MB)
+	_ = a.Alloc(1)         // third allocation triggers growth
+
+	if a.NumBlocks() < 2 {
+		t.Errorf("expected >= 2 blocks after growth, got %d", a.NumBlocks())
+	}
+
+	// Reset should bring back to 1 block
+	a.Reset()
+	if a.NumBlocks() != 1 {
+		t.Errorf("expected 1 block after Reset, got %d", a.NumBlocks())
+	}
+}
+
+func TestArenaConcurrentAlloc(t *testing.T) {
+	a := NewArena()
+	var wg sync.WaitGroup
+	numGoroutines := 10
+	allocsPerGoroutine := 100
+
+	for i := 0; i < numGoroutines; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < allocsPerGoroutine; j++ {
+				ptr := a.Alloc(8)
+				if ptr == nil {
+					t.Error("Alloc returned nil in concurrent test")
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
+
+	totalSize := a.Size()
+	expectedMin := uint64(numGoroutines * allocsPerGoroutine * 8)
+	if totalSize < expectedMin {
+		t.Errorf("expected Size() >= %d, got %d", expectedMin, totalSize)
+	}
+}
+
+// ============================================================
+// MemTable additional tests
+// ============================================================
+
+func TestMemTableGetLatest(t *testing.T) {
+	mt := NewMemTable()
+	key := []byte("test_key")
+
+	// Test on empty table
+	val, ts, found := mt.GetLatest(key)
+	if found {
+		t.Error("expected not found on empty table")
+	}
+	if val != nil {
+		t.Errorf("expected nil value, got %v", val)
+	}
+	if ts != 0 {
+		t.Errorf("expected ts=0, got %d", ts)
+	}
+
+	// Insert one version
+	mt.Put(mvcc.NewMVCCKey(key, 100), []byte("value1"))
+	val, ts, found = mt.GetLatest(key)
+	if !found {
+		t.Fatal("expected found after insert")
+	}
+	if string(val) != "value1" {
+		t.Errorf("expected 'value1', got '%s'", val)
+	}
+	if ts != 100 {
+		t.Errorf("expected ts=100, got %d", ts)
+	}
+
+	// Insert newer version
+	mt.Put(mvcc.NewMVCCKey(key, 200), []byte("value2"))
+	val, ts, found = mt.GetLatest(key)
+	if !found {
+		t.Fatal("expected found after second insert")
+	}
+	if string(val) != "value2" {
+		t.Errorf("expected 'value2', got '%s'", val)
+	}
+	if ts != 200 {
+		t.Errorf("expected ts=200, got %d", ts)
+	}
+
+	// Insert older version (should not change latest)
+	mt.Put(mvcc.NewMVCCKey(key, 50), []byte("value0"))
+	val, ts, found = mt.GetLatest(key)
+	if !found {
+		t.Fatal("expected found after older insert")
+	}
+	if string(val) != "value2" {
+		t.Errorf("expected 'value2', got '%s'", val)
+	}
+	if ts != 200 {
+		t.Errorf("expected ts=200, got %d", ts)
+	}
+}
+
+func TestMemTableGetLatestTombstone(t *testing.T) {
+	mt := NewMemTable()
+	key := []byte("test_key")
+
+	// Insert a version, then delete it
+	mt.Put(mvcc.NewMVCCKey(key, 100), []byte("value1"))
+	mt.DeleteWithTS(mvcc.NewMVCCKey(key, 100))
+
+	// GetLatest should skip the tombstone and return not found
+	val, ts, found := mt.GetLatest(key)
+	if found {
+		t.Error("expected not found after tombstone")
+	}
+	if val != nil {
+		t.Errorf("expected nil value, got %v", val)
+	}
+	if ts != 0 {
+		t.Errorf("expected ts=0, got %d", ts)
+	}
+}
+
+func TestMemTableGetLatestMultipleVersionsWithTombstone(t *testing.T) {
+	mt := NewMemTable()
+	key := []byte("test_key")
+
+	// Insert versions, then delete the latest
+	mt.Put(mvcc.NewMVCCKey(key, 100), []byte("value1"))
+	mt.Put(mvcc.NewMVCCKey(key, 200), []byte("value2"))
+	mt.DeleteWithTS(mvcc.NewMVCCKey(key, 200))
+
+	// GetLatest should return the non-deleted version (value1, ts=100)
+	val, ts, found := mt.GetLatest(key)
+	if !found {
+		t.Fatal("expected found, older version should be visible")
+	}
+	if string(val) != "value1" {
+		t.Errorf("expected 'value1', got '%s'", val)
+	}
+	if ts != 100 {
+		t.Errorf("expected ts=100, got %d", ts)
+	}
+}
+
+func TestMemTableLastKey(t *testing.T) {
+	mt := NewMemTable()
+
+	// Empty table
+	lastKey := mt.LastKey()
+	if lastKey.Key != nil {
+		t.Errorf("expected nil key for empty table, got %v", lastKey.Key)
+	}
+
+	// Insert keys in order
+	mt.Put(mvcc.NewMVCCKey([]byte("a"), 100), []byte("val_a"))
+	mt.Put(mvcc.NewMVCCKey([]byte("b"), 100), []byte("val_b"))
+	mt.Put(mvcc.NewMVCCKey([]byte("c"), 100), []byte("val_c"))
+
+	lastKey = mt.LastKey()
+	if string(lastKey.Key) != "c" {
+		t.Errorf("expected last key 'c', got '%s'", lastKey.Key)
+	}
+
+	// Insert keys out of order
+	mt2 := NewMemTable()
+	mt2.Put(mvcc.NewMVCCKey([]byte("z"), 100), []byte("val_z"))
+	mt2.Put(mvcc.NewMVCCKey([]byte("a"), 100), []byte("val_a"))
+	mt2.Put(mvcc.NewMVCCKey([]byte("m"), 100), []byte("val_m"))
+
+	lastKey = mt2.LastKey()
+	if string(lastKey.Key) != "z" {
+		t.Errorf("expected last key 'z', got '%s'", lastKey.Key)
+	}
+}
+
+func TestMemTableClose(t *testing.T) {
+	mt := NewMemTable()
+
+	// Insert data
+	mt.Put(mvcc.NewMVCCKey([]byte("key"), 100), []byte("value"))
+
+	// Close
+	mt.Close()
+
+	// After Close, Get should return false without panic
+	val, found := mt.Get(mvcc.NewMVCCKey([]byte("key"), 100))
+	if found {
+		t.Error("expected not found after Close")
+	}
+	if val != nil {
+		t.Errorf("expected nil value after Close, got %v", val)
+	}
+
+	// GetLatest should return not found
+	_, _, found = mt.GetLatest([]byte("key"))
+	if found {
+		t.Error("expected not found from GetLatest after Close")
+	}
+
+	// LastKey should return empty key
+	lastKey := mt.LastKey()
+	if lastKey.Key != nil {
+		t.Errorf("expected nil key after Close, got %v", lastKey.Key)
+	}
+
+	// Size should be 0
+	if mt.Size() != 0 {
+		t.Errorf("expected Size()=0 after Close, got %d", mt.Size())
+	}
+}
+
+func TestMemTableCloseEmpty(t *testing.T) {
+	mt := NewMemTable()
+	// Close on empty table should not panic
+	mt.Close()
+}
+
+func TestMemTableCloseTwice(t *testing.T) {
+	mt := NewMemTable()
+	mt.Close()
+	// Second Close should not panic
+	mt.Close()
+}
+
+func TestMemTableDeleteWithTS(t *testing.T) {
+	mt := NewMemTable()
+	key := []byte("test_key")
+
+	// Write at commitTS=100
+	mt.Put(mvcc.NewMVCCKey(key, 100), []byte("value"))
+
+	// Delete (tombstone) at commitTS=200
+	mt.DeleteWithTS(mvcc.NewMVCCKey(key, 200))
+
+	// SNAPSHOT BEFORE WRITE — NOT FOUND
+	_, found := mt.Get(mvcc.NewMVCCKey(key, 50))
+	if found {
+		t.Error("expected NOT found at snapshot 50 (before write)")
+	}
+
+	// SNAPSHOT BETWEEN WRITE AND DELETE — FOUND
+	val, found := mt.Get(mvcc.NewMVCCKey(key, 150))
+	if !found {
+		t.Fatal("expected found at snapshot 150")
+	}
+	if string(val) != "value" {
+		t.Errorf("expected 'value', got '%s'", val)
+	}
+
+	// SNAPSHOT AFTER DELETE — NOT FOUND
+	_, found = mt.Get(mvcc.NewMVCCKey(key, 250))
+	if found {
+		t.Error("expected NOT found at snapshot 250 (after delete)")
+	}
+}
+
+func TestMemTableGetNonExistent(t *testing.T) {
+	mt := NewMemTable()
+
+	_, found := mt.Get(mvcc.NewMVCCKey([]byte("nonexistent"), 100))
+	if found {
+		t.Error("expected not found for non-existent key")
+	}
+}
+
+func TestMemTableIteratorDeleted(t *testing.T) {
+	mt := NewMemTable()
+
+	mt.Put(mvcc.NewMVCCKey([]byte("a"), 100), []byte("val_a"))
+	mt.Put(mvcc.NewMVCCKey([]byte("b"), 100), []byte("val_b"))
+	mt.Put(mvcc.NewMVCCKey([]byte("c"), 100), []byte("val_c"))
+
+	// Delete key "b"
+	mt.DeleteWithTS(mvcc.NewMVCCKey([]byte("b"), 100))
+
+	// Iterate — should skip deleted entries
+	iter := mt.NewIterator()
+	defer iter.Close()
+
+	var keys []string
+	for iter.Next() {
+		keys = append(keys, string(iter.Key().Key))
+	}
+
+	if len(keys) != 2 {
+		t.Errorf("expected 2 keys after delete, got %d: %v", len(keys), keys)
+	}
+	if len(keys) >= 2 {
+		if keys[0] != "a" || keys[1] != "c" {
+			t.Errorf("expected [a c], got %v", keys)
+		}
+	}
+}
+
+func TestMemTableIteratorEmpty(t *testing.T) {
+	mt := NewMemTable()
+
+	iter := mt.NewIterator()
+	defer iter.Close()
+
+	if iter.Next() {
+		t.Error("expected no items from empty iterator")
+	}
+}
+
+func TestMemTableConcurrentReadWrite(t *testing.T) {
+	mt := NewMemTable()
+	var wg sync.WaitGroup
+
+	// Writer goroutines
+	for i := 0; i < 5; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			for j := 0; j < 50; j++ {
+				key := mvcc.NewMVCCKey([]byte("shared_key"), uint64(id*50+j))
+				mt.Put(key, []byte("value"))
+			}
+		}(i)
+	}
+
+	// Reader goroutines
+	for i := 0; i < 5; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 50; j++ {
+				// Read with various timestamps
+				mt.Get(mvcc.NewMVCCKey([]byte("shared_key"), uint64(j)))
+			}
+		}()
+	}
+
+	wg.Wait()
+}

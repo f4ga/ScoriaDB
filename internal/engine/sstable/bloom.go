@@ -46,21 +46,38 @@ func NewBloomFilter(bitsPerKey int) *BloomFilter {
 	}
 }
 
+// numBits returns the number of bits in the filter.
+// Returns 0 if bits is nil or empty.
+func (bf *BloomFilter) numBits() uint32 {
+	if len(bf.bits) == 0 {
+		return 0
+	}
+	return uint32(len(bf.bits)) * 8
+}
+
 // Add adds a key to the Bloom filter.
 func (bf *BloomFilter) Add(key []byte) {
+	m := bf.numBits()
+	if m == 0 || bf.k == 0 {
+		return
+	}
 	// Use double hashing (algorithm from LevelDB)
 	h1, h2 := bloomHash(key, bf.seed)
 	for i := uint32(0); i < bf.k; i++ {
-		pos := (h1 + i*h2) % uint32(len(bf.bits)*8)
+		pos := (h1 + i*h2) % m
 		bf.setBit(pos)
 	}
 }
 
 // MayContain checks whether the key may be present in the Bloom filter.
 func (bf *BloomFilter) MayContain(key []byte) bool {
+	m := bf.numBits()
+	if m == 0 || bf.k == 0 {
+		return false
+	}
 	h1, h2 := bloomHash(key, bf.seed)
 	for i := uint32(0); i < bf.k; i++ {
-		pos := (h1 + i*h2) % uint32(len(bf.bits)*8)
+		pos := (h1 + i*h2) % m
 		if !bf.getBit(pos) {
 			return false
 		}

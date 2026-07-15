@@ -59,86 +59,50 @@ func (mt *MemTable) DeleteWithTS(key mvcc.MVCCKey) {
 // Returns (value, true) if found and not deleted, otherwise (nil, false).
 //
 // Algorithm:
-//  1. Find the first node with key >= the search key using findGreaterOrEqual.
-//     Use Timestamp = math.MaxUint64 (commitTS=0) to find the first version
-//     of this user key, since inverted timestamps mean smaller commitTS
-//     sorts first in the skip list ordering.
+//  1. Find the last node with key <= searchKey using findLessOrEqual.
+//     The searchKey has Timestamp = InvertTimestamp(snapshotTS).
+//     For the same user key, nodes are ordered by Timestamp descending
+//     (newer commitTS first, since Timestamp = MaxUint64 - commitTS).
+//     findLessOrEqual returns the node with the largest key <= searchKey,
+//     which for the same user key is the newest version with
+//     commitTS <= snapshotTS.
 //  2. If node is nil or user key doesn't match → key doesn't exist.
-//  3. Walk the entire level-0 chain for this user key:
-//     - The chain is sorted by commitTS ascending (oldest first) because
-//     Timestamp is inverted (MaxUint64 - commitTS) and nodeKeyLess returns
-//     a.Timestamp > b.Timestamp for same key, meaning smaller commitTS
-//     (larger Timestamp) sorts first.
-//     - Track the newest visible version (largest commitTS <= snapshotTS).
-//     - Since Timestamp is inverted, commitTS <= snapshotTS is equivalent to
-//     node.key.Timestamp >= key.Timestamp.
-//  4. After walking the chain:
-//     - If no visible version found → key doesn't exist.
-//     - If the newest visible version is a tombstone → key is deleted.
-//     - Otherwise, return the value.
+//  3. If node is deleted (tombstone) → key is deleted.
+//  4. Otherwise, return the value.
+//
+// See: ARCH-07, MVCC-03
 func (mt *MemTable) Get(key mvcc.MVCCKey) ([]byte, bool) {
 	if mt.sl == nil {
 		return nil, false
 	}
 
-	// Use Timestamp = math.MaxUint64 (commitTS=0) to find the first node
-	// for this user key. In the skip list ordering (nodeKeyLess), for the
-	// same user key, a node with smaller commitTS sorts first because
-	// Timestamp is inverted (MaxUint64 - commitTS) and nodeKeyLess returns
-	// a.Timestamp > b.Timestamp. So commitTS=0 (Timestamp=MaxUint64) is
-	// the "smallest" key for this user key, and findGreaterOrEqual will
-	// return the first node in the chain.
-	searchKey := mvcc.MVCCKey{
-		Key:       key.Key,
-		Timestamp: mvcc.InvertTimestamp(0), // math.MaxUint64
-	}
-	node := mt.sl.findGreaterOrEqual(searchKey)
+	// findLessOrEqual returns the last node with key <= searchKey.
+	// For the same user key, nodes are ordered by Timestamp descending
+	// (newer commitTS first). findLessOrEqual finds the newest version
+	// with commitTS <= snapshotTS because:
+	//   - Timestamp = MaxUint64 - commitTS
+	//   - nodeKeyLess: for same key, a.Timestamp > b.Timestamp means a < b
+	//   - So larger commitTS = smaller Timestamp = "less" in ordering
+	//   - findLessOrEqual finds the last node <= searchKey
+	//   - This is the newest version with Timestamp >= key.Timestamp
+	//   - Which means commitTS <= snapshotTS
+	node := mt.sl.findLessOrEqual(key)
 	if node == nil {
 		return nil, false
 	}
 
 	// Check if the user key matches.
-	// If not, the key doesn't exist in this MemTable.
 	nodeKey := node.Key()
-	if !bytes.Equal(nodeKey.Key, key.Key) {
+	if nodeKey.Key == nil || !bytes.Equal(nodeKey.Key, key.Key) {
 		return nil, false
 	}
 
-	// Walk the entire level-0 chain for this user key.
-	// The chain is sorted by commitTS ascending (oldest first).
-	// We need the newest version with commitTS <= snapshotTS,
-	// so we track the best match as we walk.
-	var bestNode *Node
-	for node != nil {
-		nodeKey = node.Key()
-		if !bytes.Equal(nodeKey.Key, key.Key) {
-			break
-		}
-		// Timestamp is inverted: nodeKey.Timestamp = MaxUint64 - commitTS.
-		// We need commitTS <= snapshotTS, which is equivalent to:
-		//   MaxUint64 - nodeKey.Timestamp <= MaxUint64 - key.Timestamp
-		//   → nodeKey.Timestamp >= key.Timestamp
-		if nodeKey.Timestamp >= key.Timestamp {
-			// This version is visible (commitTS <= snapshotTS).
-			// Since the chain is ascending by commitTS, each subsequent
-			// match has a larger commitTS (newer version), so we
-			// overwrite bestNode to keep the newest visible version.
-			bestNode = node
-		}
-		node = node.next[0].Load()
-	}
-
-	if bestNode == nil {
-		// No visible version found.
-		return nil, false
-	}
-
-	if bestNode.deleted.Load() {
+	if node.deleted.Load() {
 		// Tombstone → key is deleted.
 		return nil, false
 	}
 
-	return bestNode.Value(), true
+	return node.Value(), true
 }
 
 // GetLatest returns the latest (newest) value and its commit timestamp for a user key.

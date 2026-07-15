@@ -15,7 +15,6 @@
 package memtable
 
 import (
-	"sync"
 	"sync/atomic"
 	"unsafe"
 )
@@ -35,15 +34,12 @@ import (
 //
 // See: PROMPT-EBR-FIX-V2, ARCH-11, BL-02, GL-08
 
-const maxEpochs = 3
-
 // EpochManager manages epoch-based reclamation.
 // Currently a no-op placeholder — EnterEpoch/ExitEpoch cost nothing.
+// Fields mu, retired, counter, maxEpochs removed as dead code;
+// they will be re-added when EBR is fully implemented.
 type EpochManager struct {
 	global    atomic.Int64
-	mu        sync.Mutex
-	retired   [maxEpochs][]unsafe.Pointer
-	counter   int64
 	threshold int64
 }
 

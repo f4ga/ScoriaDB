@@ -338,3 +338,297 @@ func BenchmarkSkipListGetSequential(b *testing.B) {
 		sl.Get(key)
 	}
 }
+
+// ============================================================
+// SkipList additional tests
+// ============================================================
+
+func TestSkipListFindLast(t *testing.T) {
+	sl := NewSkipList()
+
+	// Empty list — findLast should return head
+	last := sl.findLast()
+	if last == nil {
+		t.Fatal("findLast on empty list returned nil")
+	}
+	if last != sl.head {
+		t.Error("findLast on empty list should return head")
+	}
+
+	// Single node
+	sl.Put(testKey("a", 100), []byte("val_a"))
+	last = sl.findLast()
+	if last == nil {
+		t.Fatal("findLast returned nil after insert")
+	}
+	lastKey := last.Key()
+	if string(lastKey.Key) != "a" {
+		t.Errorf("expected last key 'a', got '%s'", lastKey.Key)
+	}
+
+	// Multiple nodes
+	sl.Put(testKey("b", 100), []byte("val_b"))
+	sl.Put(testKey("c", 100), []byte("val_c"))
+	last = sl.findLast()
+	if last == nil {
+		t.Fatal("findLast returned nil after multiple inserts")
+	}
+	lastKey = last.Key()
+	if string(lastKey.Key) != "c" {
+		t.Errorf("expected last key 'c', got '%s'", lastKey.Key)
+	}
+}
+
+func TestSkipListFindLastAfterDelete(t *testing.T) {
+	sl := NewSkipList()
+
+	sl.Put(testKey("a", 100), []byte("val_a"))
+	sl.Put(testKey("b", 100), []byte("val_b"))
+	sl.Put(testKey("c", 100), []byte("val_c"))
+
+	// Delete the last key
+	sl.Delete(testKey("c", 100))
+
+	// findLast should return the previous max key
+	last := sl.findLast()
+	if last == nil {
+		t.Fatal("findLast returned nil after delete")
+	}
+	lastKey := last.Key()
+	if string(lastKey.Key) != "b" {
+		t.Errorf("expected last key 'b' after delete, got '%s'", lastKey.Key)
+	}
+}
+
+func TestSkipListHeight(t *testing.T) {
+	sl := NewSkipList()
+
+	// New list has height 1
+	if sl.Height() != 1 {
+		t.Errorf("expected height 1 for new list, got %d", sl.Height())
+	}
+
+	// Insert many nodes — height should increase
+	for i := 0; i < 1000; i++ {
+		key := testKey(fmt.Sprintf("key:%d", i), 1)
+		sl.Put(key, []byte("value"))
+	}
+
+	h := sl.Height()
+	if h < 1 || h > MaxHeight {
+		t.Errorf("height %d out of range [1, %d]", h, MaxHeight)
+	}
+	t.Logf("SkipList height after 1000 inserts: %d", h)
+}
+
+func TestSkipListArena(t *testing.T) {
+	sl := NewSkipList()
+
+	arena := sl.Arena()
+	if arena == nil {
+		t.Fatal("Arena() returned nil")
+	}
+
+	// Arena should be usable
+	ptr := arena.Alloc(8)
+	if ptr == nil {
+		t.Error("Arena.Alloc via SkipList returned nil")
+	}
+}
+
+func TestSkipListFindGreaterOrEqual(t *testing.T) {
+	sl := NewSkipList()
+
+	sl.Put(testKey("a", 100), []byte("val_a"))
+	sl.Put(testKey("b", 100), []byte("val_b"))
+	sl.Put(testKey("c", 100), []byte("val_c"))
+
+	// Find existing key
+	node := sl.findGreaterOrEqual(testKey("b", 100))
+	if node == nil {
+		t.Fatal("findGreaterOrEqual returned nil for existing key")
+	}
+	nodeKey := node.Key()
+	if string(nodeKey.Key) != "b" {
+		t.Errorf("expected key 'b', got '%s'", nodeKey.Key)
+	}
+
+	// Find non-existent key (should return next greater)
+	node = sl.findGreaterOrEqual(testKey("bb", 100))
+	if node == nil {
+		t.Fatal("findGreaterOrEqual returned nil for non-existent key")
+	}
+	nodeKey = node.Key()
+	if string(nodeKey.Key) != "c" {
+		t.Errorf("expected key 'c' (next greater), got '%s'", nodeKey.Key)
+	}
+
+	// Find key greater than all existing
+	node = sl.findGreaterOrEqual(testKey("z", 100))
+	if node != nil {
+		t.Errorf("expected nil for key beyond max, got key '%s'", string(node.Key().Key))
+	}
+}
+
+func TestSkipListPutDuplicateTimestamp(t *testing.T) {
+	sl := NewSkipList()
+
+	// Put same key+timestamp twice — should update in-place
+	sl.Put(testKey("key", 100), []byte("value1"))
+	sl.Put(testKey("key", 100), []byte("value2"))
+
+	val, ok := sl.Get(testKey("key", 100))
+	if !ok {
+		t.Fatal("key not found after duplicate put")
+	}
+	if string(val) != "value2" {
+		t.Errorf("expected 'value2', got '%s'", val)
+	}
+
+	// Len should be 1 (not 2)
+	if sl.Len() != 1 {
+		t.Errorf("expected Len()=1 after duplicate put, got %d", sl.Len())
+	}
+}
+
+func TestSkipListDeleteNonExistent(t *testing.T) {
+	sl := NewSkipList()
+
+	// Delete on empty list
+	if sl.Delete(testKey("nonexistent", 100)) {
+		t.Error("expected Delete to return false for non-existent key")
+	}
+
+	// Delete with wrong timestamp
+	sl.Put(testKey("key", 100), []byte("value"))
+	if sl.Delete(testKey("key", 200)) {
+		t.Error("expected Delete to return false for wrong timestamp")
+	}
+}
+
+func TestSkipListDeleteTwice(t *testing.T) {
+	sl := NewSkipList()
+
+	sl.Put(testKey("key", 100), []byte("value"))
+
+	if !sl.Delete(testKey("key", 100)) {
+		t.Fatal("first Delete should return true")
+	}
+	if sl.Delete(testKey("key", 100)) {
+		t.Error("second Delete should return false")
+	}
+}
+
+func TestSkipListIteratorEmpty(t *testing.T) {
+	sl := NewSkipList()
+
+	it := sl.NewIterator()
+	defer it.Close()
+
+	if it.Next() {
+		t.Error("expected no items from empty iterator")
+	}
+}
+
+func TestSkipListIteratorAfterExhaustion(t *testing.T) {
+	sl := NewSkipList()
+	sl.Put(testKey("a", 100), []byte("val_a"))
+
+	it := sl.NewIterator()
+	defer it.Close()
+
+	// Consume all items
+	if !it.Next() {
+		t.Fatal("expected one item")
+	}
+	if it.Next() {
+		t.Error("expected false after exhaustion")
+	}
+}
+
+func TestSkipListIteratorClose(t *testing.T) {
+	sl := NewSkipList()
+	sl.Put(testKey("a", 100), []byte("val_a"))
+
+	it := sl.NewIterator()
+	it.Close()
+
+	// Next should return false after close
+	if it.Next() {
+		t.Error("expected false after close")
+	}
+
+	// Double close should not panic
+	it.Close()
+}
+
+func TestSkipListIteratorIsDeleted(t *testing.T) {
+	sl := NewSkipList()
+	sl.Put(testKey("a", 100), []byte("val_a"))
+
+	it := sl.NewIterator()
+	defer it.Close()
+
+	if it.Next() {
+		if it.IsDeleted() {
+			t.Error("expected IsDeleted=false for active entry")
+		}
+	}
+}
+
+func TestSkipListConcurrentReadWrite(t *testing.T) {
+	sl := NewSkipList()
+	var wg sync.WaitGroup
+	numOps := 100
+
+	// Concurrent writers
+	for i := 0; i < 5; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			for j := 0; j < numOps; j++ {
+				key := testKey(fmt.Sprintf("key:%d", id*numOps+j), 1)
+				sl.Put(key, []byte("value"))
+			}
+		}(i)
+	}
+
+	// Concurrent readers
+	for i := 0; i < 5; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < numOps; j++ {
+				sl.Get(testKey(fmt.Sprintf("key:%d", j), 1))
+			}
+		}()
+	}
+
+	wg.Wait()
+}
+
+func TestSkipListConcurrentDelete(t *testing.T) {
+	sl := NewSkipList()
+	var wg sync.WaitGroup
+	numKeys := 100
+
+	// Insert keys
+	for i := 0; i < numKeys; i++ {
+		sl.Put(testKey(fmt.Sprintf("key:%d", i), 1), []byte("value"))
+	}
+
+	// Concurrent deletes
+	for i := 0; i < numKeys; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			sl.Delete(testKey(fmt.Sprintf("key:%d", id), 1))
+		}(i)
+	}
+	wg.Wait()
+
+	// All keys should be deleted
+	if sl.Len() != 0 {
+		t.Errorf("expected Len()=0 after all deletes, got %d", sl.Len())
+	}
+}

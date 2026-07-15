@@ -80,8 +80,8 @@ func randomHeight() int {
 // Размер структуры: 8 + 8 + 4 + 4 + 4 + 4 + 1 + 20*8 = 193 байта
 // (с паддингом до 200 байт из-за выравнивания atomic.Pointer)
 type Node struct {
-	keyOff  uint32                          // смещение от начала узла до байта ключа
-	valOff  uint32                          // смещение от начала узла до байта значения
+	keyOff  uint32                          // смещение от начала узла до байта ключа (0 если нет ключа)
+	valOff  uint32                          // смещение от начала узла до байта значения (0 если нет значения)
 	keyLen  uint32                          // длина ключа в байтах
 	valLen  uint32                          // длина значения в байтах
 	ts      uint64                          // инвертированный timestamp (MaxUint64 - commitTS)
@@ -91,11 +91,15 @@ type Node struct {
 }
 
 // Key возвращает MVCCKey узла.
+// Если keyLen == 0, возвращает MVCCKey{Key: nil} (не пустой срез).
 // Создаёт слайс через unsafe.Slice — 0 аллокаций, данные в арене.
 //
 //go:nosplit
 //go:inline
 func (n *Node) Key() mvcc.MVCCKey {
+	if n.keyLen == 0 {
+		return mvcc.MVCCKey{Key: nil, Timestamp: n.ts}
+	}
 	ptr := unsafe.Add(unsafe.Pointer(n), n.keyOff)
 	return mvcc.MVCCKey{
 		Key:       unsafe.Slice((*byte)(ptr), int(n.keyLen)),
@@ -104,11 +108,15 @@ func (n *Node) Key() mvcc.MVCCKey {
 }
 
 // Value возвращает значение узла.
+// Если valLen == 0, возвращает nil (не пустой срез).
 // Создаёт слайс через unsafe.Slice — 0 аллокаций, данные в арене.
 //
 //go:nosplit
 //go:inline
 func (n *Node) Value() []byte {
+	if n.valLen == 0 {
+		return nil
+	}
 	ptr := unsafe.Add(unsafe.Pointer(n), n.valOff)
 	return unsafe.Slice((*byte)(ptr), int(n.valLen))
 }
@@ -132,12 +140,13 @@ func nodeKeyLess(a, b mvcc.MVCCKey) bool {
 // The mutex protects the skip list structure (next pointer updates), not the arena allocation.
 // Arena allocation is lock-free (CAS-based), so the hot path has zero mutex contention.
 type SkipList struct {
-	head   *Node
-	height int32
-	length int64
-	arena  *Arena
-	epoch  *EpochManager // EBR for safe memory reclamation in lock-free reads
-	mu     sync.Mutex    // protects write operations (Put, Delete)
+	head       *Node
+	height     int32
+	length     int64
+	arena      *Arena
+	epoch      *EpochManager        // EBR for safe memory reclamation in lock-free reads
+	lastActive atomic.Pointer[Node] // cached last active node for O(1) findLast
+	mu         sync.Mutex           // protects write operations (Put, Delete)
 }
 
 // NewSkipList creates a new empty skip list with an arena allocator.
@@ -159,17 +168,35 @@ func NewSkipList() *SkipList {
 // Total allocation: sizeof(Node) + len(key) + len(value) bytes.
 // Key and value are copied directly into the arena — no intermediate buffers.
 //
+// When key is nil or empty, keyOff stays 0 and Key() returns MVCCKey{Key: nil}.
+// When value is nil or empty, valOff stays 0 and Value() returns nil.
+//
 //go:nosplit
 func (a *Arena) NewNode(key, value []byte, height int) *Node {
 	keyLen := len(key)
 	valLen := len(value)
-	totalSize := int(unsafe.Sizeof(Node{})) + keyLen + valLen
 
-	ptr := a.Alloc(totalSize)
+	// Calculate offsets: Node struct first, then key data, then value data.
+	// If keyLen == 0, keyOff stays 0 (no key data stored, Key() returns nil).
+	// If valLen == 0, valOff stays 0 (no value data stored, Value() returns nil).
+	nodeSize := int(unsafe.Sizeof(Node{}))
+	var keyOff, valOff uint32
+
+	offset := nodeSize
+	if keyLen > 0 {
+		keyOff = uint32(offset)
+		offset += keyLen
+	}
+	if valLen > 0 {
+		valOff = uint32(offset)
+		offset += valLen
+	}
+
+	ptr := a.Alloc(offset)
 	node := (*Node)(ptr)
 
-	node.keyOff = uint32(unsafe.Sizeof(Node{}))
-	node.valOff = uint32(unsafe.Sizeof(Node{})) + uint32(keyLen)
+	node.keyOff = keyOff
+	node.valOff = valOff
 	node.keyLen = uint32(keyLen)
 	node.valLen = uint32(valLen)
 	node.height = uint32(height)
@@ -182,13 +209,13 @@ func (a *Arena) NewNode(key, value []byte, height int) *Node {
 
 	// Copy key into arena — direct copy, no intermediate allocation
 	if keyLen > 0 {
-		keyPtr := unsafe.Add(ptr, node.keyOff)
+		keyPtr := unsafe.Add(ptr, keyOff)
 		copy(unsafe.Slice((*byte)(keyPtr), keyLen), key)
 	}
 
 	// Copy value into arena — direct copy, no intermediate allocation
 	if valLen > 0 {
-		valPtr := unsafe.Add(ptr, node.valOff)
+		valPtr := unsafe.Add(ptr, valOff)
 		copy(unsafe.Slice((*byte)(valPtr), valLen), value)
 	}
 
@@ -240,10 +267,11 @@ func (s *SkipList) findGreaterOrEqual(key mvcc.MVCCKey) *Node {
 	return nil
 }
 
-// findLast returns the last (maximum) node in the skip list.
-// Protected by EBR epoch for safe lock-free traversal.
-// See: GL-08, ARCH-11
-func (s *SkipList) findLast() *Node {
+// findLessOrEqual returns the last node with key <= the given key.
+// Lock-free traversal for reads, protected by EBR epoch.
+// Returns nil if no node satisfies key <= searchKey.
+// See: ARCH-11, MVCC-03
+func (s *SkipList) findLessOrEqual(key mvcc.MVCCKey) *Node {
 	s.epoch.EnterEpoch()
 
 	x := s.head
@@ -251,18 +279,128 @@ func (s *SkipList) findLast() *Node {
 
 	for level >= 0 {
 		next := x.next[level].Load()
+		if next != nil && nodeKeyLess(next.Key(), key) {
+			x = next
+			continue
+		}
+		if level == 0 {
+			s.epoch.ExitEpoch()
+			// At level 0, check if next (not x) satisfies key <= searchKey.
+			// x is the last node that was strictly < key.
+			// next is the first node >= key.
+			// If next != nil and next.Key() <= key (i.e., not strictly greater),
+			// return next as the correct "less or equal" result.
+			if next != nil {
+				nextKey := next.Key()
+				// next.Key() <= key means NOT (next.Key() > key)
+				// next.Key() > key means nodeKeyLess(key, nextKey) is true
+				if !nodeKeyLess(key, nextKey) {
+					return next
+				}
+			}
+			if x == s.head {
+				return nil
+			}
+			return x
+		}
+		level--
+	}
+	s.epoch.ExitEpoch()
+	return nil
+}
+
+// findExact returns the node with the exact matching key and timestamp.
+// Returns nil if no such node exists.
+// Lock-free traversal for reads, protected by EBR epoch.
+// See: ARCH-11, MVCC-03
+func (s *SkipList) findExact(key mvcc.MVCCKey) *Node {
+	node := s.findGreaterOrEqual(key)
+	if node == nil {
+		return nil
+	}
+	nodeKey := node.Key()
+	if !bytes.Equal(nodeKey.Key, key.Key) {
+		return nil
+	}
+	if nodeKey.Timestamp != key.Timestamp {
+		return nil
+	}
+	return node
+}
+
+// findLast returns the last (maximum) node in the skip list.
+// Uses cached lastActive pointer for O(1) in the common case.
+// Falls back to O(N) traversal when cache is invalidated.
+// Protected by EBR epoch for safe lock-free traversal.
+// See: GL-08, ARCH-11
+func (s *SkipList) findLast() *Node {
+	// Fast path: use cached lastActive pointer
+	last := s.lastActive.Load()
+	if last != nil && !last.deleted.Load() {
+		return last
+	}
+
+	// Slow path: traverse level 0, skip deleted nodes
+	s.epoch.EnterEpoch()
+
+	x := s.head
+	level := atomic.LoadInt32(&s.height) - 1
+	var lastNode *Node
+
+	for level >= 0 {
+		next := x.next[level].Load()
 		if next == nil {
 			if level == 0 {
+				// Return the LAST NON-DELETED node found
+				if lastNode != nil {
+					s.lastActive.Store(lastNode)
+					s.epoch.ExitEpoch()
+					return lastNode
+				}
 				s.epoch.ExitEpoch()
 				return x
 			}
 			level--
 		} else {
 			x = next
+			// Track only non-deleted nodes
+			if !x.deleted.Load() {
+				lastNode = x
+			}
 		}
 	}
 	s.epoch.ExitEpoch()
-	return x
+	if lastNode != nil {
+		s.lastActive.Store(lastNode)
+	}
+	return lastNode
+}
+
+// updateLastActive updates the cached lastActive pointer if the given node
+// is greater than the current cached value. Called after successful Put.
+func (s *SkipList) updateLastActive(node *Node) {
+	if node.deleted.Load() {
+		return
+	}
+	for {
+		current := s.lastActive.Load()
+		if current == nil {
+			if s.lastActive.CompareAndSwap(nil, node) {
+				return
+			}
+			continue
+		}
+		// Check: node > current ?
+		// Use nodeKeyLess(current.Key(), node.Key()) to test current < node
+		if nodeKeyLess(current.Key(), node.Key()) {
+			if s.lastActive.CompareAndSwap(current, node) {
+				return
+			}
+			continue
+		}
+		// node <= current → no update needed
+		return
+	}
 }
 
 // Get retrieves the value for the given key.
@@ -362,20 +500,20 @@ func (s *SkipList) Put(key mvcc.MVCCKey, value []byte) bool {
 		prevs[l].next[l].Store(node)
 	}
 
+	// Update lastActive cache — the new node might be the new last
+	s.updateLastActive(node)
+
 	atomic.AddInt64(&s.length, 1)
 	s.mu.Unlock()
 	return true
 }
 
 // Delete marks a key as deleted (tombstone).
+// Uses findExact for precise node matching by key AND timestamp.
 // Lock-free write.
 func (s *SkipList) Delete(key mvcc.MVCCKey) bool {
-	node := s.findGreaterOrEqual(key)
+	node := s.findExact(key)
 	if node == nil {
-		return false
-	}
-	nodeKey := node.Key()
-	if !bytes.Equal(nodeKey.Key, key.Key) {
 		return false
 	}
 
@@ -384,6 +522,14 @@ func (s *SkipList) Delete(key mvcc.MVCCKey) bool {
 	}
 
 	node.deleted.Store(true)
+	node.valLen = 0
+	node.valOff = 0
+
+	// Invalidate lastActive cache if we're deleting the last node
+	if s.lastActive.Load() == node {
+		s.lastActive.Store(nil)
+	}
+
 	s.epoch.Retire(unsafe.Pointer(node)) // EBR: safe deferred reclamation
 	atomic.AddInt64(&s.length, -1)
 	return true
