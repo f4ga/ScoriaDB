@@ -334,46 +334,37 @@ func (s *SkipList) findExact(key mvcc.MVCCKey) *Node {
 // Protected by EBR epoch for safe lock-free traversal.
 // See: GL-08, ARCH-11
 func (s *SkipList) findLast() *Node {
-	// Fast path: use cached lastActive pointer
+	// Fast path: cached lastActive
 	last := s.lastActive.Load()
 	if last != nil && !last.deleted.Load() {
 		return last
 	}
 
-	// Slow path: traverse level 0, skip deleted nodes
+	// Slow path: traverse LEVEL 0 ONLY, skip deleted nodes.
+	// Level 0 contains ALL nodes, guaranteeing complete traversal.
+	// See: GL-08, ARCH-11
 	s.epoch.EnterEpoch()
+	defer s.epoch.ExitEpoch()
 
 	x := s.head
-	level := atomic.LoadInt32(&s.height) - 1
-	var lastNode *Node
+	var lastNonDeleted *Node
 
-	for level >= 0 {
-		next := x.next[level].Load()
+	for {
+		next := x.next[0].Load()
 		if next == nil {
-			if level == 0 {
-				// Return the LAST NON-DELETED node found
-				if lastNode != nil {
-					s.lastActive.Store(lastNode)
-					s.epoch.ExitEpoch()
-					return lastNode
-				}
-				s.epoch.ExitEpoch()
-				return x
-			}
-			level--
-		} else {
-			x = next
-			// Track only non-deleted nodes
-			if !x.deleted.Load() {
-				lastNode = x
-			}
+			break
 		}
+		if !next.deleted.Load() {
+			lastNonDeleted = next
+		}
+		x = next
 	}
-	s.epoch.ExitEpoch()
-	if lastNode != nil {
-		s.lastActive.Store(lastNode)
+
+	if lastNonDeleted != nil {
+		s.lastActive.Store(lastNonDeleted)
+		return lastNonDeleted
 	}
-	return lastNode
+	return s.head
 }
 
 // updateLastActive updates the cached lastActive pointer if the given node
