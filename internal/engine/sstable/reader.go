@@ -27,6 +27,136 @@ import (
 	"github.com/f4ga/ScoriaDB/internal/mvcc"
 )
 
+// SSTableIterator iterates over key-value pairs in an SSTable.
+// It reads blocks sequentially using the block index.
+// See: ARCH-05, PERF-03
+type SSTableIterator struct {
+	reader    *Reader
+	blockIdx  int    // current block index
+	blockData []byte // current block data
+	pos       int    // current position within block
+	key       mvcc.MVCCKey
+	val       []byte
+	err       error
+	ended     bool
+}
+
+// NewIterator creates a new SSTableIterator for this reader.
+// Returns an error if the first block cannot be read.
+// See: ARCH-05
+func (r *Reader) NewIterator() (*SSTableIterator, error) {
+	it := &SSTableIterator{
+		reader:   r,
+		blockIdx: -1,
+	}
+	// Advance to the first block
+	if !it.nextBlock() {
+		if it.err != nil {
+			return nil, it.err
+		}
+		// Empty SSTable — valid state
+		it.ended = true
+	}
+	return it, nil
+}
+
+// Next advances the iterator to the next key-value pair.
+// Returns false when exhausted or on error.
+func (it *SSTableIterator) Next() bool {
+	if it.ended || it.err != nil {
+		return false
+	}
+
+	for {
+		// Try to read next entry from current block
+		if it.pos < len(it.blockData) {
+			if it.pos+8 > len(it.blockData) {
+				it.err = ErrCorrupted
+				return false
+			}
+
+			keyLen := binary.LittleEndian.Uint32(it.blockData[it.pos:])
+			valLen := binary.LittleEndian.Uint32(it.blockData[it.pos+4:])
+
+			if it.pos+8+int(keyLen)+int(valLen) > len(it.blockData) {
+				it.err = ErrCorrupted
+				return false
+			}
+
+			entryKey := it.blockData[it.pos+8 : it.pos+8+int(keyLen)]
+			entryVal := it.blockData[it.pos+8+int(keyLen) : it.pos+8+int(keyLen)+int(valLen)]
+			it.pos += 8 + int(keyLen) + int(valLen)
+
+			mvccKey, err := decodeMVCCKey(entryKey)
+			if err != nil {
+				it.err = err
+				return false
+			}
+
+			it.key = mvccKey
+			// Copy value since blockData will be reused
+			val := make([]byte, len(entryVal))
+			copy(val, entryVal)
+			it.val = val
+			return true
+		}
+
+		// Current block exhausted, move to next
+		if !it.nextBlock() {
+			return false
+		}
+	}
+}
+
+// nextBlock advances to the next block and reads its data.
+func (it *SSTableIterator) nextBlock() bool {
+	it.blockIdx++
+	if it.blockIdx >= len(it.reader.indexEntries) {
+		it.ended = true
+		return false
+	}
+
+	// Release previous block data
+	if it.blockData != nil {
+		ReleaseBlock(it.blockData)
+		it.blockData = nil
+	}
+
+	blockOffset := it.reader.indexEntries[it.blockIdx].offset
+	data, err := it.reader.readBlock(blockOffset)
+	if err != nil {
+		it.err = err
+		return false
+	}
+	it.blockData = data
+	it.pos = 0
+	return true
+}
+
+// Key returns the current key.
+func (it *SSTableIterator) Key() mvcc.MVCCKey {
+	return it.key
+}
+
+// Value returns the current value.
+func (it *SSTableIterator) Value() []byte {
+	return it.val
+}
+
+// Err returns any error encountered during iteration.
+func (it *SSTableIterator) Err() error {
+	return it.err
+}
+
+// Close releases resources held by the iterator.
+func (it *SSTableIterator) Close() {
+	if it.blockData != nil {
+		ReleaseBlock(it.blockData)
+		it.blockData = nil
+	}
+	it.ended = true
+}
+
 // blockPool is a sync.Pool for reusing block buffers during SSTable reads.
 // Stores *[]byte to satisfy staticcheck (sync.Pool with pointer types).
 var blockPool = sync.Pool{

@@ -20,55 +20,30 @@ import (
 
 	"github.com/f4ga/ScoriaDB/internal/engine/memtable"
 	"github.com/f4ga/ScoriaDB/internal/engine/sstable"
-	"github.com/f4ga/ScoriaDB/internal/mvcc"
 )
 
 // Iterator is the public iterator interface for streaming key-value pairs.
-// All implementations must be:
-//   - Zero-allocation in hot path (Key/Value return slices pointing to internal data)
-//   - Closeable to release resources
-//
-// The returned key is the raw user key (without MVCC timestamp).
-// The returned value is the raw stored value (may be a ValuePointer for large values).
 type Iterator interface {
-	// Next advances to the next key-value pair.
-	// Returns false when iteration is complete or an error occurs.
-	// After false, call Err() to check for errors.
 	Next() bool
-
-	// Key returns the current user key (without MVCC timestamp).
-	// The returned slice is valid until the next call to Next() or Close().
-	// Callers must NOT modify the returned slice.
 	Key() []byte
-
-	// Value returns the current value.
-	// The returned slice is valid until the next call to Next() or Close().
-	// Callers must NOT modify the returned slice.
 	Value() []byte
-
-	// Err returns the first error encountered during iteration.
-	// Returns nil if no error occurred.
 	Err() error
-
-	// Close releases all resources associated with this iterator.
-	// Must be idempotent (safe to call multiple times).
 	Close() error
+
+	// IsDeleted returns true if the current entry is a tombstone.
+	// Optional: implementations may return false by default.
+	IsDeleted() bool
 }
 
 // ============================================================
 // Heap-based Merge Iterator
 // ============================================================
 
-// heapIter is an item in the merge heap.
-// It holds an iterator and its current key for comparison.
 type heapIter struct {
 	iter Iterator
-	key  []byte // current key of this iterator (nil if exhausted)
+	key  []byte
 }
 
-// iterHeap implements heap.Interface for merge iteration.
-// Ordering is determined by lexicographic comparison of keys.
-// When keys are equal, the iterator that was added first wins (stable).
 type iterHeap []*heapIter
 
 func (h iterHeap) Len() int            { return len(h) }
@@ -84,17 +59,6 @@ func (h *iterHeap) Pop() interface{} {
 }
 
 // mergeIterator streams sorted key-value pairs from multiple sources.
-// It maintains a min-heap of iterators and returns the smallest key
-// from the heap on each Next() call.
-//
-// Deduplication: When the same key appears in multiple iterators,
-// the merge iterator returns only the first occurrence (highest priority source).
-// This works because iterators are added in priority order:
-//  1. Active MemTable (newest data)
-//  2. Frozen MemTable
-//  3. SSTables (oldest data)
-//
-// Allocations: O(number_of_sources), not O(number_of_entries).
 type mergeIterator struct {
 	heap  iterHeap
 	err   error
@@ -102,50 +66,38 @@ type mergeIterator struct {
 	value []byte
 }
 
-// newMergeIterator creates a merge iterator from all available sources.
+// NewMergeIterator creates a merge iterator from all available sources.
 // Allocations: O(number_of_sources), not O(number_of_entries).
-func newMergeIterator(eng *LSMEngine, prefix []byte) *mergeIterator {
-	// Pre-allocate heap with capacity for known sources
-	// Active + Frozen + SSTables (approximate)
+func NewMergeIterator(e *LSMEngine, prefix []byte) *mergeIterator {
 	sources := 2
-	for _, level := range eng.levels {
+	for _, level := range e.levels {
 		sources += len(level)
 	}
 	mi := &mergeIterator{
 		heap: make(iterHeap, 0, sources),
 	}
 
-	// Add active MemTable iterator
-	if eng.memTable != nil {
-		mi.addSource(newMemtableIter(eng.memTable, prefix))
+	if e.memTable != nil {
+		mi.addSource(newMemtableIter(e.memTable, prefix))
 	}
-
-	// Add frozen MemTable iterator if exists
-	if eng.frozenMemTable != nil {
-		mi.addSource(newMemtableIter(eng.frozenMemTable, prefix))
+	if e.frozenMemTable != nil {
+		mi.addSource(newMemtableIter(e.frozenMemTable, prefix))
 	}
-
-	// Add SSTable iterators
-	for _, level := range eng.levels {
+	for _, level := range e.levels {
 		for _, sst := range level {
 			mi.addSource(newSSTableIter(sst, prefix))
 		}
 	}
 
-	// Initialize the heap
 	heap.Init(&mi.heap)
-
 	return mi
 }
 
-// addSource adds a single iterator to the merge heap.
-// The iterator is advanced to its first valid position.
 func (mi *mergeIterator) addSource(iter Iterator) {
 	if iter == nil {
 		return
 	}
 	if !iter.Next() {
-		// Iterator is empty — close it immediately
 		if err := iter.Err(); err != nil {
 			mi.err = err
 		}
@@ -158,36 +110,19 @@ func (mi *mergeIterator) addSource(iter Iterator) {
 	})
 }
 
-// Next advances to the next unique key.
-// Returns false when no more items are available.
-//
-// Algorithm:
-//  1. Pop the smallest iterator from the heap
-//  2. Set current key/value from the popped iterator
-//  3. Advance the iterator to its next position; push back if not exhausted
-//  4. Deduplicate: skip keys that appear in multiple iterators
-//  5. Return true
 func (mi *mergeIterator) Next() bool {
-	if mi.err != nil {
-		return false
-	}
-	if len(mi.heap) == 0 {
-		mi.key = nil
-		mi.value = nil
+	if mi.err != nil || len(mi.heap) == 0 {
 		return false
 	}
 
-	// Pop the smallest iterator
 	hi := heap.Pop(&mi.heap).(*heapIter)
 	mi.key = hi.key
 	mi.value = hi.iter.Value()
 
-	// Advance the iterator to its next position
 	if hi.iter.Next() {
 		hi.key = hi.iter.Key()
 		heap.Push(&mi.heap, hi)
 	} else {
-		// Iterator is exhausted
 		if err := hi.iter.Err(); err != nil {
 			mi.err = err
 			hi.iter.Close()
@@ -196,35 +131,29 @@ func (mi *mergeIterator) Next() bool {
 		hi.iter.Close()
 	}
 
-	// Deduplicate: skip all iterators that have the same key
-	// (they are from lower-priority sources)
-	for len(mi.heap) > 0 {
-		top := mi.heap[0]
-		if bytes.Equal(top.key, mi.key) {
-			// Same key — skip this iterator's current entry
-			hi := heap.Pop(&mi.heap).(*heapIter)
-			if hi.iter.Next() {
-				hi.key = hi.iter.Key()
-				heap.Push(&mi.heap, hi)
-			} else {
-				if err := hi.iter.Err(); err != nil {
-					mi.err = err
-					hi.iter.Close()
-					return false
-				}
-				hi.iter.Close()
-			}
+	// Deduplicate: skip same keys from lower-priority sources
+	for len(mi.heap) > 0 && bytes.Equal(mi.heap[0].key, mi.key) {
+		hi := heap.Pop(&mi.heap).(*heapIter)
+		if hi.iter.Next() {
+			hi.key = hi.iter.Key()
+			heap.Push(&mi.heap, hi)
 		} else {
-			break
+			if err := hi.iter.Err(); err != nil {
+				mi.err = err
+				hi.iter.Close()
+				return false
+			}
+			hi.iter.Close()
 		}
 	}
 
 	return true
 }
 
-func (mi *mergeIterator) Key() []byte   { return mi.key }
-func (mi *mergeIterator) Value() []byte { return mi.value }
-func (mi *mergeIterator) Err() error    { return mi.err }
+func (mi *mergeIterator) Key() []byte     { return mi.key }
+func (mi *mergeIterator) Value() []byte   { return mi.value }
+func (mi *mergeIterator) Err() error      { return mi.err }
+func (mi *mergeIterator) IsDeleted() bool { return false }
 
 func (mi *mergeIterator) Close() error {
 	var firstErr error
@@ -240,14 +169,9 @@ func (mi *mergeIterator) Close() error {
 }
 
 // ============================================================
-// MemTable Iterator Adapter
+// MemTable Iterator (prefix filter + skip to newest version)
 // ============================================================
 
-// memtableIter adapts memtable.MemTableIterator to engine.Iterator
-// with prefix filtering and MVCC deduplication.
-//
-// It iterates over all entries in the MemTable, filtering by prefix,
-// and returns only the latest version of each key (highest timestamp).
 type memtableIter struct {
 	inner  *memtable.MemTableIterator
 	prefix []byte
@@ -255,9 +179,10 @@ type memtableIter struct {
 	value  []byte
 	err    error
 	ended  bool
+	ready  bool // true if inner is already positioned at a valid entry (from skipNewest)
+	isDel  bool // deleted state of the current entry
 }
 
-// newMemtableIter creates a new MemTable iterator with prefix filtering.
 func newMemtableIter(mt *memtable.MemTable, prefix []byte) *memtableIter {
 	return &memtableIter{
 		inner:  mt.NewIterator(),
@@ -265,80 +190,78 @@ func newMemtableIter(mt *memtable.MemTable, prefix []byte) *memtableIter {
 	}
 }
 
-// Next advances to the next unique key matching the prefix.
-// For MVCC, it returns only the newest non-deleted version of each key.
-// The MemTableIterator returns entries in skip list order:
-// for the same user key, newest version (highest commitTS) comes first
-// due to MVCC inverted timestamp ordering.
 func (it *memtableIter) Next() bool {
 	if it.ended || it.err != nil {
 		return false
 	}
 
-	for it.inner.Next() {
+	for {
+		// Advance inner iterator only if not already positioned by skipNewest
+		if !it.ready {
+			if !it.inner.Next() {
+				it.ended = true
+				return false
+			}
+		}
+		it.ready = false
+
 		mvccKey := it.inner.Key()
 		userKey := mvccKey.Key
 
-		// Check prefix match
 		if !bytes.HasPrefix(userKey, it.prefix) {
 			continue
 		}
 
-		// If this entry is a tombstone (deleted), the newest version of this key
-		// is a deletion marker. Skip all versions of this key.
-		if it.inner.IsDeleted() {
-			it.skipKey(userKey)
-			continue
-		}
+		// Track deleted state from the inner iterator.
+		// Note: the skip list iterator already skips deleted nodes internally,
+		// so IsDeleted() will typically return false. But we capture it here
+		// for correctness in case the inner iterator state changes.
+		it.isDel = it.inner.IsDeleted()
 
-		// Found a live entry — this is the newest non-deleted version.
+		// Skip to the newest version of this user key.
+		// The skip list iterator iterates from oldest to newest for the same key.
 		it.key = userKey
 		it.value = it.inner.Value()
-
-		// Skip remaining (older) versions of the same key
-		it.skipKey(userKey)
-
+		it.skipToNewest(userKey)
 		return true
 	}
-
-	it.ended = true
-	return false
 }
 
-// skipKey advances the inner iterator past all entries with the same user key.
-// Precondition: iterator is positioned at the first entry with this key.
-// Postcondition: iterator is positioned at the last entry with this key
-// (next call to inner.Next() will advance past it).
-func (it *memtableIter) skipKey(userKey []byte) {
+// skipToNewest advances past all remaining versions of the same user key,
+// keeping the value of the newest (last) version.
+// After this call, the inner iterator is positioned at the next different key
+// (or at end), and it.ready is set to prevent double-advance in Next().
+// Does NOT set it.ended — the next call to Next() will handle end naturally.
+func (it *memtableIter) skipToNewest(userKey []byte) {
 	for {
 		if !it.inner.Next() {
-			it.ended = true
+			// Inner iterator exhausted — next Next() call will return false.
 			return
 		}
 		if !bytes.Equal(it.inner.Key().Key, userKey) {
+			it.ready = true // positioned at next key, don't advance again in Next()
 			return
 		}
+		// Same key, newer version — update value
+		it.value = it.inner.Value()
 	}
 }
 
-func (it *memtableIter) Key() []byte   { return it.key }
-func (it *memtableIter) Value() []byte { return it.value }
-func (it *memtableIter) Err() error    { return it.err }
+func (it *memtableIter) Key() []byte     { return it.key }
+func (it *memtableIter) Value() []byte   { return it.value }
+func (it *memtableIter) Err() error      { return it.err }
+func (it *memtableIter) IsDeleted() bool { return it.isDel }
 
 func (it *memtableIter) Close() error {
-	if it.inner != nil {
-		it.inner.Close()
-	}
+	it.inner.Close()
 	it.ended = true
 	return nil
 }
 
 // ============================================================
-// SSTable Iterator Adapter
+// SSTable Iterator
 // ============================================================
 
-// sstableIter adapts sstable.SSTableIterator to engine.Iterator
-// with prefix filtering.
 type sstableIter struct {
 	inner  *sstable.SSTableIterator
 	prefix []byte
@@ -348,7 +271,6 @@ type sstableIter struct {
 	ended  bool
 }
 
-// newSSTableIter creates a new SSTable iterator with prefix filtering.
 func newSSTableIter(sst *sstable.Reader, prefix []byte) *sstableIter {
 	inner, err := sst.NewIterator()
 	if err != nil {
@@ -360,7 +282,6 @@ func newSSTableIter(sst *sstable.Reader, prefix []byte) *sstableIter {
 	}
 }
 
-// Next advances to the next entry matching the prefix.
 func (it *sstableIter) Next() bool {
 	if it.ended || it.err != nil {
 		return false
@@ -370,7 +291,6 @@ func (it *sstableIter) Next() bool {
 		mvccKey := it.inner.Key()
 		userKey := mvccKey.Key
 
-		// Check prefix match
 		if !bytes.HasPrefix(userKey, it.prefix) {
 			continue
 		}
@@ -384,14 +304,13 @@ func (it *sstableIter) Next() bool {
 	return false
 }
 
-func (it *sstableIter) Key() []byte   { return it.key }
-func (it *sstableIter) Value() []byte { return it.value }
-func (it *sstableIter) Err() error    { return it.err }
+func (it *sstableIter) Key() []byte     { return it.key }
+func (it *sstableIter) Value() []byte   { return it.value }
+func (it *sstableIter) Err() error      { return it.err }
+func (it *sstableIter) IsDeleted() bool { return false }
 
 func (it *sstableIter) Close() error {
-	if it.inner != nil {
-		it.inner.Close()
-	}
+	it.inner.Close()
 	it.ended = true
 	return nil
 }
@@ -400,96 +319,30 @@ func (it *sstableIter) Close() error {
 // Empty Iterator
 // ============================================================
 
-// emptyIterator returns false immediately.
 type emptyIterator struct{}
 
-func (it *emptyIterator) Next() bool    { return false }
-func (it *emptyIterator) Key() []byte   { return nil }
-func (it *emptyIterator) Value() []byte { return nil }
-func (it *emptyIterator) Err() error    { return nil }
-func (it *emptyIterator) Close() error  { return nil }
+func (it *emptyIterator) Next() bool      { return false }
+func (it *emptyIterator) Key() []byte     { return nil }
+func (it *emptyIterator) Value() []byte   { return nil }
+func (it *emptyIterator) Err() error      { return nil }
+func (it *emptyIterator) Close() error    { return nil }
+func (it *emptyIterator) IsDeleted() bool { return false }
 
 // ============================================================
-// Scan — Public API
+// LSMEngine Scan API
 // ============================================================
 
 // Scan returns an iterator over keys with the given prefix.
-// The iterator streams results from all sources (MemTable, frozen MemTable, SSTables)
-// using a heap-based merge, returning unique keys in sorted order.
-//
 // Allocations: O(number_of_sources), not O(number_of_entries).
-// This is a 95% reduction from the previous implementation which allocated O(N).
 func (e *LSMEngine) Scan(prefix []byte) Iterator {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 
-	mi := newMergeIterator(e, prefix)
+	mi := NewMergeIterator(e, prefix)
 	if len(mi.heap) == 0 && mi.err == nil {
 		return &emptyIterator{}
 	}
-	if mi.err != nil {
-		return mi
-	}
-	return mi
-}
-
-// ============================================================
-// Legacy adapter — kept for backward compatibility
-// ============================================================
-
-// engineIteratorAdapter adapts sstable.Iterator to engine.Iterator.
-// Kept for backward compatibility with existing code.
-type engineIteratorAdapter struct {
-	inner  sstable.Iterator
-	prefix []byte
-}
-
-func (it *engineIteratorAdapter) Next() bool {
-	for it.inner.Next() {
-		if bytes.HasPrefix(it.inner.Key().Key, it.prefix) {
-			return true
-		}
-	}
-	return false
-}
-
-func (it *engineIteratorAdapter) Key() []byte {
-	return it.inner.Key().Key
-}
-
-func (it *engineIteratorAdapter) Value() []byte {
-	return it.inner.Value()
-}
-
-func (it *engineIteratorAdapter) Err() error {
-	return nil
-}
-
-func (it *engineIteratorAdapter) Close() error {
-	it.inner.Close()
-	return nil
-}
-
-// memTableIteratorAdapter adapts MemTableIterator to sstable.Iterator.
-// Kept for backward compatibility with existing code.
-type memTableIteratorAdapter struct {
-	inner *memtable.MemTableIterator
-}
-
-func (it *memTableIteratorAdapter) Next() bool {
-	return it.inner.Next()
-}
-
-func (it *memTableIteratorAdapter) Key() mvcc.MVCCKey {
-	return it.inner.Key()
-}
-
-func (it *memTableIteratorAdapter) Value() []byte {
-	return it.inner.Value()
-}
-
-func (it *memTableIteratorAdapter) Close() {
-	it.inner.Close()
+	return NewMVCCIterator(mi)
 }
 
 // Ensure compile-time interface satisfaction
