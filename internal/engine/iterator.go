@@ -60,10 +60,12 @@ func (h *iterHeap) Pop() interface{} {
 
 // mergeIterator streams sorted key-value pairs from multiple sources.
 type mergeIterator struct {
-	heap  iterHeap
-	err   error
-	key   []byte
-	value []byte
+	heap   iterHeap
+	err    error
+	key    []byte
+	value  []byte
+	engine *LSMEngine  // for VLog resolution in Value()
+	views  []*VLogView // active VLog views, released in Close()
 }
 
 // NewMergeIterator creates a merge iterator from all available sources.
@@ -74,7 +76,8 @@ func NewMergeIterator(e *LSMEngine, prefix []byte) *mergeIterator {
 		sources += len(level)
 	}
 	mi := &mergeIterator{
-		heap: make(iterHeap, 0, sources),
+		heap:   make(iterHeap, 0, sources),
+		engine: e,
 	}
 
 	if e.memTable != nil {
@@ -150,8 +153,38 @@ func (mi *mergeIterator) Next() bool {
 	return true
 }
 
-func (mi *mergeIterator) Key() []byte     { return mi.key }
-func (mi *mergeIterator) Value() []byte   { return mi.value }
+func (mi *mergeIterator) Key() []byte { return mi.key }
+
+// Value returns the current value.
+// If the value is a ValuePointer (12 bytes), it is resolved from VLog.
+// See: P0-SCAN-FIX, VLog zero-copy
+func (mi *mergeIterator) Value() []byte {
+	if mi.value == nil {
+		return nil
+	}
+
+	// Check if this is a ValuePointer (12 bytes) pointing to VLog.
+	// VLog stores large values (>64B) as 12-byte pointers.
+	if len(mi.value) == ValuePointerSize {
+		vp, ok := DecodeValuePointer(mi.value)
+		if ok && vp.Offset >= 0 && vp.Size > 0 {
+			// Resolve through VLog (zero-copy).
+			view, err := mi.engine.vlog.ReadView(vp)
+			if err != nil {
+				mi.err = err
+				return nil
+			}
+			// Store view for later Release.
+			mi.views = append(mi.views, view)
+			return view.Data()
+		}
+		// Invalid ValuePointer — return nil.
+		return nil
+	}
+
+	return mi.value
+}
+
 func (mi *mergeIterator) Err() error      { return mi.err }
 func (mi *mergeIterator) IsDeleted() bool { return false }
 
@@ -162,9 +195,14 @@ func (mi *mergeIterator) Close() error {
 			firstErr = err
 		}
 	}
+	// Release all VLog views.
+	for _, view := range mi.views {
+		view.Release()
+	}
 	mi.heap = nil
 	mi.key = nil
 	mi.value = nil
+	mi.views = nil
 	return firstErr
 }
 

@@ -22,6 +22,7 @@ import (
 	"os"
 	"runtime"
 	"strings"
+	"sync/atomic"
 )
 
 // Level represents a log severity level.
@@ -52,7 +53,7 @@ const (
 )
 
 var (
-	currentLevel = INFO
+	currentLevel atomic.Int32
 	component    = "scoriadb"
 )
 
@@ -66,24 +67,26 @@ func init() {
 	// Check LOG_LEVEL environment variable on startup.
 	switch strings.ToUpper(os.Getenv("LOG_LEVEL")) {
 	case "DEBUG":
-		currentLevel = DEBUG
+		currentLevel.Store(int32(DEBUG))
 	case "INFO":
-		currentLevel = INFO
+		currentLevel.Store(int32(INFO))
 	case "WARN":
-		currentLevel = WARN
+		currentLevel.Store(int32(WARN))
 	case "ERROR":
-		currentLevel = ERROR
+		currentLevel.Store(int32(ERROR))
+	default:
+		currentLevel.Store(int32(INFO))
 	}
 }
 
 // SetLevel sets the minimum log level. Messages below this level are suppressed.
 func SetLevel(level Level) {
-	currentLevel = level
+	currentLevel.Store(int32(level))
 }
 
 // GetLevel returns the current log level.
 func GetLevel() Level {
-	return currentLevel
+	return Level(currentLevel.Load())
 }
 
 // SetComponent sets the component name shown in log messages.
@@ -93,7 +96,7 @@ func SetComponent(name string) {
 
 // logMessage writes a formatted log message with level, source location, and component.
 func logMessage(level Level, levelStr string, format string, args ...interface{}) {
-	if level < currentLevel {
+	if level < Level(currentLevel.Load()) {
 		return
 	}
 	msg := fmt.Sprintf(format, args...)
@@ -114,7 +117,7 @@ func logMessage(level Level, levelStr string, format string, args ...interface{}
 
 // logMessageWithComponent writes a formatted log message with level, component, source location.
 func logMessageWithComponent(level Level, comp Component, levelStr string, format string, args ...interface{}) {
-	if level < currentLevel {
+	if level < Level(currentLevel.Load()) {
 		return
 	}
 	// Skip INFO-level logs for components in the skip list.
