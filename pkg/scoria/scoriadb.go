@@ -16,7 +16,6 @@ package scoria
 
 import (
 	"fmt"
-	"math"
 	"sync/atomic"
 
 	"github.com/f4ga/ScoriaDB/internal/cf"
@@ -103,8 +102,8 @@ func (it *errorIterator) Next() bool      { return false }
 func (it *errorIterator) Key() []byte     { return nil }
 func (it *errorIterator) Value() []byte   { return nil }
 func (it *errorIterator) Err() error      { return it.err }
-func (it *errorIterator) Close() error    { return nil }   // ← ИСПРАВЛЕНО
-func (it *errorIterator) IsDeleted() bool { return false } // ← НОВЫЙ МЕТОД
+func (it *errorIterator) Close() error    { return nil }
+func (it *errorIterator) IsDeleted() bool { return false }
 
 // ============================================================
 // Scoria Merge Iterator — Wraps engine.Scan
@@ -133,8 +132,8 @@ func (it *scoriaMergeIter) Next() bool {
 func (it *scoriaMergeIter) Key() []byte     { return it.inner.Key() }
 func (it *scoriaMergeIter) Value() []byte   { return it.inner.Value() }
 func (it *scoriaMergeIter) Err() error      { return it.err }
-func (it *scoriaMergeIter) Close() error    { return it.inner.Close() } // ← ИСПРАВЛЕНО
-func (it *scoriaMergeIter) IsDeleted() bool { return false }            // ← НОВЫЙ МЕТОД
+func (it *scoriaMergeIter) Close() error    { return it.inner.Close() }
+func (it *scoriaMergeIter) IsDeleted() bool { return false }
 
 // newScoriaMergeIter delegates to engine.Scan.
 // All logic is in engine package — no duplication.
@@ -237,13 +236,16 @@ func (db *ScoriaDB) Scan(prefix []byte) Iterator {
 // Column Family Operations
 // ============================================================
 
+// GetCF returns the value for the given key in the specified column family.
 func (db *ScoriaDB) GetCF(cfName string, key []byte) ([]byte, error) {
 	eng, err := db.registry.GetCF(cfName)
 	if err != nil {
 		return nil, err
 	}
 
-	_, ts, err := eng.GetLatestInfo(key)
+	// Use GetLatestInfo directly — it returns (value, ts, found)
+	// If found is true but value is nil → empty value exists
+	val, ts, err := eng.GetLatestInfo(key)
 	if err != nil {
 		return nil, err
 	}
@@ -251,9 +253,10 @@ func (db *ScoriaDB) GetCF(cfName string, key []byte) ([]byte, error) {
 		return nil, nil // key does not exist
 	}
 
-	val, err := eng.GetWithTS(key, math.MaxUint64)
-	if err != nil {
-		return nil, err
+	// If value is nil, this is either tombstone OR empty value.
+	// Since ts > 0, it's a valid entry — return empty slice.
+	if val == nil {
+		return []byte{}, nil
 	}
 	return val, nil
 }
@@ -347,10 +350,12 @@ func (db *ScoriaDB) Close() error {
 // Utilities
 // ============================================================
 
+// EmbeddedCFDB returns a CFDB interface for embedding.
 func EmbeddedCFDB(dataDir string) (CFDB, error) {
 	return NewScoriaDB(dataDir)
 }
 
+// Open opens (or creates) a ScoriaDB database with the given options.
 func Open(opts Options) (DB, error) {
 	walOpts := engine.DefaultWALOptions()
 	if opts.WALOptions != nil {

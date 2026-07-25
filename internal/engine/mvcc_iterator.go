@@ -16,6 +16,7 @@ package engine
 
 import (
 	"bytes"
+	"fmt"
 )
 
 // MVCCIterator wraps any Iterator and applies MVCC filtering:
@@ -51,7 +52,9 @@ func NewMVCCIterator(inner Iterator) *MVCCIterator {
 // Next advances to the next non-deleted user key.
 // Zero heap allocations in the hot path.
 func (it *MVCCIterator) Next() bool {
+	fmt.Printf("[DEBUG-10a] MVCCIterator.Next() called, ended=%v, err=%v\n", it.ended, it.err)
 	if it.ended || it.err != nil {
+		fmt.Printf("[DEBUG-10a] MVCCIterator.Next(): ended or error\n")
 		return false
 	}
 
@@ -63,15 +66,19 @@ func (it *MVCCIterator) Next() bool {
 			// Don't call inner.Next() — it's already positioned.
 			it.peeked = false
 			currentKey = it.inner.Key()
+			fmt.Printf("[DEBUG-10a] MVCCIterator.Next(): using peeked key=%q\n", string(currentKey))
 		} else {
 			if !it.inner.Next() {
 				it.ended = true
+				fmt.Printf("[DEBUG-10a] MVCCIterator.Next(): inner exhausted\n")
 				return false
 			}
 			currentKey = it.inner.Key()
+			fmt.Printf("[DEBUG-10a] MVCCIterator.Next(): inner returned key=%q\n", string(currentKey))
 		}
 
 		if currentKey == nil {
+			fmt.Printf("[DEBUG-10a] MVCCIterator.Next(): currentKey is nil, continuing\n")
 			continue
 		}
 
@@ -82,9 +89,12 @@ func (it *MVCCIterator) Next() bool {
 		var bestValue []byte
 		found := false
 		hasTombstone := false
+		versionCount := 0
 
 		for {
+			versionCount++
 			if it.inner.IsDeleted() {
+				fmt.Printf("[DEBUG-10a] MVCCIterator.Next(): version %d is tombstone\n", versionCount)
 				hasTombstone = true
 				bestValue = nil
 				found = false
@@ -94,10 +104,12 @@ func (it *MVCCIterator) Next() bool {
 				// with the newest non-deleted version.
 				bestValue = it.inner.Value()
 				found = true
+				fmt.Printf("[DEBUG-10a] MVCCIterator.Next(): version %d is live, value len=%d\n", versionCount, len(bestValue))
 			}
 
 			if !it.inner.Next() {
 				it.ended = true
+				fmt.Printf("[DEBUG-10a] MVCCIterator.Next(): inner exhausted after %d versions\n", versionCount)
 				break
 			}
 			nextKey := it.inner.Key()
@@ -105,6 +117,7 @@ func (it *MVCCIterator) Next() bool {
 				// Different user key — save it for the next call.
 				// inner is already positioned at this key.
 				it.peeked = true
+				fmt.Printf("[DEBUG-10a] MVCCIterator.Next(): next key differs (%q), peeking\n", string(nextKey))
 				break
 			}
 		}
@@ -112,8 +125,12 @@ func (it *MVCCIterator) Next() bool {
 		if found && !hasTombstone && bestValue != nil {
 			it.key = currentKey
 			it.value = bestValue
+			fmt.Printf("[DEBUG-10a] MVCCIterator.Next(): returning true, key=%q, value len=%d\n",
+				string(currentKey), len(bestValue))
 			return true
 		}
+		fmt.Printf("[DEBUG-10a] MVCCIterator.Next(): key %q filtered (found=%v, hasTombstone=%v), continuing\n",
+			string(currentKey), found, hasTombstone)
 		// Key was deleted (tombstone is the newest version) or no value found.
 		// Continue to the next user key.
 	}

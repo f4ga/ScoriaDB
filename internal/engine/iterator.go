@@ -17,6 +17,7 @@ package engine
 import (
 	"bytes"
 	"container/heap"
+	"fmt"
 
 	"github.com/f4ga/ScoriaDB/internal/engine/memtable"
 	"github.com/f4ga/ScoriaDB/internal/engine/sstable"
@@ -71,6 +72,7 @@ type mergeIterator struct {
 // NewMergeIterator creates a merge iterator from all available sources.
 // Allocations: O(number_of_sources), not O(number_of_entries).
 func NewMergeIterator(e *LSMEngine, prefix []byte) *mergeIterator {
+	fmt.Printf("[DEBUG-05] NewMergeIterator: prefix=%q, memTable=%p\n", string(prefix), e.memTable)
 	sources := 2
 	for _, level := range e.levels {
 		sources += len(level)
@@ -81,62 +83,88 @@ func NewMergeIterator(e *LSMEngine, prefix []byte) *mergeIterator {
 	}
 
 	if e.memTable != nil {
+		fmt.Printf("[DEBUG-05] NewMergeIterator: adding memTable source\n")
 		mi.addSource(newMemtableIter(e.memTable, prefix))
+	} else {
+		fmt.Printf("[DEBUG-05] NewMergeIterator: memTable is nil\n")
 	}
 	if e.frozenMemTable != nil {
+		fmt.Printf("[DEBUG-05] NewMergeIterator: adding frozenMemTable source\n")
 		mi.addSource(newMemtableIter(e.frozenMemTable, prefix))
+	} else {
+		fmt.Printf("[DEBUG-05] NewMergeIterator: frozenMemTable is nil\n")
 	}
-	for _, level := range e.levels {
-		for _, sst := range level {
+	for li, level := range e.levels {
+		for si, sst := range level {
+			fmt.Printf("[DEBUG-05] NewMergeIterator: adding SSTable source at level[%d][%d]\n", li, si)
 			mi.addSource(newSSTableIter(sst, prefix))
 		}
 	}
 
 	heap.Init(&mi.heap)
+	fmt.Printf("[DEBUG-05] NewMergeIterator: heap initialized with %d sources\n", len(mi.heap))
 	return mi
 }
 
 func (mi *mergeIterator) addSource(iter Iterator) {
 	if iter == nil {
+		fmt.Printf("[DEBUG-06] addSource: iter is nil, skipping\n")
 		return
 	}
+	fmt.Printf("[DEBUG-06] addSource: checking first element\n")
 	if !iter.Next() {
+		fmt.Printf("[DEBUG-06] addSource: iter.Next() returned false (empty source), err=%v\n", iter.Err())
 		if err := iter.Err(); err != nil {
 			mi.err = err
 		}
 		iter.Close()
 		return
 	}
+	key := iter.Key()
+	fmt.Printf("[DEBUG-06] addSource: adding source, first key=%q\n", string(key))
 	mi.heap = append(mi.heap, &heapIter{
 		iter: iter,
-		key:  iter.Key(),
+		key:  key,
 	})
 }
 
 func (mi *mergeIterator) Next() bool {
+	fmt.Printf("[DEBUG-09] mergeIterator.Next() called, heap len=%d, err=%v\n", len(mi.heap), mi.err)
 	if mi.err != nil || len(mi.heap) == 0 {
+		if len(mi.heap) == 0 {
+			fmt.Printf("[DEBUG-09] mergeIterator.Next(): heap is empty\n")
+		}
+		if mi.err != nil {
+			fmt.Printf("[DEBUG-09] mergeIterator.Next(): error: %v\n", mi.err)
+		}
 		return false
 	}
 
 	hi := heap.Pop(&mi.heap).(*heapIter)
 	mi.key = hi.key
 	mi.value = hi.iter.Value()
+	fmt.Printf("[DEBUG-09] mergeIterator.Next(): popped key=%q, value len=%d\n", string(mi.key), len(mi.value))
 
 	if hi.iter.Next() {
 		hi.key = hi.iter.Key()
 		heap.Push(&mi.heap, hi)
+		fmt.Printf("[DEBUG-09] mergeIterator.Next(): source has more, pushed key=%q\n", string(hi.key))
 	} else {
 		if err := hi.iter.Err(); err != nil {
 			mi.err = err
 			hi.iter.Close()
+			fmt.Printf("[DEBUG-09] mergeIterator.Next(): source error: %v\n", err)
 			return false
 		}
 		hi.iter.Close()
+		fmt.Printf("[DEBUG-09] mergeIterator.Next(): source exhausted, closed\n")
 	}
 
 	// Deduplicate: skip same keys from lower-priority sources
+	skipped := 0
 	for len(mi.heap) > 0 && bytes.Equal(mi.heap[0].key, mi.key) {
 		hi := heap.Pop(&mi.heap).(*heapIter)
+		skipped++
 		if hi.iter.Next() {
 			hi.key = hi.iter.Key()
 			heap.Push(&mi.heap, hi)
@@ -149,6 +177,9 @@ func (mi *mergeIterator) Next() bool {
 			hi.iter.Close()
 		}
 	}
+	if skipped > 0 {
+		fmt.Printf("[DEBUG-09] mergeIterator.Next(): deduplicated %d entries\n", skipped)
+	}
 
 	return true
 }
@@ -156,32 +187,49 @@ func (mi *mergeIterator) Next() bool {
 func (mi *mergeIterator) Key() []byte { return mi.key }
 
 // Value returns the current value.
-// If the value is a ValuePointer (12 bytes), it is resolved from VLog.
-// See: P0-SCAN-FIX, VLog zero-copy
+// Resolves ValuePointer from either Unified MMap (new) or VLog (legacy).
+// See: decodeStoredValue for the same logic in Get path.
+// HOT-02, ARCH-06
 func (mi *mergeIterator) Value() []byte {
 	if mi.value == nil {
 		return nil
 	}
 
-	// Check if this is a ValuePointer (12 bytes) pointing to VLog.
-	// VLog stores large values (>64B) as 12-byte pointers.
+	// Check if this is a ValuePointer (12 bytes) pointing to large value storage.
 	if len(mi.value) == ValuePointerSize {
 		vp, ok := DecodeValuePointer(mi.value)
-		if ok && vp.Offset >= 0 && vp.Size > 0 {
-			// Resolve through VLog (zero-copy).
+		if !ok || vp.Offset < 0 || vp.Size <= 0 {
+			// Invalid ValuePointer — return as-is (should not happen).
+			return mi.value
+		}
+
+		// 1. Check Unified MMap first (v0.3.0+ hot path).
+		if mi.engine.unifiedMmap != nil && vp.Offset < mi.engine.unifiedMmap.Size() {
+			value, err := mi.engine.unifiedMmap.ReadValue(uint64(vp.Offset), vp.Size)
+			if err == nil {
+				return value
+			}
+			// If Unified MMap read fails, fall through to VLog.
+		}
+
+		// 2. Fall back to VLog (legacy path).
+		if vp.Offset+int64(vp.Size)+8 <= mi.engine.vlog.Size() {
 			view, err := mi.engine.vlog.ReadView(vp)
 			if err != nil {
 				mi.err = err
 				return nil
 			}
-			// Store view for later Release.
+			// Store view for later Release in Close().
 			mi.views = append(mi.views, view)
 			return view.Data()
 		}
-		// Invalid ValuePointer — return nil.
+
+		// 3. Both sources failed — value pointer out of range.
+		mi.err = fmt.Errorf("value pointer out of range: offset=%d size=%d", vp.Offset, vp.Size)
 		return nil
 	}
 
+	// Inline value (small, stored directly in MemTable).
 	return mi.value
 }
 
@@ -222,6 +270,7 @@ type memtableIter struct {
 }
 
 func newMemtableIter(mt *memtable.MemTable, prefix []byte) *memtableIter {
+	fmt.Printf("[DEBUG-07] newMemtableIter: prefix=%q, mt=%p\n", string(prefix), mt)
 	return &memtableIter{
 		inner:  mt.NewIterator(),
 		prefix: prefix,
@@ -229,7 +278,9 @@ func newMemtableIter(mt *memtable.MemTable, prefix []byte) *memtableIter {
 }
 
 func (it *memtableIter) Next() bool {
+	fmt.Printf("[DEBUG-08] memtableIter.Next() called, ready=%v, ended=%v\n", it.ready, it.ended)
 	if it.ended || it.err != nil {
+		fmt.Printf("[DEBUG-08] memtableIter.Next(): ended or error\n")
 		return false
 	}
 
@@ -238,15 +289,20 @@ func (it *memtableIter) Next() bool {
 		if !it.ready {
 			if !it.inner.Next() {
 				it.ended = true
+				fmt.Printf("[DEBUG-08] memtableIter.Next(): inner exhausted\n")
 				return false
 			}
+			fmt.Printf("[DEBUG-08] memtableIter.Next(): inner advanced\n")
 		}
 		it.ready = false
 
 		mvccKey := it.inner.Key()
 		userKey := mvccKey.Key
+		fmt.Printf("[DEBUG-08] memtableIter.Next(): userKey=%q, prefix=%q, match=%v\n",
+			string(userKey), string(it.prefix), bytes.HasPrefix(userKey, it.prefix))
 
 		if !bytes.HasPrefix(userKey, it.prefix) {
+			fmt.Printf("[DEBUG-08] memtableIter.Next(): prefix mismatch, continuing\n")
 			continue
 		}
 
@@ -260,7 +316,10 @@ func (it *memtableIter) Next() bool {
 		// The skip list iterator iterates from oldest to newest for the same key.
 		it.key = userKey
 		it.value = it.inner.Value()
+		fmt.Printf("[DEBUG-08] memtableIter.Next(): found key=%q, value len=%d, isDel=%v\n",
+			string(userKey), len(it.value), it.isDel)
 		it.skipToNewest(userKey)
+		fmt.Printf("[DEBUG-08] memtableIter.Next(): returning true\n")
 		return true
 	}
 }
@@ -373,13 +432,16 @@ func (it *emptyIterator) IsDeleted() bool { return false }
 // Scan returns an iterator over keys with the given prefix.
 // Allocations: O(number_of_sources), not O(number_of_entries).
 func (e *LSMEngine) Scan(prefix []byte) Iterator {
+	fmt.Printf("[DEBUG-04] LSMEngine.Scan(): prefix=%q, memTable=%p\n", string(prefix), e.memTable)
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 
 	mi := NewMergeIterator(e, prefix)
 	if len(mi.heap) == 0 && mi.err == nil {
+		fmt.Printf("[DEBUG-04] LSMEngine.Scan(): heap is empty, returning emptyIterator\n")
 		return &emptyIterator{}
 	}
+	fmt.Printf("[DEBUG-04] LSMEngine.Scan(): heap has %d sources, returning MVCCIterator\n", len(mi.heap))
 	return NewMVCCIterator(mi)
 }
 

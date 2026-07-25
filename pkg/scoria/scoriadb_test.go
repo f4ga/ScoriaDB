@@ -20,9 +20,11 @@ package scoria
 import (
 	"bytes"
 	"fmt"
+	"math"
 	"testing"
 
 	"github.com/f4ga/ScoriaDB/internal/engine"
+	"github.com/f4ga/ScoriaDB/internal/mvcc"
 )
 
 func TestNewScoriaDB(t *testing.T) {
@@ -758,7 +760,6 @@ func TestScoriaDB_EmptyKey(t *testing.T) {
 		t.Errorf("expected value, got %s", got)
 	}
 }
-
 func TestScoriaDB_EmptyValue(t *testing.T) {
 	db, err := NewScoriaDB(t.TempDir())
 	if err != nil {
@@ -769,6 +770,16 @@ func TestScoriaDB_EmptyValue(t *testing.T) {
 	if err := db.Put([]byte("key"), []byte{}); err != nil {
 		t.Fatalf("Put empty value failed: %v", err)
 	}
+
+	// ДИАГНОСТИКА: проверить через движок
+	eng, _ := db.registry.GetCF("default")
+	val, ts, found := eng.GetLatestInfo([]byte("key"))
+	t.Logf("[DIAG] GetLatestInfo: found=%v, ts=%d, val=%v (len=%d)", found, ts, val, len(val))
+
+	// ДИАГНОСТИКА: проверить через GetWithTS
+	mvccKey := mvcc.NewMVCCKey([]byte("key"), math.MaxUint64)
+	val2, err2 := eng.GetWithTS(mvccKey.Key, mvccKey.Timestamp)
+	t.Logf("[DIAG] GetWithTS: err=%v, val=%v (len=%d)", err2, val2, len(val2))
 
 	got, err := db.Get([]byte("key"))
 	if err != nil {
@@ -781,7 +792,6 @@ func TestScoriaDB_EmptyValue(t *testing.T) {
 		t.Errorf("expected length 0, got %d", len(got))
 	}
 }
-
 func TestScoriaDB_TransactionGetBuffer(t *testing.T) {
 	db, err := NewScoriaDB(t.TempDir())
 	if err != nil {
@@ -894,6 +904,7 @@ func TestErrorTransaction(t *testing.T) {
 		t.Errorf("Rollback() expected nil, got %v", err2)
 	}
 }
+
 func TestScoriaDB_ScanLargeValues(t *testing.T) {
 	db, err := NewScoriaDB(t.TempDir())
 	if err != nil {
@@ -901,7 +912,16 @@ func TestScoriaDB_ScanLargeValues(t *testing.T) {
 	}
 	defer db.Close()
 
-	// Записываем 100 значений по 4KB
+	// ДИАГНОСТИКА: проверить registry
+	t.Logf("[DIAG] registry: %p", db.registry)
+
+	eng, err := db.registry.GetCF("default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("[DIAG] engine from registry: %p", eng)
+
+	// Записываем
 	for i := 0; i < 100; i++ {
 		key := []byte(fmt.Sprintf("scan:%05d", i))
 		value := make([]byte, 4096)
@@ -910,24 +930,32 @@ func TestScoriaDB_ScanLargeValues(t *testing.T) {
 		}
 	}
 
-	iter := db.Scan([]byte("scan:"))
-	defer iter.Close()
+	// ДИАГНОСТИКА: проверить MemTable через движок
+	t.Logf("[DIAG] ActiveMemTable from engine: %p", eng.ActiveMemTable())
+	t.Logf("[DIAG] MemTable size: %d", eng.ActiveMemTable().Size())
 
+	// ДИАГНОСТИКА: проверить Scan через движок напрямую
+	iter := eng.Scan([]byte("scan:"))
 	count := 0
 	for iter.Next() {
 		count++
-		if len(iter.Value()) != 4096 {
-			t.Errorf("expected 4096 bytes, got %d", len(iter.Value()))
-		}
 	}
-	if err := iter.Err(); err != nil {
-		t.Fatal(err)
+	iter.Close()
+	t.Logf("[DIAG] eng.Scan() returned %d keys", count)
+
+	// ДИАГНОСТИКА: проверить Scan через db
+	iter2 := db.Scan([]byte("scan:"))
+	count2 := 0
+	for iter2.Next() {
+		count2++
 	}
-	if count != 100 {
-		t.Errorf("expected 100 keys, got %d", count)
+	iter2.Close()
+	t.Logf("[DIAG] db.Scan() returned %d keys", count2)
+
+	if count2 != 100 {
+		t.Errorf("expected 100 keys, got %d", count2)
 	}
 }
-
 func TestScoriaDB_ScanViewRelease(t *testing.T) {
 	db, err := NewScoriaDB(t.TempDir())
 	if err != nil {

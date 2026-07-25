@@ -623,7 +623,12 @@ func (e *LSMEngine) Close() error {
 // Uses ReadDirect for zero-copy internal reads.
 func (e *LSMEngine) decodeStoredValue(stored []byte) ([]byte, error) {
 	if len(stored) == 0 {
-		return nil, nil
+		// Empty stored value — return empty slice (not nil) so callers
+		// can distinguish "key found with empty value" from "key not found".
+		if stored == nil {
+			return nil, nil
+		}
+		return []byte{}, nil
 	}
 	if vp, ok := DecodeValuePointer(stored); ok {
 		if vp.Offset < 0 || vp.Size <= 0 {

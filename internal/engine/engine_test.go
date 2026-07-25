@@ -492,13 +492,17 @@ func TestDecodeStoredValue(t *testing.T) {
 		t.Errorf("expected %s, got %s", inlineVal, val)
 	}
 
-	// Test empty value
+	// Test empty value — should return empty slice (not nil)
+	// to distinguish "key found with empty value" from "key not found".
 	val, err = eng.decodeStoredValue([]byte{})
 	if err != nil {
 		t.Fatalf("decodeStoredValue(empty) failed: %v", err)
 	}
-	if val != nil {
-		t.Errorf("expected nil for empty, got %v", val)
+	if val == nil {
+		t.Errorf("expected empty slice for empty stored value, got nil")
+	}
+	if len(val) != 0 {
+		t.Errorf("expected empty slice, got %v (len=%d)", val, len(val))
 	}
 }
 

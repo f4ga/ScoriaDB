@@ -125,6 +125,7 @@ func (mt *MemTable) GetLatest(key []byte) ([]byte, uint64, bool) {
 
 	var bestValue []byte
 	var bestTS uint64
+	found := false
 	for node != nil {
 		nodeKey = node.Key()
 		if !bytes.Equal(nodeKey.Key, key) {
@@ -135,11 +136,12 @@ func (mt *MemTable) GetLatest(key []byte) ([]byte, uint64, bool) {
 			if commitTS > bestTS {
 				bestTS = commitTS
 				bestValue = node.Value()
+				found = true
 			}
 		}
 		node = node.next[0].Load()
 	}
-	return bestValue, bestTS, bestValue != nil
+	return bestValue, bestTS, found
 }
 
 // NewIterator returns an iterator over all entries.
