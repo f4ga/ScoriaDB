@@ -20,6 +20,7 @@ import (
 	"hash/crc32"
 	"os"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -33,44 +34,103 @@ import (
 const (
 	VLogMagic   uint32 = 0x53434F52
 	VLogVersion uint32 = 1
-	// VLogExtendSize — размер, на который расширяется mmap за один раз.
-	// 512MB —大幅но减少 syscall'ов (1 раз на 131K записей по 4KB).
-	// Для продакшена с большими значениями можно увеличить до 1GB.
-	VLogExtendSize int64 = 512 * 1024 * 1024
 )
 
-// MaxInlineSize — максимальный размер значения, которое хранится inline (в MemTable),
-// а не в Value Log. Сделано var, а не const, чтобы бенчмарки могли временно
-// изменять его для тестирования различных сценариев.
-// Значение по умолчанию: 64 байта.
+// VLogExtendSize is the mmap extension increment.
+// 512MB minimizes syscalls (~1 per 131K entries of 4KB).
+// For production with large values, increase to 1GB.
+//
+// Var, not const, so benchmarks can temporarily reduce it
+// to prevent disk exhaustion and SIGBUS during long runs.
+var VLogExtendSize int64 = 512 * 1024 * 1024
+
+// MaxInlineSize is the maximum value size stored inline (in MemTable),
+// not in Value Log. Var, not const, so benchmarks can temporarily
+// modify it for testing different scenarios.
+// Default: 64 bytes.
 var MaxInlineSize int = 64
 
+// VLogReader defines the read interface for Value Log.
 type VLogReader interface {
 	Read(vp ValuePointer) ([]byte, error)
 	Size() int64
 	Close() error
 }
 
-// VLogImpl — структура, где каждый байт на счету.
+// VLogImpl is the Value Log implementation with mmap-based storage.
+//
+// Thread-safety:
+//   - mu protects all fields except refCount (atomic)
+//   - Write() holds mu.Lock() for the entire operation
+//   - Read()/ReadView() hold mu.RLock()
+//   - refCount is atomic for view lifetime management
+//
+// Memory layout:
+//   - Each entry: [CRC32:4][Size:4][Value:N]
+//   - data is READ-ONLY mmap for reads
+//   - writeData is READ-WRITE mmap for writes
+//
+// CRITICAL: writeData must be read AFTER extendMmap() because
+// extendMmap() unmaps the old region and creates a new one.
+// Using v.writeData directly would reference freed memory.
 type VLogImpl struct {
 	mu        sync.RWMutex
 	file      *os.File
-	data      []byte // mmap-регион, READ-ONLY для чтения
-	writeData []byte // mmap-регион, READ-WRITE для записи
-	fileSize  int64  // размер файла на диске (выровненный)
-	dataSize  int64  // логический размер данных (сколько байт записано)
-	mmapSize  int64  // размер mmap-региона (всегда >= fileSize)
+	data      []byte // READ-ONLY mmap region for reads
+	writeData []byte // READ-WRITE mmap region for writes
+	fileSize  int64  // aligned file size on disk
+	dataSize  int64  // logical data size (bytes written)
+	mmapSize  int64  // mmap region size (always >= fileSize)
 	closed    bool
 	refCount  int32
 	closing   bool
 	waitGroup sync.WaitGroup
 	syncMode  bool
-	extendCh  chan struct{} // сигнал для расширения mmap
+	closeOnce sync.Once // ensures Close() is idempotent
 }
 
 var _ VLogReader = (*VLogImpl)(nil)
 
-// OpenVLog открывает VLog с предварительным выделением mmap.
+// isDiskFullError checks if the error indicates disk space exhaustion.
+func isDiskFullError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "disk quota exceeded") ||
+		strings.Contains(msg, "no space left on device") ||
+		strings.Contains(msg, "out of disk space") ||
+		strings.Contains(msg, "not enough space")
+}
+
+// ensureFileCapacity ensures the file has at least the required size.
+// Returns the actual file size after ensuring capacity.
+func ensureFileCapacity(f *os.File, required int64) (int64, error) {
+	if required <= 0 {
+		return 0, nil
+	}
+
+	// Try to extend the file
+	if err := f.Truncate(required); err != nil {
+		if isDiskFullError(err) {
+			return 0, fmt.Errorf("disk full: failed to allocate %d bytes: %w", required, err)
+		}
+		return 0, fmt.Errorf("failed to extend file to %d: %w", required, err)
+	}
+
+	// Verify the file actually expanded
+	stat, err := f.Stat()
+	if err != nil {
+		return 0, fmt.Errorf("failed to stat after truncate: %w", err)
+	}
+	if stat.Size() < required {
+		return 0, fmt.Errorf("file size mismatch after truncate: expected %d, got %d (disk full?)", required, stat.Size())
+	}
+
+	return stat.Size(), nil
+}
+
+// OpenVLog opens the Value Log with pre-allocated mmap.
 func OpenVLog(vfs vfs.VFS, path string) (*VLogImpl, error) {
 	file, err := vfs.OpenFile(path, os.O_RDWR|os.O_CREATE, 0644)
 	if err != nil {
@@ -92,9 +152,9 @@ func OpenVLog(vfs vfs.VFS, path string) (*VLogImpl, error) {
 	fileSize := stat.Size()
 	var dataSize int64
 
-	// Если файл пустой или повреждён — создаём новый
+	// If file is empty or corrupted — create new
 	if fileSize == 0 {
-		// Записываем заголовок
+		// Write header
 		header := make([]byte, 8)
 		binary.BigEndian.PutUint32(header[0:4], VLogMagic)
 		binary.BigEndian.PutUint32(header[4:8], VLogVersion)
@@ -127,26 +187,26 @@ func OpenVLog(vfs vfs.VFS, path string) (*VLogImpl, error) {
 		dataSize = fileSize
 	}
 
-	// Выравниваем размер для mmap
+	// Align size for mmap
 	mmapSize := alignTo(dataSize, VLogExtendSize)
 	if mmapSize < VLogExtendSize {
 		mmapSize = VLogExtendSize
 	}
 
-	// Расширяем файл до выровненного размера
-	if err := osFile.Truncate(mmapSize); err != nil {
+	// Ensure the file has enough capacity
+	if _, err := ensureFileCapacity(osFile, mmapSize); err != nil {
 		errors.CloseWithLog(osFile, "vlog-osfile")
-		return nil, fmt.Errorf("failed to truncate vlog to %d: %w", mmapSize, err)
+		return nil, err
 	}
 
-	// READ-ONLY mmap (для чтения через Read и ReadView)
+	// READ-ONLY mmap (for Read and ReadView)
 	readData, err := syscall.Mmap(int(osFile.Fd()), 0, int(mmapSize), syscall.PROT_READ, syscall.MAP_SHARED)
 	if err != nil {
 		errors.CloseWithLog(osFile, "vlog-osfile")
 		return nil, fmt.Errorf("failed to mmap vlog (read): %w", err)
 	}
 
-	// READ-WRITE mmap (для записи через Write)
+	// READ-WRITE mmap (for Write)
 	writeData, err := syscall.Mmap(int(osFile.Fd()), 0, int(mmapSize), syscall.PROT_READ|syscall.PROT_WRITE, syscall.MAP_SHARED)
 	if err != nil {
 		if munmapErr := syscall.Munmap(readData); munmapErr != nil {
@@ -156,23 +216,20 @@ func OpenVLog(vfs vfs.VFS, path string) (*VLogImpl, error) {
 		return nil, fmt.Errorf("failed to mmap vlog (write): %w", err)
 	}
 
-	vlog := &VLogImpl{
+	return &VLogImpl{
 		file:      osFile,
 		data:      readData,
 		writeData: writeData,
 		fileSize:  fileSize,
 		dataSize:  dataSize,
 		mmapSize:  mmapSize,
-		extendCh:  make(chan struct{}, 1),
-	}
-
-	return vlog, nil
+	}, nil
 }
 
-// crc32Copy копирует данные из src в dst и одновременно вычисляет CRC32.
-// Это устраняет двойной проход: crc32.ChecksumIEEE() + copy().
-// copy() выполняется первым, затем CRC вычисляется на dst (уже в mmap).
-// Это всё равно один проход по данным из L1/L2 кэша, а не из DRAM.
+// crc32Copy copies from src to dst while computing CRC32 in one pass.
+// Eliminates the double pass: crc32.ChecksumIEEE() + copy().
+// copy() runs first, then CRC is computed on dst (already in mmap).
+// This is still one pass over data from L1/L2 cache.
 //
 //go:nosplit
 func crc32Copy(dst, src []byte) uint32 {
@@ -180,14 +237,18 @@ func crc32Copy(dst, src []byte) uint32 {
 	return crc32.ChecksumIEEE(dst[:n])
 }
 
-// Write — zero-syscall запись в mmap (кроме случаев расширения).
-// Оптимизация: CRC вычисляется ВО ВРЕМЯ копирования (один проход вместо двух).
+// Write writes a value to the Value Log (zero-syscall except extension).
+// CRC is computed DURING copy (one pass instead of two).
+//
+// CRITICAL: writeData is read AFTER extendMmap().
+// extendMmap() replaces v.writeData with a new mmap region.
+// Using v.writeData from BEFORE extendMmap() would reference freed memory.
 func (v *VLogImpl) Write(value []byte) (ValuePointer, error) {
 	if len(value) <= MaxInlineSize {
 		return ValuePointer{}, nil
 	}
 
-	// Быстрая проверка без захвата мьютекса
+	// Fast check without mutex
 	if v.closed {
 		return ValuePointer{}, fmt.Errorf("vlog is closed")
 	}
@@ -201,32 +262,43 @@ func (v *VLogImpl) Write(value []byte) (ValuePointer, error) {
 		return ValuePointer{}, fmt.Errorf("vlog is closed")
 	}
 
-	// Проверяем, хватает ли места в mmap
+	// Check if there's enough space in mmap
 	newDataSize := v.dataSize + totalSize
 	if newDataSize > v.mmapSize {
-		// Не хватает — расширяем mmap (это единственный syscall в этом методе)
+		// Not enough — extend mmap (this is the only syscall in this method)
 		if err := v.extendMmap(newDataSize); err != nil {
 			return ValuePointer{}, err
 		}
+		// ✅ CRITICAL: v.writeData may have changed after extendMmap.
+		// Do NOT use the old writeData pointer from before extendMmap!
 	}
 
-	// Расчёт смещения — быстрая операция
+	// ✅ CRITICAL: Read writeData AFTER extendMmap.
+	// extendMmap replaces v.writeData with a new mmap region.
+	// Using v.writeData directly (the struct field) would reference freed memory
+	// if extendMmap was called above.
+	writeData := v.writeData
+	if writeData == nil {
+		return ValuePointer{}, fmt.Errorf("vlog: writeData is nil after extendMmap")
+	}
+
+	// Fast offset calculation — v.dataSize is unchanged by extendMmap
 	offset := v.dataSize
 
-	// Записываем размер в заголовок (CRC будет заполнен после копирования)
-	binary.BigEndian.PutUint32(v.writeData[offset+4:offset+8], uint32(len(value)))
+	// Write size to header (CRC will be filled after copy)
+	binary.BigEndian.PutUint32(writeData[offset+4:offset+8], uint32(len(value)))
 
-	// Копируем значение в mmap и ОДНОВРЕМЕННО считаем CRC — один проход!
-	dst := v.writeData[offset+8 : offset+8+int64(len(value))]
+	// Copy value to mmap and compute CRC simultaneously — one pass!
+	dst := writeData[offset+8 : offset+8+int64(len(value))]
 	crc := crc32Copy(dst, value)
 
-	// Записываем CRC в заголовок
-	binary.BigEndian.PutUint32(v.writeData[offset:offset+4], crc)
+	// Write CRC to header
+	binary.BigEndian.PutUint32(writeData[offset:offset+4], crc)
 
-	// Обновляем логический размер
+	// Update logical size (under mu, no atomic needed)
 	v.dataSize = newDataSize
 
-	// Если syncMode включён — синхронизируем на диск
+	// If syncMode is enabled — sync to disk
 	if v.syncMode {
 		if err := v.file.Sync(); err != nil {
 			return ValuePointer{}, fmt.Errorf("failed to sync vlog: %w", err)
@@ -236,28 +308,41 @@ func (v *VLogImpl) Write(value []byte) (ValuePointer, error) {
 	return ValuePointer{Offset: offset, Size: int32(len(value))}, nil
 }
 
-// extendMmap — расширяет mmap и файл на VLogExtendSize.
-// ВЫЗЫВАЕТСЯ ТОЛЬКО КОГДА НЕ ХВАТАЕТ МЕСТА.
+// extendMmap extends the mmap and file by VLogExtendSize.
+// Called ONLY when there is insufficient space.
+//
+// IMPORTANT: This method unmaps the old region and creates a new one.
+// After this method returns, v.writeData and v.data point to the new region.
+// Callers MUST re-read v.writeData after calling this method.
+//
+// SIGBUS SAFETY:
+//   - If the disk is full, mmap with MAP_SHARED generates SIGBUS on write,
+//     not ENOSPC on mmap. ensureFileCapacity() catches ENOSPC from Truncate,
+//     but cannot prevent SIGBUS from a concurrent disk fill.
+//   - The caller (Write) holds mu.Lock(), so no concurrent extendMmap can race.
+//   - After return, v.writeData is guaranteed to point to a valid mmap region.
 func (v *VLogImpl) extendMmap(newDataSize int64) error {
-	// Расчёт нового размера mmap
+	// Calculate new mmap size
 	newMmapSize := alignTo(newDataSize, VLogExtendSize)
 
-	// Расширяем файл на диске
-	if err := v.file.Truncate(newMmapSize); err != nil {
-		return fmt.Errorf("failed to truncate vlog to %d: %w", newMmapSize, err)
+	// Ensure the file has enough capacity
+	if _, err := ensureFileCapacity(v.file, newMmapSize); err != nil {
+		return fmt.Errorf("failed to extend vlog file: %w", err)
 	}
 
-	// Перемаппиваем READ-ONLY регион
+	// Remap READ-ONLY region
 	oldReadData := v.data
 	newReadData, err := syscall.Mmap(int(v.file.Fd()), 0, int(newMmapSize), syscall.PROT_READ, syscall.MAP_SHARED)
 	if err != nil {
 		return fmt.Errorf("failed to remap vlog (read): %w", err)
 	}
-	if err := syscall.Munmap(oldReadData); err != nil {
-		logger.Warn("vlog: failed to munmap old read data: %v", err)
+	if oldReadData != nil {
+		if err := syscall.Munmap(oldReadData); err != nil {
+			logger.Warn("vlog: failed to munmap old read data: %v", err)
+		}
 	}
 
-	// Перемаппиваем READ-WRITE регион
+	// Remap READ-WRITE region
 	oldWriteData := v.writeData
 	newWriteData, err := syscall.Mmap(int(v.file.Fd()), 0, int(newMmapSize), syscall.PROT_READ|syscall.PROT_WRITE, syscall.MAP_SHARED)
 	if err != nil {
@@ -266,11 +351,13 @@ func (v *VLogImpl) extendMmap(newDataSize int64) error {
 		}
 		return fmt.Errorf("failed to remap vlog (write): %w", err)
 	}
-	if err := syscall.Munmap(oldWriteData); err != nil {
-		logger.Warn("vlog: failed to munmap old write data: %v", err)
+	if oldWriteData != nil {
+		if err := syscall.Munmap(oldWriteData); err != nil {
+			logger.Warn("vlog: failed to munmap old write data: %v", err)
+		}
 	}
 
-	// Обновляем указатели
+	// Update pointers
 	v.data = newReadData
 	v.writeData = newWriteData
 	v.mmapSize = newMmapSize
@@ -279,7 +366,7 @@ func (v *VLogImpl) extendMmap(newDataSize int64) error {
 	return nil
 }
 
-// Read — копирует данные (для внешнего API).
+// Read copies data (for external API).
 func (v *VLogImpl) Read(vp ValuePointer) ([]byte, error) {
 	if vp.Size == 0 {
 		return nil, fmt.Errorf("zero-sized value pointer")
@@ -311,15 +398,20 @@ func (v *VLogImpl) Read(vp ValuePointer) ([]byte, error) {
 		return nil, fmt.Errorf("crc mismatch: stored=%x, computed=%x", crcStored, crc)
 	}
 
-	// Копируем — для внешнего API безопасность важнее скорости
+	// Copy — for external API, safety is more important than speed
 	result := make([]byte, len(value))
 	copy(result, value)
 	return result, nil
 }
 
-// ReadDirect — zero-copy чтение для внутреннего использования (без копирования).
-// Данные НЕЛЬЗЯ изменять! Используется только внутри движка.
-// Вызывающий должен гарантировать, что VLog не будет закрыт во время использования.
+// ReadDirect is zero-copy read for internal use (no copying).
+// Data MUST NOT be modified! Used only internally.
+// Caller must ensure VLog is not closed during use.
+//
+// WARNING: This returns a slice directly into the mmap region.
+// The caller must NOT hold the slice after releasing the RLock,
+// or the mmap may be unmapped by a concurrent extendMmap().
+// For long-lived slices, use ReadView() instead.
 func (v *VLogImpl) ReadDirect(vp ValuePointer) ([]byte, error) {
 	if vp.Size == 0 {
 		return nil, fmt.Errorf("zero-sized value pointer")
@@ -351,11 +443,42 @@ func (v *VLogImpl) ReadDirect(vp ValuePointer) ([]byte, error) {
 		return nil, fmt.Errorf("crc mismatch: stored=%x, computed=%x", crcStored, crc)
 	}
 
-	// Возвращаем прямой срез на mmap — БЕЗ КОПИРОВАНИЯ!
+	// Return direct slice into mmap — NO COPY!
 	return value, nil
 }
 
-// ReadView — zero-copy чтение (для внутреннего использования с ref-counting).
+// readDirectLocked is like ReadDirect but assumes mu is already held.
+// Used internally by GC to avoid recursive locking.
+// Caller must hold v.mu.Lock().
+func (v *VLogImpl) readDirectLocked(vp ValuePointer) ([]byte, error) {
+	if vp.Size == 0 {
+		return nil, fmt.Errorf("zero-sized value pointer")
+	}
+
+	start := int(vp.Offset)
+	end := start + 8 + int(vp.Size)
+	if end > len(v.data) {
+		return nil, fmt.Errorf("value pointer out of range: offset=%d size=%d data len=%d",
+			vp.Offset, vp.Size, len(v.data))
+	}
+
+	crcStored := binary.BigEndian.Uint32(v.data[start : start+4])
+	sizeStored := binary.BigEndian.Uint32(v.data[start+4 : start+8])
+	if sizeStored != uint32(vp.Size) {
+		return nil, fmt.Errorf("size mismatch: stored=%d, pointer=%d", sizeStored, vp.Size)
+	}
+
+	value := v.data[start+8 : end]
+	crc := crc32.ChecksumIEEE(value)
+	if crc != crcStored {
+		return nil, fmt.Errorf("crc mismatch: stored=%x, computed=%x", crcStored, crc)
+	}
+
+	return value, nil
+}
+
+// ReadView is zero-copy read for internal use with ref-counting.
+// The returned VLogView must be Released() when no longer needed.
 func (v *VLogImpl) ReadView(vp ValuePointer) (*VLogView, error) {
 	v.mu.RLock()
 	defer v.mu.RUnlock()
@@ -396,13 +519,15 @@ func (v *VLogImpl) ReadView(vp ValuePointer) (*VLogView, error) {
 	}, nil
 }
 
-// VLogView — zero-copy view.
+// VLogView is a zero-copy view of a value.
+// Must call Release() when done.
 type VLogView struct {
 	vlog *VLogImpl
 	data []byte
 	vp   ValuePointer
 }
 
+// Release releases the view and decrements the reference count.
 func (v *VLogView) Release() {
 	if v.vlog != nil {
 		v.vlog.DecRef()
@@ -412,11 +537,12 @@ func (v *VLogView) Release() {
 	}
 }
 
+// Data returns the value bytes.
 func (v *VLogView) Data() []byte {
 	return v.data
 }
 
-// IncRef / DecRef — атомарные операции.
+// IncRef / DecRef are atomic reference counting operations.
 func (v *VLogImpl) IncRef() {
 	atomic.AddInt32(&v.refCount, 1)
 }
@@ -428,7 +554,7 @@ func (v *VLogImpl) DecRef() {
 	}
 }
 
-// Size возвращает логический размер данных.
+// Size returns the logical data size.
 func (v *VLogImpl) Size() int64 {
 	v.mu.RLock()
 	defer v.mu.RUnlock()
@@ -436,7 +562,7 @@ func (v *VLogImpl) Size() int64 {
 }
 
 // GC performs garbage collection on the Value Log.
-// livePointers is a set of ValuePointers that are still referenced by the LSM tree.
+// livePointers is a set of ValuePointers still referenced by the LSM tree.
 // It creates a new VLog file, copies all live values to it, and replaces the old file.
 // Returns a map from old ValuePointers to new ValuePointers, and any error.
 func (v *VLogImpl) GC(livePointers map[ValuePointer]struct{}) (map[ValuePointer]ValuePointer, error) {
@@ -483,8 +609,8 @@ func (v *VLogImpl) GC(livePointers map[ValuePointer]struct{}) (map[ValuePointer]
 	newOffset := int64(8)
 
 	for _, oldVP := range pointers {
-		// Read the value from the old VLog using ReadDirect (zero-copy)
-		value, err := v.ReadDirect(oldVP)
+		// Read the value from the old VLog using readDirectLocked (zero-copy)
+		value, err := v.readDirectLocked(oldVP)
 		if err != nil {
 			return nil, fmt.Errorf("failed to read value at offset %d: %w", oldVP.Offset, err)
 		}
@@ -569,7 +695,7 @@ func (v *VLogImpl) GC(livePointers map[ValuePointer]struct{}) (map[ValuePointer]
 	return translation, nil
 }
 
-// Shutdown — graceful shutdown.
+// Shutdown gracefully shuts down the VLog.
 func (v *VLogImpl) Shutdown(timeout time.Duration) error {
 	v.mu.Lock()
 	if v.closed {
@@ -628,35 +754,51 @@ func (v *VLogImpl) Shutdown(timeout time.Duration) error {
 	}
 }
 
-// Close — закрывает VLog немедленно.
-// В отличие от Shutdown, Close не ждёт освобождения активных view.
-// Вызывающий код должен гарантировать, что все view отпущены до вызова Close,
-// либо использовать Shutdown с таймаутом для graceful shutdown.
+// Close closes the VLog immediately.
+// Unlike Shutdown, Close does not wait for active views to be released.
+// Caller must ensure all views are released before calling Close,
+// or use Shutdown with timeout for graceful shutdown.
 func (v *VLogImpl) Close() error {
-	v.mu.Lock()
-	defer v.mu.Unlock()
+	var err error
+	v.closeOnce.Do(func() {
+		v.mu.Lock()
+		defer v.mu.Unlock()
 
-	if v.closed {
-		return nil
-	}
-	v.closed = true
+		if v.closed {
+			return
+		}
+		v.closed = true
 
-	if err := syscall.Munmap(v.data); err != nil {
-		return fmt.Errorf("failed to munmap vlog: %w", err)
-	}
-	if err := syscall.Munmap(v.writeData); err != nil {
-		return fmt.Errorf("failed to munmap write vlog: %w", err)
-	}
-	v.data = nil
-	v.writeData = nil
-	if err := v.file.Close(); err != nil {
-		return fmt.Errorf("failed to close vlog file: %w", err)
-	}
-	return nil
+		if v.data != nil {
+			if munmapErr := syscall.Munmap(v.data); munmapErr != nil {
+				err = fmt.Errorf("failed to munmap vlog: %w", munmapErr)
+			}
+		}
+		if v.writeData != nil {
+			if munmapErr := syscall.Munmap(v.writeData); munmapErr != nil {
+				if err == nil {
+					err = fmt.Errorf("failed to munmap write vlog: %w", munmapErr)
+				} else {
+					logger.Warn("vlog: failed to munmap writeData: %v", munmapErr)
+				}
+			}
+		}
+		v.data = nil
+		v.writeData = nil
+
+		if closeErr := v.file.Close(); closeErr != nil {
+			if err == nil {
+				err = fmt.Errorf("failed to close vlog file: %w", closeErr)
+			} else {
+				logger.Warn("vlog: failed to close file: %v", closeErr)
+			}
+		}
+	})
+	return err
 }
 
-// alignTo — выравнивает size до кратного align.
-// Используется для минимизации количества syscall'ов.
+// alignTo aligns size to a multiple of align.
+// Used to minimize the number of syscalls.
 func alignTo(size, align int64) int64 {
 	if size%align == 0 {
 		return size

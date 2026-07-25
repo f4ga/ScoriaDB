@@ -182,8 +182,10 @@ func (w *groupCommitWriter) syncLoop() {
 			}
 		case <-w.done:
 			// Final sync before exit
+			// NOTE: This may fail if the file was already closed by WAL.Close().
+			// This is expected during normal shutdown — not a real warning.
 			if err := w.file.Sync(); err != nil {
-				logger.Warn("wal_group: final sync failed: %v", err)
+				logger.Debug("wal_group: final sync failed: %v", err)
 			}
 			return
 		}

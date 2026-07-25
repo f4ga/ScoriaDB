@@ -20,83 +20,132 @@ import (
 	"github.com/f4ga/ScoriaDB/internal/mvcc"
 )
 
-// SSTableIterator iterates over all key-value pairs in an SSTable.
-// It loads all entries into memory for simplicity.
+// SSTableIterator iterates over key-value pairs in an SSTable.
+// It reads blocks sequentially using the block index.
+// See: ARCH-05, PERF-03
 type SSTableIterator struct {
-	entries []kvEntry
-	index   int
+	reader    *Reader
+	blockIdx  int    // current block index
+	blockData []byte // current block data
+	pos       int    // current position within block
+	key       mvcc.MVCCKey
+	val       []byte
+	err       error
+	ended     bool
 }
 
-type kvEntry struct {
-	key   mvcc.MVCCKey
-	value []byte
-}
-
-// NewIterator creates an iterator over the entire SSTable.
-// It reads all blocks and decodes all entries.
+// NewIterator creates a new SSTableIterator for this reader.
+// Returns an error if the first block cannot be read.
+// See: ARCH-05
 func (r *Reader) NewIterator() (*SSTableIterator, error) {
-	var entries []kvEntry
-
-	// Iterate over all blocks
-	for _, idxEntry := range r.indexEntries {
-		// Read block using the pooled buffer
-		blockData, err := r.readBlock(idxEntry.offset)
-		if err != nil {
-			return nil, err
+	it := &SSTableIterator{
+		reader:   r,
+		blockIdx: -1,
+	}
+	// Advance to the first block
+	if !it.nextBlock() {
+		if it.err != nil {
+			return nil, it.err
 		}
+		// Empty SSTable — valid state
+		it.ended = true
+	}
+	return it, nil
+}
 
-		// Parse entries in block
-		pos := 0
-		for pos < len(blockData) {
-			keyLen := binary.LittleEndian.Uint32(blockData[pos:])
-			valLen := binary.LittleEndian.Uint32(blockData[pos+4:])
-			entryKey := blockData[pos+8 : pos+8+int(keyLen)]
-			entryVal := blockData[pos+8+int(keyLen) : pos+8+int(keyLen)+int(valLen)]
-			pos += 8 + int(keyLen) + int(valLen)
+// Next advances the iterator to the next key-value pair.
+// Returns false when exhausted or on error.
+func (it *SSTableIterator) Next() bool {
+	if it.ended || it.err != nil {
+		return false
+	}
+
+	for {
+		// Try to read next entry from current block
+		if it.pos < len(it.blockData) {
+			if it.pos+8 > len(it.blockData) {
+				it.err = ErrCorrupted
+				return false
+			}
+
+			keyLen := binary.LittleEndian.Uint32(it.blockData[it.pos:])
+			valLen := binary.LittleEndian.Uint32(it.blockData[it.pos+4:])
+
+			if it.pos+8+int(keyLen)+int(valLen) > len(it.blockData) {
+				it.err = ErrCorrupted
+				return false
+			}
+
+			entryKey := it.blockData[it.pos+8 : it.pos+8+int(keyLen)]
+			entryVal := it.blockData[it.pos+8+int(keyLen) : it.pos+8+int(keyLen)+int(valLen)]
+			it.pos += 8 + int(keyLen) + int(valLen)
 
 			mvccKey, err := decodeMVCCKey(entryKey)
 			if err != nil {
-				// Skip corrupted entry
-				continue
+				it.err = err
+				return false
 			}
-			// Copy key and value since the block buffer will be returned to the pool
-			keyCopy := make([]byte, len(entryKey))
-			copy(keyCopy, entryKey)
-			valCopy := make([]byte, len(entryVal))
-			copy(valCopy, entryVal)
-			entries = append(entries, kvEntry{
-				key:   mvccKey,
-				value: valCopy,
-			})
+
+			it.key = mvccKey
+			// Copy value since blockData will be reused
+			val := make([]byte, len(entryVal))
+			copy(val, entryVal)
+			it.val = val
+			return true
 		}
 
-		// Return the block buffer to the pool
-		ReleaseBlock(blockData)
+		// Current block exhausted, move to next
+		if !it.nextBlock() {
+			return false
+		}
 	}
-
-	return &SSTableIterator{
-		entries: entries,
-		index:   -1,
-	}, nil
 }
 
-// Next advances the iterator to the next entry.
-func (it *SSTableIterator) Next() bool {
-	it.index++
-	return it.index < len(it.entries)
+// nextBlock advances to the next block and reads its data.
+func (it *SSTableIterator) nextBlock() bool {
+	it.blockIdx++
+	if it.blockIdx >= len(it.reader.indexEntries) {
+		it.ended = true
+		return false
+	}
+
+	// Release previous block data
+	if it.blockData != nil {
+		ReleaseBlock(it.blockData)
+		it.blockData = nil
+	}
+
+	blockOffset := it.reader.indexEntries[it.blockIdx].offset
+	data, err := it.reader.readBlock(blockOffset)
+	if err != nil {
+		it.err = err
+		return false
+	}
+	it.blockData = data
+	it.pos = 0
+	return true
 }
 
 // Key returns the current key.
 func (it *SSTableIterator) Key() mvcc.MVCCKey {
-	return it.entries[it.index].key
+	return it.key
 }
 
 // Value returns the current value.
 func (it *SSTableIterator) Value() []byte {
-	return it.entries[it.index].value
+	return it.val
 }
 
-// Close releases resources.
+// Err returns any error encountered during iteration.
+func (it *SSTableIterator) Err() error {
+	return it.err
+}
+
+// Close releases resources held by the iterator.
 func (it *SSTableIterator) Close() {
-	it.entries = nil
+	if it.blockData != nil {
+		ReleaseBlock(it.blockData)
+		it.blockData = nil
+	}
+	it.ended = true
 }

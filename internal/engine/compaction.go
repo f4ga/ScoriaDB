@@ -47,7 +47,7 @@ func (e *LSMEngine) compactLevel0() error {
 	}
 
 	// Create iterators for all level-0 SSTables
-	var iterators []sstable.Iterator
+	var iterators []*sstable.SSTableIterator
 	for _, reader := range e.levels[0] {
 		iter, err := reader.NewIterator()
 		if err != nil {

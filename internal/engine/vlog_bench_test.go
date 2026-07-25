@@ -24,8 +24,19 @@ import (
 
 // BenchmarkVLogWrite measures writing a 4KB value to the Value Log.
 // Zero syscalls in hot path (mmap write), except first call which extends mmap.
+//
+// NOTE: Temporarily reduces VLogExtendSize to 64MB for benchmarking.
+// This prevents disk exhaustion and SIGBUS during long benchmark runs.
+// The original value is restored after the benchmark completes.
 func BenchmarkVLogWrite(b *testing.B) {
 	logger.SetLevel(logger.ERROR)
+
+	// Reduce mmap size for benchmark to prevent disk exhaustion.
+	// 64MB is enough for ~16K entries of 4KB each.
+	// The original value is restored after the benchmark completes.
+	origExtendSize := VLogExtendSize
+	VLogExtendSize = 64 * 1024 * 1024 // 64MB instead of 512MB
+	defer func() { VLogExtendSize = origExtendSize }()
 
 	dir, err := os.MkdirTemp("", "vlog-bench-*")
 	if err != nil {

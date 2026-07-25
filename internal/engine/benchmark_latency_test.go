@@ -34,6 +34,7 @@ import (
 	"time"
 
 	"github.com/f4ga/ScoriaDB/internal/errors"
+	"github.com/f4ga/ScoriaDB/internal/logger"
 )
 
 // ---------------------------------------------------------------------------
@@ -94,6 +95,7 @@ func cleanTemp() {
 
 func openTestDBWithOptions(b *testing.B, walOpts WALOptions) *LSMEngine {
 	b.Helper()
+	logger.SetLevel(logger.ERROR)
 
 	cleanTemp()
 
@@ -340,6 +342,7 @@ func BenchmarkPutLatency_GroupCommit_4KB(b *testing.B) {
 // ---------------------------------------------------------------------------
 
 func BenchmarkGetLatency(b *testing.B) {
+	logger.SetLevel(logger.ERROR)
 	dir := b.TempDir()
 	opts := DefaultEngineOptions(dir)
 	opts.WALOpts.SyncMode = false
@@ -384,6 +387,7 @@ func BenchmarkGetLatency(b *testing.B) {
 // ---------------------------------------------------------------------------
 
 func BenchmarkGetLatency_Missing(b *testing.B) {
+	logger.SetLevel(logger.ERROR)
 	dir := b.TempDir()
 	opts := DefaultEngineOptions(dir)
 	opts.WALOpts.SyncMode = false
@@ -423,6 +427,7 @@ func BenchmarkGetLatency_Missing(b *testing.B) {
 // ---------------------------------------------------------------------------
 
 func BenchmarkScanLatency(b *testing.B) {
+	logger.SetLevel(logger.ERROR)
 	dir := b.TempDir()
 	opts := DefaultEngineOptions(dir)
 	opts.WALOpts.SyncMode = false
@@ -467,6 +472,7 @@ func BenchmarkScanLatency(b *testing.B) {
 // ---------------------------------------------------------------------------
 
 func BenchmarkMixedWorkload(b *testing.B) {
+	logger.SetLevel(logger.ERROR)
 	dir := b.TempDir()
 	opts := DefaultEngineOptions(dir)
 	opts.WALOpts.SyncMode = false
