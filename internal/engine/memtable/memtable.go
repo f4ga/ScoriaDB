@@ -110,14 +110,16 @@ func (mt *MemTable) Get(key mvcc.MVCCKey) ([]byte, bool) {
 	return node.Value(), true
 }
 
-// GetLatest returns the latest (newest) value and its commit timestamp for a user key.
-// Uses binary search (findGreaterOrEqual) — O(log N) instead of O(N) iterator.
-// Returns (value, commitTS, found). The value is the raw stored value (may be a ValuePointer).
+// GetLatest returns the latest (newest) non-deleted value and its commit timestamp
+// for a user key. Uses binary search (findGreaterOrEqual) — O(log N) instead of O(N) iterator.
+// Returns (value, commitTS, found).
 //
-// IMPORTANT: If the newest version is a tombstone (deleted), the key is considered
-// deleted and this returns (nil, tombstoneTS, false). This is critical for callers
-// like GetLatestInfo and ScoriaDB.GetCF that need to distinguish "key deleted" from
-// "key not found".
+// MVCC semantics: a tombstone deletes a specific version, not the entire key.
+// Older non-deleted versions remain visible. GetLatest iterates all versions
+// of the key and returns the newest non-deleted one.
+//
+// If no non-deleted version exists (key not found or all versions are tombstones),
+// returns (nil, 0, false).
 //
 // Algorithm:
 //  1. Find the first node with key >= searchKey using findGreaterOrEqual.
@@ -127,72 +129,44 @@ func (mt *MemTable) Get(key mvcc.MVCCKey) ([]byte, bool) {
 //     findGreaterOrEqual returns the first node with key >= searchKey,
 //     which for the same user key is the newest version (highest commitTS).
 //  2. Iterate through all versions of this user key via next[0] pointers.
-//  3. Track the newest non-deleted value AND whether any tombstone exists.
-//  4. If the newest version overall is a tombstone, return (nil, tombstoneTS, false).
-//  5. Otherwise, return the newest non-deleted value.
+//  3. Track the newest non-deleted value (bestValue, bestTS).
+//  4. Return the newest non-deleted value, or (nil, 0, false) if none found.
 //
 // See: ARCH-07, MVCC-03
 func (mt *MemTable) GetLatest(key []byte) ([]byte, uint64, bool) {
 	if mt.sl == nil {
-		fmt.Printf("[DEBUG-GL] GetLatest: sl is nil\n")
 		return nil, 0, false
 	}
 	// Use findGreaterOrEqual directly — O(log N) instead of O(N) iterator
 	searchKey := mvcc.MVCCKey{Key: key, Timestamp: mvcc.InvertTimestamp(0)}
 	node := mt.sl.findGreaterOrEqual(searchKey)
 	if node == nil {
-		fmt.Printf("[DEBUG-GL] GetLatest: findGreaterOrEqual returned nil for key=%q\n", string(key))
 		return nil, 0, false
 	}
 	nodeKey := node.Key()
 	if !bytes.Equal(nodeKey.Key, key) {
-		fmt.Printf("[DEBUG-GL] GetLatest: key mismatch, expected=%q, got=%q\n", string(key), string(nodeKey.Key))
 		return nil, 0, false
 	}
 
+	// Iterate all versions of this key via next[0] chain.
+	// Track the newest non-deleted version.
 	var bestValue []byte
 	var bestTS uint64
-	var newestTS uint64
-	var newestIsTombstone bool
 	found := false
-	versionCount := 0
 	for node != nil {
 		nodeKey = node.Key()
 		if !bytes.Equal(nodeKey.Key, key) {
 			break
 		}
 		commitTS := nodeKey.CommitTS()
-		versionCount++
-		fmt.Printf("[DEBUG-GL] GetLatest: version %d: commitTS=%d, deleted=%v, valLen=%d\n",
-			versionCount, commitTS, node.deleted.Load(), node.valLen)
-		if commitTS > newestTS {
-			newestTS = commitTS
-			newestIsTombstone = node.deleted.Load()
-			fmt.Printf("[DEBUG-GL] GetLatest: newest updated: ts=%d, isTombstone=%v\n", newestTS, newestIsTombstone)
-		}
-		if !node.deleted.Load() {
-			if commitTS > bestTS {
-				bestTS = commitTS
-				bestValue = node.Value()
-				found = true
-				fmt.Printf("[DEBUG-GL] GetLatest: best updated: ts=%d, val=%v (len=%d)\n", bestTS, bestValue, len(bestValue))
-			}
+		if !node.deleted.Load() && commitTS > bestTS {
+			bestTS = commitTS
+			bestValue = node.Value()
+			found = true
 		}
 		node = node.next[0].Load()
 	}
 
-	fmt.Printf("[DEBUG-GL] GetLatest: final: newestTS=%d, newestIsTombstone=%v, bestTS=%d, found=%v, bestValue=%v\n",
-		newestTS, newestIsTombstone, bestTS, found, bestValue)
-
-	// If the newest version is a tombstone, the key is deleted.
-	// Return (nil, tombstoneTS, false) so callers can distinguish
-	// "key deleted" from "key not found" (ts == 0).
-	if newestIsTombstone {
-		fmt.Printf("[DEBUG-GL] GetLatest: TOMBSTONE detected, returning (nil, %d, false)\n", newestTS)
-		return nil, newestTS, false
-	}
-
-	fmt.Printf("[DEBUG-GL] GetLatest: returning (%v, %d, %v)\n", bestValue, bestTS, found)
 	return bestValue, bestTS, found
 }
 

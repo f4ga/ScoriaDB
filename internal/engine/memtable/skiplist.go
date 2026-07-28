@@ -115,9 +115,7 @@ func (n *Node) Key() mvcc.MVCCKey {
 //go:inline
 func (n *Node) Value() []byte {
 	if n.valLen == 0 {
-		// Return empty slice (not nil) so callers can distinguish
-		// "stored empty value" from "no value".
-		return []byte{}
+		return nil
 	}
 	ptr := unsafe.Add(unsafe.Pointer(n), n.valOff)
 	return unsafe.Slice((*byte)(ptr), int(n.valLen))
