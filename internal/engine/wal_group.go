@@ -60,7 +60,9 @@ type groupCommitWriter struct {
 	syncCh    chan struct{} // сигнал для асинхронного fsync
 	flushErr  error         // last flush error, protected by mu
 	closed    bool
-	syncMode  bool // if true, call file.Sync() asynchronously after each flush
+	syncMode  bool           // if true, call file.Sync() asynchronously after each flush
+	wg        sync.WaitGroup // waits for syncLoop to finish before Close returns
+	syncDelay time.Duration  // test-only: artificial delay before Sync() to make race deterministic
 }
 
 // newGroupCommitWriter creates a new groupCommitWriter with a pre-allocated buffer.
@@ -83,6 +85,7 @@ func newGroupCommitWriter(file *os.File, flushInterval time.Duration, syncMode b
 	}
 	go gcw.flushLoop()
 	if syncMode {
+		gcw.wg.Add(1)
 		go gcw.syncLoop()
 	}
 	return gcw
@@ -172,18 +175,23 @@ func (w *groupCommitWriter) flushLoop() {
 // fsync can take 1-10ms on HDD or under fsync pressure — doing it
 // asynchronously means PutWithTS returns in ~200ns instead of ~1ms.
 func (w *groupCommitWriter) syncLoop() {
+	defer w.wg.Done()
 	for {
 		select {
 		case <-w.syncCh:
+			if w.syncDelay > 0 {
+				time.Sleep(w.syncDelay)
+			}
 			if err := w.file.Sync(); err != nil {
 				w.mu.Lock()
 				w.flushErr = err
 				w.mu.Unlock()
 			}
 		case <-w.done:
+			if w.syncDelay > 0 {
+				time.Sleep(w.syncDelay)
+			}
 			// Final sync before exit
-			// NOTE: This may fail if the file was already closed by WAL.Close().
-			// This is expected during normal shutdown — not a real warning.
 			if err := w.file.Sync(); err != nil {
 				logger.Debug("wal_group: final sync failed: %v", err)
 			}
@@ -192,7 +200,9 @@ func (w *groupCommitWriter) syncLoop() {
 	}
 }
 
-// Close stops the background goroutine, flushes remaining data, and closes the file.
+// Close stops the background goroutine, flushes remaining data, and waits for
+// syncLoop to finish before returning. This ensures the file is not closed
+// externally (e.g. by WAL.Close()) while syncLoop is still calling file.Sync().
 // The file is not closed here — it belongs to WAL.
 func (w *groupCommitWriter) Close() error {
 	w.mu.Lock()
@@ -207,8 +217,12 @@ func (w *groupCommitWriter) Close() error {
 	err := w.flushLocked()
 	w.mu.Unlock()
 
-	// Wait for syncLoop to finish its final sync
-	// syncLoop will exit when it reads from w.done
+	// Wait for syncLoop to finish its final sync before returning.
+	// This prevents a race where the caller closes the file while
+	// syncLoop is still calling file.Sync().
+	if w.syncMode {
+		w.wg.Wait()
+	}
 	return err
 }
 

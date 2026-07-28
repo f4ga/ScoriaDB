@@ -361,7 +361,10 @@ func (e *LSMEngine) WriteAtomicBatch(data []byte, commitTS uint64) error {
 	for _, op := range ops {
 		mvccKey := mvcc.NewMVCCKey(op.Key, commitTS)
 		if op.IsDelete {
-			e.memTable.Put(mvccKey, nil)
+			// CRITICAL: Delete requires both Put(nil) AND Delete() to set deleted flag.
+			// DeleteWithTS ensures tombstone is correctly marked as deleted.
+			// See: PROMPT-TOMBSTONE-BATCH-FIX
+			e.memTable.DeleteWithTS(mvccKey)
 		} else {
 			e.memTable.Put(mvccKey, op.Value)
 			totalSize += int64(len(op.Key) + len(op.Value))
@@ -381,40 +384,69 @@ func (e *LSMEngine) GetWithTS(key []byte, snapshotTS uint64) ([]byte, error) {
 	defer e.mu.RUnlock()
 	mvccKey := mvcc.NewMVCCKey(key, snapshotTS)
 	val, found := e.memTable.Get(mvccKey)
+	fmt.Printf("[DEBUG-GETS] GetWithTS: key=%q, snapshotTS=%d, mvccKey.Timestamp=%d, found=%v, val=%v\n",
+		string(key), snapshotTS, mvccKey.Timestamp, found, val)
 	if found {
-		return e.decodeStoredValue(val)
+		decoded, err := e.decodeStoredValue(val)
+		fmt.Printf("[DEBUG-GETS] GetWithTS: found, decoded=%v, err=%v\n", decoded, err)
+		return decoded, err
 	}
 	for _, level := range e.levels {
 		for _, sst := range level {
 			if val, found := sst.Lookup(mvccKey); found {
-				return e.decodeStoredValue(val)
+				decoded, err := e.decodeStoredValue(val)
+				fmt.Printf("[DEBUG-GETS] GetWithTS: found in SSTable, decoded=%v\n", decoded)
+				return decoded, err
 			}
 		}
 	}
+	fmt.Printf("[DEBUG-GETS] GetWithTS: not found, returning nil\n")
 	return nil, nil
 }
 
 // GetLatestInfo returns the latest value and timestamp for a key.
 // OPTIMIZATION: Uses binary search (findGreaterOrEqual) instead of O(N) iterator.
 // O(N) → O(log N) for each key.
-func (e *LSMEngine) GetLatestInfo(key []byte) ([]byte, uint64, error) {
+//
+// Returns:
+//   - (value, ts, true, nil) — key exists with value
+//   - (nil, ts, false, nil) — key was deleted (tombstone at ts)
+//   - (nil, 0, false, nil) — key not found
+//   - (nil, 0, false, err) — error
+//
+// The third return value (found) is critical for callers to distinguish
+// "key deleted" (tombstone, found=false, ts>0) from "key exists with empty value"
+// (found=true, val=nil). See: BUG-001
+func (e *LSMEngine) GetLatestInfo(key []byte) ([]byte, uint64, bool, error) {
 	if e.closed.Load() {
-		return nil, 0, fmt.Errorf("engine closed")
+		return nil, 0, false, fmt.Errorf("engine closed")
 	}
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 
 	val, ts, found := e.memTable.GetLatest(key)
-	if found {
-		decoded, err := e.decodeStoredValue(val)
-		return decoded, ts, err
+	fmt.Printf("[DEBUG-GLI] GetLatestInfo: key=%q, val=%v, ts=%d, found=%v\n", string(key), val, ts, found)
+	if ts > 0 {
+		// Key found in memtable (either live or deleted).
+		// If found=true, it's a live value. If found=false, it's a tombstone.
+		if found {
+			decoded, err := e.decodeStoredValue(val)
+			fmt.Printf("[DEBUG-GLI] GetLatestInfo: live value, decoded=%v, ts=%d, err=%v\n", decoded, ts, err)
+			return decoded, ts, true, err
+		}
+		// Tombstone — key is deleted, return nil with the tombstone TS.
+		fmt.Printf("[DEBUG-GLI] GetLatestInfo: TOMBSTONE, returning (nil, %d, false, nil)\n", ts)
+		return nil, ts, false, nil
 	}
 	if e.frozenMemTable != nil {
 		val, ts, found = e.frozenMemTable.GetLatest(key)
-	}
-	if found {
-		decoded, err := e.decodeStoredValue(val)
-		return decoded, ts, err
+		if ts > 0 {
+			if found {
+				decoded, err := e.decodeStoredValue(val)
+				return decoded, ts, true, err
+			}
+			return nil, ts, false, nil
+		}
 	}
 
 	// Search SSTables (already O(log N) via block index)
@@ -437,13 +469,19 @@ func (e *LSMEngine) GetLatestInfo(key []byte) ([]byte, uint64, error) {
 					}
 				}
 			}
-			if bestValue != nil {
+			if bestTS > 0 {
+				// Tombstones in SSTables have empty value (valLen=0).
+				// If the newest version has an empty value, it's a tombstone.
+				if len(bestValue) == 0 {
+					return nil, bestTS, false, nil
+				}
 				decoded, err := e.decodeStoredValue(bestValue)
-				return decoded, bestTS, err
+				return decoded, bestTS, true, err
 			}
 		}
 	}
-	return nil, 0, nil
+	fmt.Printf("[DEBUG-GLI] GetLatestInfo: key not found, returning (nil, 0, false, nil)\n")
+	return nil, 0, false, nil
 }
 
 // CheckConflict checks if a key has been modified after startTS.
@@ -454,7 +492,7 @@ func (e *LSMEngine) CheckConflict(key []byte, startTS uint64) (bool, error) {
 		}
 		return false, nil
 	}
-	_, lastTS, err := e.GetLatestInfo(key)
+	_, lastTS, _, err := e.GetLatestInfo(key)
 	if err != nil {
 		return false, err
 	}
@@ -486,6 +524,8 @@ func (e *LSMEngine) DeleteWithTS(key []byte, commitTS uint64) error {
 	}
 	putWalEntry(walEntry)
 	mvccKey := mvcc.NewMVCCKey(key, commitTS)
+	fmt.Printf("[DEBUG-DEL] DeleteWithTS: key=%q, commitTS=%d, mvccKey.Timestamp=%d\n",
+		string(key), commitTS, mvccKey.Timestamp)
 	e.memTable.DeleteWithTS(mvccKey)
 	atomic.AddInt64(&e.memSize, -int64(len(key)))
 	e.updateLastCommitCache(key, commitTS)

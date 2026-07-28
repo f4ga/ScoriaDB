@@ -236,26 +236,41 @@ func (db *ScoriaDB) Scan(prefix []byte) Iterator {
 // Column Family Operations
 // ============================================================
 
-// GetCF returns the value for the given key in the specified column family.
+// GetCF retrieves a value by key from the specified Column Family.
+//
+// CRITICAL BEHAVIOR (v0.3.0+):
+//   - If key does NOT exist: returns (nil, nil)
+//   - If key exists with empty value ([]byte{}): returns ([]byte{}, nil)
+//   - If key was deleted (tombstone): returns (nil, nil)
+//
+// This is consistent with LSM tombstone semantics where deleted keys
+// are treated as non-existent for read operations.
+//
+// See: ARCH-07 (MVCC tombstone)
 func (db *ScoriaDB) GetCF(cfName string, key []byte) ([]byte, error) {
 	eng, err := db.registry.GetCF(cfName)
 	if err != nil {
 		return nil, err
 	}
 
-	// Use GetLatestInfo directly — it returns (value, ts, found)
-	// If found is true but value is nil → empty value exists
-	val, ts, err := eng.GetLatestInfo(key)
+	// GetLatestInfo returns (value, commitTS, found, error)
+	// found == false means the key has no visible non-deleted version.
+	val, ts, found, err := eng.GetLatestInfo(key)
 	if err != nil {
 		return nil, err
 	}
-	if ts == 0 {
-		return nil, nil // key does not exist
+	if !found {
+		// Key does not exist or was deleted (tombstone is the latest version).
+		return nil, nil
 	}
-
-	// If value is nil, this is either tombstone OR empty value.
-	// Since ts > 0, it's a valid entry — return empty slice.
+	if ts == 0 {
+		// Key was deleted (tombstone is the latest version).
+		return nil, nil
+	}
+	// found == true means the key has at least one non-deleted version.
 	if val == nil {
+		// Empty value ([]byte{}) is a valid value, not tombstone.
+		// Tombstones return found=false.
 		return []byte{}, nil
 	}
 	return val, nil

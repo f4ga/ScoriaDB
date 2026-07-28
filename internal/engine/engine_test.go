@@ -340,7 +340,7 @@ func TestLSMEngineGetLatestInfo(t *testing.T) {
 	key := []byte("latest_key")
 
 	// No value yet
-	val, ts, err := eng.GetLatestInfo(key)
+	val, ts, _, err := eng.GetLatestInfo(key)
 	if err != nil {
 		t.Fatalf("GetLatestInfo failed: %v", err)
 	}
@@ -353,7 +353,7 @@ func TestLSMEngineGetLatestInfo(t *testing.T) {
 		t.Fatalf("PutWithTS failed: %v", err)
 	}
 
-	val, ts, err = eng.GetLatestInfo(key)
+	val, ts, _, err = eng.GetLatestInfo(key)
 	if err != nil {
 		t.Fatalf("GetLatestInfo failed: %v", err)
 	}
@@ -366,7 +366,7 @@ func TestLSMEngineGetLatestInfo(t *testing.T) {
 		t.Fatalf("PutWithTS failed: %v", err)
 	}
 
-	val, ts, err = eng.GetLatestInfo(key)
+	val, ts, _, err = eng.GetLatestInfo(key)
 	if err != nil {
 		t.Fatalf("GetLatestInfo failed: %v", err)
 	}
@@ -978,7 +978,7 @@ func TestGetLatestInfoWithSSTable(t *testing.T) {
 	}
 
 	// GetLatestInfo should still find the value
-	val, ts, err := eng.GetLatestInfo(key)
+	val, ts, _, err := eng.GetLatestInfo(key)
 	if err != nil {
 		t.Fatalf("GetLatestInfo failed: %v", err)
 	}
@@ -1100,7 +1100,7 @@ func TestGetLatestInfoWithSSTableSearch(t *testing.T) {
 	}
 
 	// GetLatestInfo should still find the value (either in memtable or SSTable)
-	val, ts, err := eng.GetLatestInfo(key)
+	val, ts, _, err := eng.GetLatestInfo(key)
 	if err != nil {
 		t.Fatalf("GetLatestInfo failed: %v", err)
 	}
@@ -1109,7 +1109,7 @@ func TestGetLatestInfoWithSSTableSearch(t *testing.T) {
 	}
 
 	// Non-existent key should return nil/0
-	val, ts, err = eng.GetLatestInfo([]byte("nonexistent"))
+	val, ts, _, err = eng.GetLatestInfo([]byte("nonexistent"))
 	if err != nil {
 		t.Fatalf("GetLatestInfo for non-existent failed: %v", err)
 	}

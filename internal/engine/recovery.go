@@ -38,7 +38,9 @@ func recoverFromWAL(wal *WAL, memTable *memtable.MemTable, vlog *VLogImpl) error
 			memTable.Put(mvccKey, entry.Value)
 		case OpDelete:
 			mvccKey := mvcc.NewMVCCKey(entry.Key, entry.Timestamp)
-			memTable.Put(mvccKey, nil)
+			// CRITICAL: WAL recovery must use DeleteWithTS to correctly mark tombstone.
+			// See: PROMPT-TOMBSTONE-BATCH-FIX
+			memTable.DeleteWithTS(mvccKey)
 		case OpBatch:
 			ops, err := decodeBatchLocal(entry.Value)
 			if err != nil {
@@ -48,7 +50,9 @@ func recoverFromWAL(wal *WAL, memTable *memtable.MemTable, vlog *VLogImpl) error
 			for _, op := range ops {
 				mvccKey := mvcc.NewMVCCKey(op.Key, entry.Timestamp)
 				if op.IsDelete {
-					memTable.Put(mvccKey, nil)
+					// CRITICAL: Batch delete recovery must use DeleteWithTS.
+					// See: PROMPT-TOMBSTONE-BATCH-FIX
+					memTable.DeleteWithTS(mvccKey)
 					continue
 				}
 				if len(op.Value) == ValuePointerSize {

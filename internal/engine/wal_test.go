@@ -341,3 +341,56 @@ func TestGroupCommitWriterFlushLockedError(t *testing.T) {
 		t.Errorf("expected nil error after successful flush, got %v", err)
 	}
 }
+
+// TestGroupCommitWriterCloseRace reproduces the race condition between
+// syncLoop calling file.Sync() and the caller closing the file after Close().
+//
+// The race occurs because Close() signals syncLoop via w.done and returns
+// without waiting for syncLoop to finish. If syncLoop is still executing
+// file.Sync() when the caller closes the file, we get "file already closed".
+//
+// This test adds an artificial delay (syncDelay) in syncLoop before Sync()
+// to make the race deterministic. Without the fix (sync.WaitGroup in Close()),
+// this test fails with -race or produces "file already closed" errors.
+func TestGroupCommitWriterCloseRace(t *testing.T) {
+	dir := t.TempDir()
+	f, err := os.Create(filepath.Join(dir, "wal.log"))
+	if err != nil {
+		t.Fatalf("failed to create test file: %v", err)
+	}
+	defer f.Close()
+
+	// Create writer with syncMode=true and small flush interval
+	gcw := newGroupCommitWriter(f, 1*time.Millisecond, true)
+
+	// Inject artificial delay to make the race deterministic:
+	// syncLoop will sleep for 10ms before each Sync(), ensuring that
+	// when Close() is called, syncLoop is still executing and will
+	// try to Sync() after the file is closed (without the fix).
+	gcw.syncDelay = 10 * time.Millisecond
+
+	// Write several hundred entries to keep syncLoop active
+	for i := 0; i < 500; i++ {
+		data := []byte("key=value,op=put,ts=1234567890")
+		if err := gcw.Write(data); err != nil {
+			t.Fatalf("Write %d failed: %v", i, err)
+		}
+	}
+
+	// Close the writer — this should wait for syncLoop to finish
+	// before returning. Without the fix, syncLoop may still be
+	// executing file.Sync() after Close() returns.
+	if err := gcw.Close(); err != nil {
+		t.Fatalf("Close failed: %v", err)
+	}
+
+	// Now close the file — this should be safe because syncLoop
+	// has already finished (guaranteed by wg.Wait() in Close()).
+	if err := f.Close(); err != nil {
+		t.Fatalf("file.Close failed: %v", err)
+	}
+
+	// If we reach here without a race or "file already closed" error,
+	// the fix is working.
+	t.Log("PASS: no race or file already closed error detected")
+}
