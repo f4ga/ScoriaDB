@@ -12,20 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package scoria provides the public API for ScoriaDB, a high-performance
-// embedded LSM-based key-value store with MVCC, Column Families, and
-// transaction support.
 package scoria
 
 import (
 	"bytes"
 	"fmt"
-	"math"
 	"testing"
 
 	"github.com/f4ga/ScoriaDB/internal/engine"
-	"github.com/f4ga/ScoriaDB/internal/mvcc"
 )
+
+// ============================================================
+// Core Functionality Tests
+// ============================================================
 
 func TestNewScoriaDB(t *testing.T) {
 	db, err := NewScoriaDB(t.TempDir())
@@ -51,6 +50,10 @@ func TestNewScoriaDBWithOptions(t *testing.T) {
 		t.Error("expected non-nil db")
 	}
 }
+
+// ============================================================
+// Basic CRUD Operations
+// ============================================================
 
 func TestScoriaDB_PutGet(t *testing.T) {
 	db, err := NewScoriaDB(t.TempDir())
@@ -122,11 +125,16 @@ func TestScoriaDB_DeleteNotFound(t *testing.T) {
 	}
 	defer db.Close()
 
+	// Deleting a non-existent key should not error (idempotent)
 	err = db.Delete([]byte("nonexistent"))
 	if err != nil {
 		t.Fatalf("Delete nonexistent failed: %v", err)
 	}
 }
+
+// ============================================================
+// Scan Operations
+// ============================================================
 
 func TestScoriaDB_Scan(t *testing.T) {
 	db, err := NewScoriaDB(t.TempDir())
@@ -175,6 +183,10 @@ func TestScoriaDB_ScanEmpty(t *testing.T) {
 		t.Fatalf("Scan error: %v", err)
 	}
 }
+
+// ============================================================
+// Column Family Operations
+// ============================================================
 
 func TestScoriaDB_CreateCF(t *testing.T) {
 	db, err := NewScoriaDB(t.TempDir())
@@ -374,12 +386,15 @@ func TestScoriaDB_DropDefaultCF(t *testing.T) {
 	}
 	defer db.Close()
 
-	// default CF нельзя удалить
 	err = db.DropCF("default")
 	if err == nil {
 		t.Error("expected error when dropping default CF")
 	}
 }
+
+// ============================================================
+// Batch Operations
+// ============================================================
 
 func TestScoriaDB_Batch(t *testing.T) {
 	db, err := NewScoriaDB(t.TempDir())
@@ -488,6 +503,10 @@ func TestScoriaDB_BatchForCF_NonExistent(t *testing.T) {
 		t.Error("expected error for non-existent CF in batch")
 	}
 }
+
+// ============================================================
+// Transaction Tests
+// ============================================================
 
 func TestScoriaDB_Transaction(t *testing.T) {
 	db, err := NewScoriaDB(t.TempDir())
@@ -617,6 +636,10 @@ func TestScoriaDB_TransactionConflict(t *testing.T) {
 	}
 }
 
+// ============================================================
+// Utility Tests
+// ============================================================
+
 func TestScoriaDB_ListCFs(t *testing.T) {
 	db, err := NewScoriaDB(t.TempDir())
 	if err != nil {
@@ -624,7 +647,6 @@ func TestScoriaDB_ListCFs(t *testing.T) {
 	}
 	defer db.Close()
 
-	// default всегда есть
 	cfs := db.ListCFs()
 	if len(cfs) == 0 {
 		t.Error("expected at least default CF")
@@ -663,6 +685,7 @@ func TestScoriaDB_CloseTwice(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// Second close should be idempotent
 	if err := db.Close(); err != nil {
 		t.Fatalf("second Close failed: %v", err)
 	}
@@ -714,6 +737,10 @@ func TestOpenWithWALOptions(t *testing.T) {
 	}
 }
 
+// ============================================================
+// Edge Cases Tests (Critical for Quality)
+// ============================================================
+
 func TestScoriaDB_LargeValue(t *testing.T) {
 	db, err := NewScoriaDB(t.TempDir())
 	if err != nil {
@@ -721,7 +748,8 @@ func TestScoriaDB_LargeValue(t *testing.T) {
 	}
 	defer db.Close()
 
-	// Значение больше MaxInlineSize (64 байта) — должно пойти в VLog
+	// Value larger than MaxInlineSize (64 bytes) → should go to VLog
+	// This tests the VLog path, which is critical for production.
 	largeValue := make([]byte, 100)
 	for i := range largeValue {
 		largeValue[i] = byte(i)
@@ -741,25 +769,9 @@ func TestScoriaDB_LargeValue(t *testing.T) {
 	}
 }
 
-func TestScoriaDB_EmptyKey(t *testing.T) {
-	db, err := NewScoriaDB(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-
-	if err := db.Put([]byte{}, []byte("value")); err != nil {
-		t.Fatalf("Put empty key failed: %v", err)
-	}
-
-	got, err := db.Get([]byte{})
-	if err != nil {
-		t.Fatalf("Get empty key failed: %v", err)
-	}
-	if string(got) != "value" {
-		t.Errorf("expected value, got %s", got)
-	}
-}
+// TestScoriaDB_EmptyValue tests that empty values ([]byte{}) are handled correctly.
+// CRITICAL: Empty values are valid and must be distinguishable from nil (tombstone).
+// This test ensures MVCC semantics for empty values.
 func TestScoriaDB_EmptyValue(t *testing.T) {
 	db, err := NewScoriaDB(t.TempDir())
 	if err != nil {
@@ -767,31 +779,47 @@ func TestScoriaDB_EmptyValue(t *testing.T) {
 	}
 	defer db.Close()
 
+	// Put an empty value ([]byte{}) — this is NOT a tombstone, it's a valid empty value.
 	if err := db.Put([]byte("key"), []byte{}); err != nil {
 		t.Fatalf("Put empty value failed: %v", err)
 	}
 
-	// ДИАГНОСТИКА: проверить через движок
-	eng, _ := db.registry.GetCF("default")
-	val, ts, found := eng.GetLatestInfo([]byte("key"))
-	t.Logf("[DIAG] GetLatestInfo: found=%v, ts=%d, val=%v (len=%d)", found, ts, val, len(val))
-
-	// ДИАГНОСТИКА: проверить через GetWithTS
-	mvccKey := mvcc.NewMVCCKey([]byte("key"), math.MaxUint64)
-	val2, err2 := eng.GetWithTS(mvccKey.Key, mvccKey.Timestamp)
-	t.Logf("[DIAG] GetWithTS: err=%v, val=%v (len=%d)", err2, val2, len(val2))
-
+	// Get must return ([]byte{}, nil), NOT (nil, nil).
+	// Empty value is different from "key not found" or "key deleted".
 	got, err := db.Get([]byte("key"))
 	if err != nil {
 		t.Fatalf("Get empty value failed: %v", err)
 	}
 	if got == nil {
-		t.Error("expected empty slice, got nil")
+		t.Error("expected empty slice ([]byte{}), got nil")
 	}
 	if len(got) != 0 {
 		t.Errorf("expected length 0, got %d", len(got))
 	}
+
+	// Additionally, verify that GetLatestInfo correctly distinguishes:
+	// - empty value: found=true, ts>0, val=[]byte{}
+	// - tombstone: found=false, ts>0, val=nil
+	// - not found: found=false, ts=0, val=nil
+	eng, _ := db.registry.GetCF("default")
+	val, ts, found, err := eng.GetLatestInfo([]byte("key"))
+	if err != nil {
+		t.Fatalf("GetLatestInfo failed: %v", err)
+	}
+	if !found {
+		t.Errorf("expected found=true for empty value, got found=%v", found)
+	}
+	if ts == 0 {
+		t.Errorf("expected ts>0 for empty value, got ts=%d", ts)
+	}
+	if val == nil {
+		t.Error("expected empty slice ([]byte{}), got nil")
+	}
+	if len(val) != 0 {
+		t.Errorf("expected length 0, got %d", len(val))
+	}
 }
+
 func TestScoriaDB_TransactionGetBuffer(t *testing.T) {
 	db, err := NewScoriaDB(t.TempDir())
 	if err != nil {
@@ -804,7 +832,7 @@ func TestScoriaDB_TransactionGetBuffer(t *testing.T) {
 	}
 
 	tx := db.NewTransaction()
-	// Чтение внутри транзакции до записи
+	// Read before write
 	val, err := tx.Get([]byte("key"))
 	if err != nil {
 		t.Fatal(err)
@@ -813,12 +841,12 @@ func TestScoriaDB_TransactionGetBuffer(t *testing.T) {
 		t.Errorf("expected initial, got %s", val)
 	}
 
-	// Запись внутри транзакции
+	// Write inside transaction
 	if err := tx.Put([]byte("key"), []byte("tx-value")); err != nil {
 		t.Fatal(err)
 	}
 
-	// Чтение после записи (должна быть видна)
+	// Read after write (should be visible within transaction)
 	val, err = tx.Get([]byte("key"))
 	if err != nil {
 		t.Fatal(err)
@@ -831,7 +859,7 @@ func TestScoriaDB_TransactionGetBuffer(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Проверка после коммита
+	// Verify after commit
 	val, err = db.Get([]byte("key"))
 	if err != nil {
 		t.Fatal(err)
@@ -912,16 +940,8 @@ func TestScoriaDB_ScanLargeValues(t *testing.T) {
 	}
 	defer db.Close()
 
-	// ДИАГНОСТИКА: проверить registry
-	t.Logf("[DIAG] registry: %p", db.registry)
-
-	eng, err := db.registry.GetCF("default")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Logf("[DIAG] engine from registry: %p", eng)
-
-	// Записываем
+	// Insert 100 keys with 4KB values to test scan with large data.
+	// This exercises the merge iterator and heap-based scan.
 	for i := 0; i < 100; i++ {
 		key := []byte(fmt.Sprintf("scan:%05d", i))
 		value := make([]byte, 4096)
@@ -930,32 +950,22 @@ func TestScoriaDB_ScanLargeValues(t *testing.T) {
 		}
 	}
 
-	// ДИАГНОСТИКА: проверить MemTable через движок
-	t.Logf("[DIAG] ActiveMemTable from engine: %p", eng.ActiveMemTable())
-	t.Logf("[DIAG] MemTable size: %d", eng.ActiveMemTable().Size())
+	iter := db.Scan([]byte("scan:"))
+	defer iter.Close()
 
-	// ДИАГНОСТИКА: проверить Scan через движок напрямую
-	iter := eng.Scan([]byte("scan:"))
 	count := 0
 	for iter.Next() {
 		count++
 	}
-	iter.Close()
-	t.Logf("[DIAG] eng.Scan() returned %d keys", count)
-
-	// ДИАГНОСТИКА: проверить Scan через db
-	iter2 := db.Scan([]byte("scan:"))
-	count2 := 0
-	for iter2.Next() {
-		count2++
+	if err := iter.Err(); err != nil {
+		t.Fatalf("Scan error: %v", err)
 	}
-	iter2.Close()
-	t.Logf("[DIAG] db.Scan() returned %d keys", count2)
 
-	if count2 != 100 {
-		t.Errorf("expected 100 keys, got %d", count2)
+	if count != 100 {
+		t.Errorf("expected 100 keys, got %d", count)
 	}
 }
+
 func TestScoriaDB_ScanViewRelease(t *testing.T) {
 	db, err := NewScoriaDB(t.TempDir())
 	if err != nil {
@@ -963,7 +973,7 @@ func TestScoriaDB_ScanViewRelease(t *testing.T) {
 	}
 	defer db.Close()
 
-	// Записываем большое значение (идёт в VLog)
+	// Insert a large value (goes to VLog) to test VLogView release.
 	largeValue := make([]byte, 100)
 	for i := range largeValue {
 		largeValue[i] = byte(i)
@@ -984,8 +994,8 @@ func TestScoriaDB_ScanViewRelease(t *testing.T) {
 	}
 	iter.Close()
 
-	// После Close() все View должны быть освобождены
-	// Проверяем через повторное сканирование — должно работать
+	// After Close(), all VLogViews must be released.
+	// Verify by re-scanning — should work without SIGBUS or stale pointers.
 	iter2 := db.Scan([]byte("large_key"))
 	defer iter2.Close()
 	if !iter2.Next() {

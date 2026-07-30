@@ -243,35 +243,29 @@ func (db *ScoriaDB) Scan(prefix []byte) Iterator {
 //   - If key exists with empty value ([]byte{}): returns ([]byte{}, nil)
 //   - If key was deleted (tombstone): returns (nil, nil)
 //
-// This is consistent with LSM tombstone semantics where deleted keys
-// are treated as non-existent for read operations.
+// This implementation uses GetWithTS with snapshotTS = LastTS,
+// which correctly handles MVCC visibility including tombstones.
+// If the latest version is a tombstone, GetWithTS returns (nil, false).
 //
-// See: ARCH-07 (MVCC tombstone)
+// See: ARCH-07 (MVCC tombstone), PROMPT-TOMBSTONE-DIAG
 func (db *ScoriaDB) GetCF(cfName string, key []byte) ([]byte, error) {
 	eng, err := db.registry.GetCF(cfName)
 	if err != nil {
 		return nil, err
 	}
 
-	// GetLatestInfo returns (value, commitTS, found, error)
-	// found == false means the key has no visible non-deleted version.
-	val, ts, found, err := eng.GetLatestInfo(key)
+	// GetWithTS with snapshotTS = LastTS returns the latest visible version.
+	// If the latest version is a tombstone, GetWithTS returns (nil, false).
+	// This correctly implements MVCC tombstone semantics.
+	ts := atomic.LoadUint64(&eng.LastTS)
+	val, err := eng.GetWithTS(key, ts)
 	if err != nil {
 		return nil, err
 	}
-	if !found {
-		// Key does not exist or was deleted (tombstone is the latest version).
-		return nil, nil
-	}
-	if ts == 0 {
-		// Key was deleted (tombstone is the latest version).
-		return nil, nil
-	}
-	// found == true means the key has at least one non-deleted version.
+	// GetWithTS returns nil for both "key not found" and "tombstone".
+	// In both cases, from the user's perspective, the key is not found.
 	if val == nil {
-		// Empty value ([]byte{}) is a valid value, not tombstone.
-		// Tombstones return found=false.
-		return []byte{}, nil
+		return nil, nil
 	}
 	return val, nil
 }
