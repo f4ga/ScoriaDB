@@ -18,8 +18,10 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"hash/crc32"
 	"io"
 	"os"
+	"sort"
 	"sync"
 
 	"github.com/f4ga/ScoriaDB/internal/errors"
@@ -164,6 +166,9 @@ var blockPool = sync.Pool{
 }
 
 // readBlock reads a data block from the SSTable at the given offset.
+// The returned buffer includes the CRC32 checksum at the end (last 4 bytes).
+// Callers must verify the CRC32 via VerifyBlockCRC or use the block data
+// which excludes the CRC32 trailer.
 func (r *Reader) readBlock(offset uint64) ([]byte, error) {
 	if _, err := r.file.Seek(int64(offset), io.SeekStart); err != nil {
 		return nil, err
@@ -173,26 +178,55 @@ func (r *Reader) readBlock(offset uint64) ([]byte, error) {
 		return nil, err
 	}
 
+	// Block on disk includes CRC32 trailer (4 bytes), so total = blockSize + 4
+	totalSize := blockSize + 4
+
 	bufPtr, ok := blockPool.Get().(*[]byte)
 	if !ok {
-		buf := make([]byte, blockSize)
+		buf := make([]byte, totalSize)
 		if _, err := io.ReadFull(r.file, buf); err != nil {
 			return nil, err
 		}
-		return buf, nil
+		// Verify CRC32 before returning
+		if err := verifyBlockCRC(buf); err != nil {
+			return nil, err
+		}
+		return buf[:blockSize], nil
 	}
 	buf := *bufPtr
-	if cap(buf) < int(blockSize) {
-		buf = make([]byte, blockSize)
+	if cap(buf) < int(totalSize) {
+		buf = make([]byte, totalSize)
 	} else {
-		buf = buf[:blockSize]
+		buf = buf[:totalSize]
 	}
 
 	if _, err := io.ReadFull(r.file, buf); err != nil {
 		blockPool.Put(&buf)
 		return nil, err
 	}
-	return buf, nil
+
+	// Verify CRC32 before returning
+	if err := verifyBlockCRC(buf); err != nil {
+		blockPool.Put(&buf)
+		return nil, err
+	}
+
+	return buf[:blockSize], nil
+}
+
+// verifyBlockCRC checks the CRC32 checksum stored in the last 4 bytes of buf
+// against the data in buf[:len(buf)-4].
+func verifyBlockCRC(buf []byte) error {
+	if len(buf) < 4 {
+		return fmt.Errorf("block too short for CRC: %d bytes", len(buf))
+	}
+	data := buf[:len(buf)-4]
+	storedCRC := binary.LittleEndian.Uint32(buf[len(buf)-4:])
+	computedCRC := crc32.ChecksumIEEE(data)
+	if storedCRC != computedCRC {
+		return fmt.Errorf("block CRC mismatch: stored 0x%08x, computed 0x%08x", storedCRC, computedCRC)
+	}
+	return nil
 }
 
 // ReleaseBlock returns a buffer to the pool.
@@ -218,29 +252,23 @@ func (r *Reader) Lookup(key mvcc.MVCCKey) ([]byte, bool) {
 		return nil, false
 	}
 
-	// Find block using binary search on index
-	// Index stores the first key of each block
-	// We need to find the block where first_key <= userKey
-	blockIndex := -1
-	for i, entry := range r.indexEntries {
-		idxKey, err := decodeMVCCKey(entry.key)
+	// Find block using binary search on index.
+	// sort.Search finds the first index where the first key > userKey.
+	// The target block is the one before that (where first_key <= userKey).
+	blockIdx := sort.Search(len(r.indexEntries), func(i int) bool {
+		idxKey, err := decodeMVCCKey(r.indexEntries[i].key)
 		if err != nil {
-			continue
+			return true // error → treat as key > userKey
 		}
-		// If this block's first key > userKey, the key belongs to the previous block
-		if keys.CompareKeys(idxKey.Key, userKey) > 0 {
-			break
-		}
-		blockIndex = i
-	}
-
-	// If no block found (key is before first block), return false
-	if blockIndex < 0 {
-		return nil, false
+		return keys.CompareKeys(idxKey.Key, userKey) > 0
+	})
+	blockIdx-- // previous block is the one where first_key <= userKey
+	if blockIdx < 0 {
+		return nil, false // key is before the first block
 	}
 
 	// Read the block
-	blockOffset := r.indexEntries[blockIndex].offset
+	blockOffset := r.indexEntries[blockIdx].offset
 	blockData, err := r.readBlock(blockOffset)
 	if err != nil {
 		return nil, false

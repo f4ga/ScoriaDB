@@ -56,8 +56,10 @@ func BenchmarkSSTableRead(b *testing.B) {
 	defer reader.Close()
 
 	b.ResetTimer()
+	const numKeys = 100000
 	for i := 0; i < b.N; i++ {
-		key := mvcc.NewMVCCKey([]byte{byte(i >> 8), byte(i)}, uint64(i+1))
+		idx := i % numKeys
+		key := mvcc.NewMVCCKey([]byte{byte(idx >> 8), byte(idx)}, uint64(idx+1))
 		if _, found := reader.Lookup(key); !found {
 			b.Fatal("key not found")
 		}

@@ -18,6 +18,7 @@ import (
 	"bufio"
 	"encoding/binary"
 	"fmt"
+	"hash/crc32"
 	"os"
 
 	"github.com/f4ga/ScoriaDB/internal/keys"
@@ -113,6 +114,7 @@ func (w *Writer) Append(key mvcc.MVCCKey, value []byte) error {
 }
 
 // flushBlock writes the current block to disk and adds an entry to the index.
+// Block format on disk: [blockSize:4][blockData:blockSize][CRC32:4]
 func (w *Writer) flushBlock() error {
 	if w.blockEntries == 0 {
 		return nil
@@ -134,7 +136,15 @@ func (w *Writer) flushBlock() error {
 		return fmt.Errorf("failed to write block data: %w", err)
 	}
 
-	w.offset += 4 + uint64(len(w.blockBuf))
+	// Write CRC32 checksum of block data
+	crc := crc32.ChecksumIEEE(w.blockBuf)
+	var crcBuf [4]byte
+	binary.LittleEndian.PutUint32(crcBuf[:], crc)
+	if _, err := w.writer.Write(crcBuf[:]); err != nil {
+		return fmt.Errorf("failed to write block CRC: %w", err)
+	}
+
+	w.offset += 4 + uint64(len(w.blockBuf)) + 4 // blockSize + data + CRC32
 
 	// Reset block buffer
 	w.blockBuf = w.blockBuf[:0]
