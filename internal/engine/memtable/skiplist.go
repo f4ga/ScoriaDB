@@ -28,14 +28,10 @@
 //   - Manual memory management: arena grows, never frees until Reset
 // ============================================================
 
-// Package memtable provides an in-memory table implementation using a lock-free
-// skip list with a linear arena allocator. It supports concurrent reads and writes
-// with zero heap allocations in the hot path.
 package memtable
 
 import (
 	"bytes"
-	"fmt"
 	"sync"
 	"sync/atomic"
 	"unsafe"
@@ -48,10 +44,6 @@ import (
 func fastrand() uint32
 
 const (
-	// debugMVCC enables verbose tracing of findGreaterOrEqual.
-	// Set to true ONLY for local debugging — compiler eliminates this when false.
-	debugMVCC = false
-
 	// MaxHeight is the maximum height of a skip list node.
 	// 20 levels gives probability 1/2^20 ≈ 1e-6 of reaching max height,
 	// which is sufficient for billions of nodes.
@@ -59,7 +51,6 @@ const (
 
 	// threshold is the probability cutoff for generating a skip list level.
 	// Probability 1/4 per level: 0.25 * 0xFFFFFFFF.
-	// Computed explicitly so the relationship to the probability is clear.
 	threshold = uint32(0.25 * float32(0xFFFFFFFF))
 )
 
@@ -73,26 +64,33 @@ func randomHeight() int {
 	return h
 }
 
-// Node представляет узел в skip list.
-// Все поля выровнены для минимального паддинга (кратны 8 байтам).
-// Ключ и значение хранятся в той же аллокации арены, сразу за структурой.
+// Node represents a node in the skip list.
+// All fields are aligned for minimal padding (multiples of 8 bytes).
+// Key and value are stored inline in the same arena allocation, immediately
+// after the Node struct.
 //
-// Размер структуры: 8 + 8 + 4 + 4 + 4 + 4 + 1 + 20*8 = 193 байта
-// (с паддингом до 200 байт из-за выравнивания atomic.Pointer)
+// keyOff: offset from node start to key data (0 if no key)
+// valOff: offset from node start to value data
+//   - valOff == 0 AND valLen == 0 → nil value (tombstone)
+//   - valOff > 0 AND valLen == 0 → empty value ([]byte{})
+//   - valOff > 0 AND valLen > 0 → actual value
+//
+// This distinction is critical for MVCC semantics: nil is a tombstone,
+// empty slice is a valid value.
 type Node struct {
-	keyOff  uint32                          // смещение от начала узла до байта ключа (0 если нет ключа)
-	valOff  uint32                          // смещение от начала узла до байта значения (0 если нет значения)
-	keyLen  uint32                          // длина ключа в байтах
-	valLen  uint32                          // длина значения в байтах
-	ts      uint64                          // инвертированный timestamp (MaxUint64 - commitTS)
-	deleted atomic.Bool                     // тумбстоун для удаленных записей
-	height  uint32                          // высота узла
-	next    [MaxHeight]atomic.Pointer[Node] // фиксированный массив указателей
+	keyOff  uint32                          // offset to key data (0 if no key)
+	valOff  uint32                          // offset to value data (0 if nil value)
+	keyLen  uint32                          // key length in bytes
+	valLen  uint32                          // value length in bytes (0 for nil OR empty)
+	ts      uint64                          // inverted timestamp (MaxUint64 - commitTS)
+	deleted atomic.Bool                     // tombstone flag for deleted entries
+	height  uint32                          // node height
+	next    [MaxHeight]atomic.Pointer[Node] // fixed array of next pointers
 }
 
-// Key возвращает MVCCKey узла.
-// Если keyLen == 0, возвращает MVCCKey{Key: nil} (не пустой срез).
-// Создаёт слайс через unsafe.Slice — 0 аллокаций, данные в арене.
+// Key returns the MVCCKey of the node.
+// If keyLen == 0, returns MVCCKey{Key: nil} (not empty slice).
+// Zero allocations — data is in arena.
 //
 //go:nosplit
 //go:inline
@@ -107,22 +105,43 @@ func (n *Node) Key() mvcc.MVCCKey {
 	}
 }
 
-// Value возвращает значение узла.
-// Если valLen == 0, возвращает nil (не пустой срез).
-// Создаёт слайс через unsafe.Slice — 0 аллокаций, данные в арене.
+// Value returns the node's value.
+// CRITICAL: Distinguishes between nil and empty slice:
+//   - valOff == 0 → nil (tombstone)
+//   - valOff > 0 && valLen == 0 → []byte{} (empty value)
+//   - valOff > 0 && valLen > 0 → actual value
+//
+// Zero allocations — data is in arena.
+// See: BL-20 (TECHDEBT)
 //
 //go:nosplit
 //go:inline
 func (n *Node) Value() []byte {
+	if n.valOff == 0 {
+		return nil // genuine nil value (tombstone)
+	}
 	if n.valLen == 0 {
-		return nil
+		return []byte{} // empty but non-nil value
 	}
 	ptr := unsafe.Add(unsafe.Pointer(n), n.valOff)
 	return unsafe.Slice((*byte)(ptr), int(n.valLen))
 }
 
+// IsDeleted returns true if the node is marked as deleted.
+// Used for MVCC filtering.
+//
+//go:nosplit
+//go:inline
+func (n *Node) IsDeleted() bool {
+	return n.deleted.Load()
+}
+
 // nodeKeyLess returns true if a < b in skip list ordering:
-// first by key bytes, then by timestamp descending (newer first).
+// first by user key (bytes.Compare), then by timestamp descending (newer first).
+//
+// This ordering ensures that for the same user key, the newest version
+// (largest commitTS, smallest inverted timestamp) appears first.
+// See: ARCH-07 (MVCC with inverted timestamp)
 //
 //go:nosplit
 func nodeKeyLess(a, b mvcc.MVCCKey) bool {
@@ -133,18 +152,27 @@ func nodeKeyLess(a, b mvcc.MVCCKey) bool {
 	if cmp > 0 {
 		return false
 	}
+	// Same user key → newer (larger commitTS) comes first
+	// commitTS is inverted: larger commitTS = smaller Timestamp
+	// So a.Timestamp > b.Timestamp means a is OLDER (smaller commitTS)
+	// Wait: In MVCC, we want newer versions first.
+	// With inverted timestamps, smaller Timestamp = newer.
+	// So nodeKeyLess should return true if a is NEWER than b?
+	// Actually: we want ascending order by commitTS (oldest first).
+	// So smaller commitTS = larger Timestamp = comes first.
+	// Therefore: a.Timestamp > b.Timestamp → a is older → a < b.
 	return a.Timestamp > b.Timestamp
 }
 
 // SkipList is a concurrent skip list with lock-free reads and mutex-protected writes.
-// The mutex protects the skip list structure (next pointer updates), not the arena allocation.
-// Arena allocation is lock-free (CAS-based), so the hot path has zero mutex contention.
+// The mutex protects the skip list structure (next pointer updates), not the arena.
+// Arena allocation is lock-free (CAS-based), so the hot path has zero contention.
 type SkipList struct {
 	head       *Node
 	height     int32
 	length     int64
 	arena      *Arena
-	epoch      *EpochManager        // EBR for safe memory reclamation in lock-free reads
+	epoch      *EpochManager        // EBR for safe memory reclamation
 	lastActive atomic.Pointer[Node] // cached last active node for O(1) findLast
 	mu         sync.Mutex           // protects write operations (Put, Delete)
 }
@@ -158,7 +186,7 @@ func NewSkipList() *SkipList {
 		head:   head,
 		height: 1,
 		arena:  arena,
-		epoch:  NewEpochManager(1000), // EBR for safe memory reclamation, cleanup every 1000 retires
+		epoch:  NewEpochManager(1000),
 	}
 }
 
@@ -168,17 +196,21 @@ func NewSkipList() *SkipList {
 // Total allocation: sizeof(Node) + len(key) + len(value) bytes.
 // Key and value are copied directly into the arena — no intermediate buffers.
 //
-// When key is nil or empty, keyOff stays 0 and Key() returns MVCCKey{Key: nil}.
-// When value is nil or empty, valOff stays 0 and Value() returns nil.
+// Key handling:
+//   - key == nil or len(key) == 0 → keyOff = 0, Key() returns nil
+//
+// Value handling (CRITICAL for MVCC):
+//   - value == nil → valOff = 0, Value() returns nil (tombstone)
+//   - value != nil && len(value) == 0 → valOff = sentinel (1 byte), Value() returns []byte{}
+//   - value != nil && len(value) > 0 → valOff = offset, Value() returns actual data
+//
+// See: BL-20 (TECHDEBT)
 //
 //go:nosplit
 func (a *Arena) NewNode(key, value []byte, height int) *Node {
 	keyLen := len(key)
 	valLen := len(value)
 
-	// Calculate offsets: Node struct first, then key data, then value data.
-	// If keyLen == 0, keyOff stays 0 (no key data stored, Key() returns nil).
-	// If valLen == 0, valOff stays 0 (no value data stored, Value() returns nil).
 	nodeSize := int(unsafe.Sizeof(Node{}))
 	var keyOff, valOff uint32
 
@@ -190,7 +222,13 @@ func (a *Arena) NewNode(key, value []byte, height int) *Node {
 	if valLen > 0 {
 		valOff = uint32(offset)
 		offset += valLen
+	} else if value != nil {
+		// Empty but non-nil value → allocate 1 byte as sentinel.
+		// This allows Value() to distinguish nil (valOff=0) from empty (valOff>0, valLen=0).
+		valOff = uint32(offset)
+		offset += 1
 	}
+	// If value == nil, valOff stays 0 → Value() returns nil.
 
 	ptr := a.Alloc(offset)
 	node := (*Node)(ptr)
@@ -202,22 +240,24 @@ func (a *Arena) NewNode(key, value []byte, height int) *Node {
 	node.height = uint32(height)
 	node.deleted.Store(false)
 
-	// Zero out the next pointers (critical for GC safety)
+	// Zero out next pointers (critical for GC safety)
 	for i := 0; i < MaxHeight; i++ {
 		node.next[i].Store(nil)
 	}
 
-	// Copy key into arena — direct copy, no intermediate allocation
+	// Copy key into arena — direct copy, no allocation
 	if keyLen > 0 {
 		keyPtr := unsafe.Add(ptr, keyOff)
 		copy(unsafe.Slice((*byte)(keyPtr), keyLen), key)
 	}
 
-	// Copy value into arena — direct copy, no intermediate allocation
+	// Copy value into arena — direct copy, no allocation
 	if valLen > 0 {
 		valPtr := unsafe.Add(ptr, valOff)
 		copy(unsafe.Slice((*byte)(valPtr), valLen), value)
 	}
+	// If valOff > 0 && valLen == 0 (sentinel for empty value), we allocated 1 byte but don't copy anything.
+	// The sentinel byte is left as zero.
 
 	return node
 }
@@ -231,33 +271,13 @@ func (s *SkipList) findGreaterOrEqual(key mvcc.MVCCKey) *Node {
 	x := s.head
 	level := atomic.LoadInt32(&s.height) - 1
 
-	if debugMVCC {
-		fmt.Printf("[DEBUG] find: Looking for Key=%s, TS=%d (commitTS=%d)\n",
-			string(key.Key), key.Timestamp, key.CommitTS())
-		fmt.Printf("[DEBUG] find: Starting at head, height=%d\n", level+1)
-	}
-
 	for level >= 0 {
 		next := x.next[level].Load()
 		if next != nil && nodeKeyLess(next.Key(), key) {
-			if debugMVCC {
-				nk := next.Key()
-				fmt.Printf("[DEBUG] find: Level %d: skip to node TS=%d, Key=%s\n",
-					level, nk.Timestamp, string(nk.Key))
-			}
 			x = next
 			continue
 		}
 		if level == 0 {
-			if debugMVCC {
-				if next != nil {
-					nk := next.Key()
-					fmt.Printf("[DEBUG] find: Returning node TS=%d, Key=%s, Deleted=%v\n",
-						nk.Timestamp, string(nk.Key), next.deleted.Load())
-				} else {
-					fmt.Printf("[DEBUG] find: Returning nil (end of list)\n")
-				}
-			}
 			s.epoch.ExitEpoch()
 			return next
 		}
@@ -267,51 +287,9 @@ func (s *SkipList) findGreaterOrEqual(key mvcc.MVCCKey) *Node {
 	return nil
 }
 
-// findLessOrEqual returns the last node with key <= the given key.
-// Lock-free traversal for reads, protected by EBR epoch.
-// Returns nil if no node satisfies key <= searchKey.
-// See: ARCH-11, MVCC-03
-func (s *SkipList) findLessOrEqual(key mvcc.MVCCKey) *Node {
-	s.epoch.EnterEpoch()
-
-	x := s.head
-	level := atomic.LoadInt32(&s.height) - 1
-
-	for level >= 0 {
-		next := x.next[level].Load()
-		if next != nil && nodeKeyLess(next.Key(), key) {
-			x = next
-			continue
-		}
-		if level == 0 {
-			s.epoch.ExitEpoch()
-			// At level 0, check if next (not x) satisfies key <= searchKey.
-			// x is the last node that was strictly < key.
-			// next is the first node >= key.
-			// If next != nil and next.Key() <= key (i.e., not strictly greater),
-			// return next as the correct "less or equal" result.
-			if next != nil {
-				nextKey := next.Key()
-				// next.Key() <= key means NOT (next.Key() > key)
-				// next.Key() > key means nodeKeyLess(key, nextKey) is true
-				if !nodeKeyLess(key, nextKey) {
-					return next
-				}
-			}
-			if x == s.head {
-				return nil
-			}
-			return x
-		}
-		level--
-	}
-	s.epoch.ExitEpoch()
-	return nil
-}
-
-// findExact returns the node with the exact matching key and timestamp.
+// findExact returns the node with exact key+timestamp match.
 // Returns nil if no such node exists.
-// Lock-free traversal for reads, protected by EBR epoch.
+// Lock-free traversal, protected by EBR epoch.
 // See: ARCH-11, MVCC-03
 func (s *SkipList) findExact(key mvcc.MVCCKey) *Node {
 	node := s.findGreaterOrEqual(key)
@@ -319,7 +297,7 @@ func (s *SkipList) findExact(key mvcc.MVCCKey) *Node {
 		return nil
 	}
 	nodeKey := node.Key()
-	if !bytes.Equal(nodeKey.Key, key.Key) {
+	if nodeKey.Key == nil || !bytes.Equal(nodeKey.Key, key.Key) {
 		return nil
 	}
 	if nodeKey.Timestamp != key.Timestamp {
@@ -342,7 +320,6 @@ func (s *SkipList) findLast() *Node {
 
 	// Slow path: traverse LEVEL 0 ONLY, skip deleted nodes.
 	// Level 0 contains ALL nodes, guaranteeing complete traversal.
-	// See: GL-08, ARCH-11
 	s.epoch.EnterEpoch()
 	defer s.epoch.ExitEpoch()
 
@@ -369,6 +346,13 @@ func (s *SkipList) findLast() *Node {
 
 // updateLastActive updates the cached lastActive pointer if the given node
 // is greater than the current cached value. Called after successful Put.
+//
+// Comparison for "greater": first by user key, then by timestamp.
+// Since timestamps are inverted, a "greater" node has:
+//   - larger user key, OR
+//   - same user key and smaller Timestamp (newer version)
+//
+// See: ARCH-11
 func (s *SkipList) updateLastActive(node *Node) {
 	if node.deleted.Load() {
 		return
@@ -382,7 +366,6 @@ func (s *SkipList) updateLastActive(node *Node) {
 			continue
 		}
 		// Check: node > current ?
-		// Use nodeKeyLess(current.Key(), node.Key()) to test current < node
 		if nodeKeyLess(current.Key(), node.Key()) {
 			if s.lastActive.CompareAndSwap(current, node) {
 				return
@@ -396,6 +379,12 @@ func (s *SkipList) updateLastActive(node *Node) {
 
 // Get retrieves the value for the given key.
 // Lock-free read operation — zero allocations.
+//
+// Returns:
+//   - (value, true)  — key exists with value (may be []byte{} for empty value)
+//   - (nil, false)   — key does not exist OR was deleted (tombstone)
+//
+// Performance: O(log N), zero allocations, no mutex.
 func (s *SkipList) Get(key mvcc.MVCCKey) ([]byte, bool) {
 	node := s.findGreaterOrEqual(key)
 	if node == nil {
@@ -415,6 +404,11 @@ func (s *SkipList) Get(key mvcc.MVCCKey) ([]byte, bool) {
 // Mutex-protected write, lock-free reads still work during writes.
 //
 // Returns true if a new entry was created, false if an existing entry was updated.
+//
+// Value handling (CRITICAL for MVCC):
+//   - value == nil     → tombstone (valOff=0, valLen=0)
+//   - value == []byte{} → empty value (valOff=sentinel, valLen=0, deleted=false)
+//   - value != nil     → normal value (valOff=offset, valLen=len(value))
 //
 // Zero allocations:
 //   - Arena allocation for node (no mallocgc)
@@ -460,28 +454,51 @@ func (s *SkipList) Put(key mvcc.MVCCKey, value []byte) bool {
 	}
 
 	// If a node with the same key+timestamp already exists, update it in-place.
-	// This is critical for DeleteWithTS correctness: it calls Put(key, nil) then
-	// Delete(key). Without in-place update, Put creates a DUPLICATE node and
-	// Delete only marks the new one, leaving the old alive node in the chain.
 	if existingNode != nil {
-		// Update value in-place — copy new value into the existing node's arena slot
+		// We can only update in-place if the node has a valid valOff.
+		// If valOff == 0, the node is a tombstone and we need to create a new node.
+		if existingNode.valOff == 0 && value != nil && len(value) > 0 {
+			// Tombstone → normal value: create new node instead of updating.
+			// We'll fall through to the insertion path.
+			goto insertNewNode
+		}
+
+		// Update value in-place
 		existingNode.valLen = uint32(len(value))
-		if len(value) > 0 {
+
+		if value == nil {
+			// Tombstone: clear value offset
+			existingNode.valOff = 0
+		} else if len(value) == 0 {
+			// Empty value: use sentinel
+			if existingNode.valOff == 0 {
+				existingNode.valOff = 1
+			}
+		} else {
+			// Normal value: copy into arena at existing offset
 			valPtr := unsafe.Add(unsafe.Pointer(existingNode), existingNode.valOff)
 			copy(unsafe.Slice((*byte)(valPtr), len(value)), value)
 		}
-		// Reset deleted flag — this is a fresh Put, not a tombstone
-		existingNode.deleted.Store(false)
+
+		// Reset deleted flag unless value == nil (tombstone)
+		if value != nil {
+			existingNode.deleted.Store(false)
+		}
 		s.mu.Unlock()
 		return false
 	}
 
+insertNewNode:
 	// Update height BEFORE inserting the node
 	for height > int(atomic.LoadInt32(&s.height)) {
 		atomic.StoreInt32(&s.height, int32(height))
 	}
 
-	// Create new node in arena — zero allocation (CAS-based, no mutex)
+	// Create new node in arena — zero allocation
+	// Arena.NewNode handles nil vs empty correctly:
+	//   - value == nil     → valOff=0, valLen=0
+	//   - value == []byte{} → valOff=sentinel, valLen=0
+	//   - value != nil     → valOff=offset, valLen=len(value)
 	node := s.arena.NewNode(key.Key, value, height)
 	node.ts = key.Timestamp
 
@@ -491,7 +508,7 @@ func (s *SkipList) Put(key mvcc.MVCCKey, value []byte) bool {
 		prevs[l].next[l].Store(node)
 	}
 
-	// Update lastActive cache — the new node might be the new last
+	// Update lastActive cache
 	s.updateLastActive(node)
 
 	atomic.AddInt64(&s.length, 1)
@@ -521,7 +538,7 @@ func (s *SkipList) Delete(key mvcc.MVCCKey) bool {
 		s.lastActive.Store(nil)
 	}
 
-	s.epoch.Retire(unsafe.Pointer(node)) // EBR: safe deferred reclamation
+	s.epoch.Retire(unsafe.Pointer(node))
 	atomic.AddInt64(&s.length, -1)
 	return true
 }

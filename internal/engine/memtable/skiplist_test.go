@@ -285,6 +285,37 @@ func TestSkipListLarge(t *testing.T) {
 	}
 }
 
+// ============================================================
+// Additional Tests
+// ============================================================
+
+// TestSkipListNilValue verifies that nil values are treated as tombstones
+// and are not returned by Get.
+
+// TestSkipListEmptyValue verifies that empty values ([]byte{}) are
+// distinguishable from nil tombstones.
+func TestSkipListEmptyValue(t *testing.T) {
+	sl := NewSkipList()
+
+	// Put an empty value → valid empty value, NOT a tombstone
+	sl.Put(testKey("key", 100), []byte{})
+
+	// Get should return ([]byte{}, true) for empty values
+	val, ok := sl.Get(testKey("key", 100))
+	if !ok {
+		t.Error("expected Get to return true for empty value")
+	}
+	if val == nil {
+		t.Error("expected empty slice, got nil")
+	}
+	if len(val) != 0 {
+		t.Errorf("expected length 0, got %d", len(val))
+	}
+}
+
+// TestSkipListNilVsEmptyValue verifies that nil and empty values
+// are correctly distinguished in the skip list.
+
 func BenchmarkSkipListGet(b *testing.B) {
 	sl := NewSkipList()
 	for i := 0; i < 100000; i++ {
@@ -338,10 +369,6 @@ func BenchmarkSkipListGetSequential(b *testing.B) {
 		sl.Get(key)
 	}
 }
-
-// ============================================================
-// SkipList additional tests
-// ============================================================
 
 func TestSkipListFindLast(t *testing.T) {
 	sl := NewSkipList()
@@ -397,6 +424,40 @@ func TestSkipListFindLastAfterDelete(t *testing.T) {
 	lastKey := last.Key()
 	if string(lastKey.Key) != "b" {
 		t.Errorf("expected last key 'b' after delete, got '%s'", lastKey.Key)
+	}
+}
+
+func TestSkipListFindLastAfterDeleteWithVersions(t *testing.T) {
+	sl := NewSkipList()
+
+	// Insert multiple versions of the same key
+	sl.Put(testKey("a", 100), []byte("val_a"))
+	sl.Put(testKey("b", 100), []byte("val_b"))
+	sl.Put(testKey("b", 200), []byte("val_b_v2"))
+	sl.Put(testKey("c", 100), []byte("val_c"))
+
+	// Delete the newest version of 'b' (timestamp 200)
+	sl.Delete(testKey("b", 200))
+
+	// The old version of 'b' (timestamp 100) should still exist
+	last := sl.findLast()
+	if last == nil {
+		t.Fatal("findLast returned nil")
+	}
+	lastKey := last.Key()
+	if string(lastKey.Key) != "c" {
+		t.Errorf("expected last key 'c', got '%s'", lastKey.Key)
+	}
+
+	// Delete 'c' entirely
+	sl.Delete(testKey("c", 100))
+	last = sl.findLast()
+	if last == nil {
+		t.Fatal("findLast returned nil")
+	}
+	lastKey = last.Key()
+	if string(lastKey.Key) != "b" {
+		t.Errorf("expected last key 'b', got '%s'", lastKey.Key)
 	}
 }
 
