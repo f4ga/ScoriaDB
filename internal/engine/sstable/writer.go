@@ -57,7 +57,9 @@ type Writer struct {
 }
 
 // NewWriter creates a new Writer for writing SSTable.
-func NewWriter(path string) (*Writer, error) {
+// expectedKeys is the expected number of keys for Bloom filter sizing.
+// If expectedKeys <= 0, a default size is used.
+func NewWriter(path string, expectedKeys int) (*Writer, error) {
 	file, err := os.Create(path)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create SSTable file: %w", err)
@@ -68,7 +70,7 @@ func NewWriter(path string) (*Writer, error) {
 		file:         file,
 		writer:       writer,
 		blockBuf:     make([]byte, 0, BlockSize),
-		bloomFilter:  NewBloomFilter(BloomFilterBitsPerKey),
+		bloomFilter:  NewBloomFilter(expectedKeys),
 		indexEntries: make([][]byte, 0),
 		indexOffsets: make([]uint64, 0),
 		keys:         make([][]byte, 0),

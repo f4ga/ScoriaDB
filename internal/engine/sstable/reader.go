@@ -108,7 +108,7 @@ func Open(path string) (*Reader, error) {
 		errors.CloseWithLog(file, "sstable-file")
 		return nil, fmt.Errorf("failed to read bloom filter: %w", err)
 	}
-	bloomFilter := DecodeBloomFilter(bloomBytes, 3)
+	bloomFilter := DecodeBloomFilter(bloomBytes)
 
 	var minKey []byte
 	if footer.MinKeyLength > 0 {

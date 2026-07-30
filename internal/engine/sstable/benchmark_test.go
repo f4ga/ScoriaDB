@@ -33,7 +33,7 @@ func BenchmarkSSTableRead(b *testing.B) {
 	defer os.RemoveAll(dir)
 
 	path := dir + "/test.sst"
-	w, err := NewWriter(path)
+	w, err := NewWriter(path, 100000)
 	if err != nil {
 		b.Fatal(err)
 	}

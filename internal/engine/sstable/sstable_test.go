@@ -30,7 +30,7 @@ func TestWriterAndReader(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.sst")
 
-	writer, err := NewWriter(path)
+	writer, err := NewWriter(path, 10)
 	if err != nil {
 		t.Fatalf("failed to create writer: %v", err)
 	}
@@ -88,7 +88,7 @@ func TestBloomFilterSkip(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "bloom.sst")
 
-	writer, err := NewWriter(path)
+	writer, err := NewWriter(path, 10)
 	if err != nil {
 		t.Fatalf("failed to create writer: %v", err)
 	}
@@ -135,7 +135,7 @@ func TestCompactionSimple(t *testing.T) {
 	mergedPath := filepath.Join(dir, "merged.sst")
 
 	// Записываем первый SSTable
-	writer1, err := NewWriter(path1)
+	writer1, err := NewWriter(path1, 10)
 	if err != nil {
 		t.Fatalf("failed to create writer1: %v", err)
 	}
@@ -150,7 +150,7 @@ func TestCompactionSimple(t *testing.T) {
 	}
 
 	// Записываем второй SSTable
-	writer2, err := NewWriter(path2)
+	writer2, err := NewWriter(path2, 10)
 	if err != nil {
 		t.Fatalf("failed to create writer2: %v", err)
 	}
@@ -177,7 +177,7 @@ func TestCompactionSimple(t *testing.T) {
 	defer errors.CloseWithFatal(reader2, "sstable-reader2")
 
 	// Создаем объединенный SSTable (симуляция compaction)
-	writerMerged, err := NewWriter(mergedPath)
+	writerMerged, err := NewWriter(mergedPath, 10)
 	if err != nil {
 		t.Fatalf("failed to create merged writer: %v", err)
 	}
@@ -223,7 +223,7 @@ func TestWriterBlockOverflow(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "overflow.sst")
 
-	writer, err := NewWriter(path)
+	writer, err := NewWriter(path, 100)
 	if err != nil {
 		t.Fatalf("failed to create writer: %v", err)
 	}
@@ -270,7 +270,7 @@ func TestReaderLookupTombstone(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "tombstone.sst")
 
-	writer, err := NewWriter(path)
+	writer, err := NewWriter(path, 10)
 	if err != nil {
 		t.Fatalf("failed to create writer: %v", err)
 	}
@@ -306,7 +306,7 @@ func TestReaderNewIterator(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "iter.sst")
 
-	writer, err := NewWriter(path)
+	writer, err := NewWriter(path, 10)
 	if err != nil {
 		t.Fatalf("failed to create writer: %v", err)
 	}
@@ -408,7 +408,7 @@ func TestBloomFilterEncodeDecode(t *testing.T) {
 		t.Error("encoded data should not be empty")
 	}
 
-	decoded := DecodeBloomFilter(encoded, 10)
+	decoded := DecodeBloomFilter(encoded)
 	if !decoded.MayContain([]byte("test_key")) {
 		t.Error("decoded filter should contain 'test_key'")
 	}
@@ -434,12 +434,12 @@ func TestBloomFilterSetBitGetBit(t *testing.T) {
 }
 
 func TestBloomFilterSetK(t *testing.T) {
+	// SetK is no longer needed — k is computed optimally.
+	// Verify that the filter still works correctly.
 	bf := NewBloomFilter(10)
-	bf.SetK(5)
-	// SetK just sets the k field, verify it doesn't panic
 	bf.Add([]byte("test"))
 	if !bf.MayContain([]byte("test")) {
-		t.Error("expected filter to contain 'test' after SetK")
+		t.Error("expected filter to contain 'test'")
 	}
 }
 
@@ -447,7 +447,7 @@ func TestWriterFinishWithTombstoneOnly(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "tombstone_only.sst")
 
-	writer, err := NewWriter(path)
+	writer, err := NewWriter(path, 10)
 	if err != nil {
 		t.Fatalf("failed to create writer: %v", err)
 	}
@@ -481,7 +481,7 @@ func TestReaderLookupNonExistent(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "lookup.sst")
 
-	writer, err := NewWriter(path)
+	writer, err := NewWriter(path, 10)
 	if err != nil {
 		t.Fatalf("failed to create writer: %v", err)
 	}
@@ -522,7 +522,7 @@ func TestWriterEmptySSTable(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "empty.sst")
 
-	writer, err := NewWriter(path)
+	writer, err := NewWriter(path, 10)
 	if err != nil {
 		t.Fatalf("failed to create writer: %v", err)
 	}
@@ -586,7 +586,7 @@ func TestOpenCorruptedIndex(t *testing.T) {
 	path := filepath.Join(dir, "corrupted_index.sst")
 
 	// Create a valid SSTable first
-	writer, err := NewWriter(path)
+	writer, err := NewWriter(path, 10)
 	if err != nil {
 		t.Fatalf("failed to create writer: %v", err)
 	}
@@ -645,7 +645,7 @@ func TestReadBlockNonExistent(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "readblock.sst")
 
-	writer, err := NewWriter(path)
+	writer, err := NewWriter(path, 10)
 	if err != nil {
 		t.Fatalf("failed to create writer: %v", err)
 	}
@@ -683,7 +683,7 @@ func TestReadBlockZeroSize(t *testing.T) {
 	// For simplicity, just write a minimal valid SSTable
 	file.Close()
 
-	writer, err := NewWriter(path)
+	writer, err := NewWriter(path, 10)
 	if err != nil {
 		t.Fatalf("failed to create writer: %v", err)
 	}
@@ -714,7 +714,7 @@ func TestWriterFinishTwice(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "finish_twice.sst")
 
-	writer, err := NewWriter(path)
+	writer, err := NewWriter(path, 10)
 	if err != nil {
 		t.Fatalf("failed to create writer: %v", err)
 	}
@@ -738,7 +738,7 @@ func TestWriterFinishEmpty(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "empty_finish.sst")
 
-	writer, err := NewWriter(path)
+	writer, err := NewWriter(path, 10)
 	if err != nil {
 		t.Fatalf("failed to create writer: %v", err)
 	}
@@ -760,7 +760,7 @@ func TestWriterLargeNumberOfKeys(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "many_keys.sst")
 
-	writer, err := NewWriter(path)
+	writer, err := NewWriter(path, 1000)
 	if err != nil {
 		t.Fatalf("failed to create writer: %v", err)
 	}
@@ -857,7 +857,7 @@ func TestBloomFilterEncodeDecodeRoundTrip(t *testing.T) {
 	}
 
 	encoded := bf.Encode()
-	decoded := DecodeBloomFilter(encoded, 10)
+	decoded := DecodeBloomFilter(encoded)
 
 	for _, k := range keys {
 		if !decoded.MayContain(k) {
@@ -868,7 +868,7 @@ func TestBloomFilterEncodeDecodeRoundTrip(t *testing.T) {
 
 func TestBloomFilterDecodeEmpty(t *testing.T) {
 	// Decode empty data
-	bf := DecodeBloomFilter(nil, 10)
+	bf := DecodeBloomFilter(nil)
 	if bf == nil {
 		t.Fatal("DecodeBloomFilter returned nil")
 	}
@@ -878,9 +878,9 @@ func TestBloomFilterDecodeEmpty(t *testing.T) {
 }
 
 func TestBloomFilterDecodeShortData(t *testing.T) {
-	// Decode data shorter than 4 bytes (no seed)
+	// Decode data shorter than header
 	shortData := []byte{0x01, 0x02}
-	bf := DecodeBloomFilter(shortData, 10)
+	bf := DecodeBloomFilter(shortData)
 	if bf == nil {
 		t.Fatal("DecodeBloomFilter returned nil")
 	}
@@ -890,7 +890,7 @@ func TestReaderLookupWithVersionVisibility(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "version_visibility.sst")
 
-	writer, err := NewWriter(path)
+	writer, err := NewWriter(path, 10)
 	if err != nil {
 		t.Fatalf("failed to create writer: %v", err)
 	}
@@ -938,7 +938,7 @@ func TestReaderLookupTombstoneVersion(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "tombstone_version.sst")
 
-	writer, err := NewWriter(path)
+	writer, err := NewWriter(path, 10)
 	if err != nil {
 		t.Fatalf("failed to create writer: %v", err)
 	}
@@ -968,7 +968,7 @@ func TestReaderNewIteratorEmpty(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "empty_iter.sst")
 
-	writer, err := NewWriter(path)
+	writer, err := NewWriter(path, 10)
 	if err != nil {
 		t.Fatalf("failed to create writer: %v", err)
 	}
@@ -997,7 +997,7 @@ func TestReaderNewIteratorMultipleBlocks(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "multi_block.sst")
 
-	writer, err := NewWriter(path)
+	writer, err := NewWriter(path, 200)
 	if err != nil {
 		t.Fatalf("failed to create writer: %v", err)
 	}
@@ -1044,7 +1044,7 @@ func TestReaderClose(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "close_test.sst")
 
-	writer, err := NewWriter(path)
+	writer, err := NewWriter(path, 10)
 	if err != nil {
 		t.Fatalf("failed to create writer: %v", err)
 	}
@@ -1079,26 +1079,34 @@ func TestReleaseBlock(t *testing.T) {
 }
 
 func TestBloomFilterFalsePositiveRate(t *testing.T) {
-	bf := NewBloomFilter(10)
+	// Create filter for 1000 keys with 1% target FPR
+	bf := NewBloomFilter(1000)
 
-	// Add 100 keys
-	for i := 0; i < 100; i++ {
+	// Add 1000 keys
+	for i := 0; i < 1000; i++ {
 		bf.Add([]byte(fmt.Sprintf("key-%d", i)))
 	}
 
 	// Check that all added keys are found
-	for i := 0; i < 100; i++ {
+	for i := 0; i < 1000; i++ {
 		if !bf.MayContain([]byte(fmt.Sprintf("key-%d", i))) {
 			t.Errorf("added key key-%d not found", i)
 		}
 	}
 
-	// Check false positive rate (should be low, but we just verify it's not 100%)
+	// Check false positive rate on 10,000 missing keys
 	falsePositives := 0
-	for i := 0; i < 1000; i++ {
+	for i := 0; i < 10000; i++ {
 		if bf.MayContain([]byte(fmt.Sprintf("nonexistent-%d", i))) {
 			falsePositives++
 		}
 	}
-	t.Logf("False positives: %d/1000 (%.1f%%)", falsePositives, float64(falsePositives)/10.0)
+	rate := float64(falsePositives) / 10000.0
+	t.Logf("False positives: %d/10000 (%.2f%%), estimated FPR: %.2f%%",
+		falsePositives, rate*100, bf.FalsePositiveRate()*100)
+
+	// Should be ≤ 2% (allowing some margin above the 1% target)
+	if rate > 0.02 {
+		t.Errorf("FPR too high: %.2f%%, expected ≤ 2%%", rate*100)
+	}
 }
