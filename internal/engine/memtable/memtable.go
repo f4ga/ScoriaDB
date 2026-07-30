@@ -19,7 +19,6 @@ package memtable
 
 import (
 	"bytes"
-	"fmt"
 	"sync/atomic"
 
 	"github.com/f4ga/ScoriaDB/internal/mvcc"
@@ -50,12 +49,8 @@ func (mt *MemTable) Put(key mvcc.MVCCKey, value []byte) {
 // DeleteWithTS marks a key as deleted (tombstone).
 // Tombstone is a full entry in MemTable and occupies space until flush.
 func (mt *MemTable) DeleteWithTS(key mvcc.MVCCKey) {
-	fmt.Printf("[DEBUG-MTDEL] DeleteWithTS: key.Key=%q, key.Timestamp=%d (commitTS=%d)\n",
-		string(key.Key), key.Timestamp, key.CommitTS())
 	mt.sl.Put(key, nil)
-	fmt.Printf("[DEBUG-MTDEL] DeleteWithTS: after Put, calling Delete\n")
 	mt.sl.Delete(key)
-	fmt.Printf("[DEBUG-MTDEL] DeleteWithTS: after Delete, done\n")
 	// Size is not decremented: tombstone is a real entry that will be
 	// flushed to SSTable as a deleted record.
 }
@@ -64,50 +59,64 @@ func (mt *MemTable) DeleteWithTS(key mvcc.MVCCKey) {
 // Returns (value, true) if found and not deleted, otherwise (nil, false).
 //
 // Algorithm:
-//  1. Find the last node with key <= searchKey using findLessOrEqual.
-//     The searchKey has Timestamp = InvertTimestamp(snapshotTS).
+//  1. Find the first node with key >= searchKey using findGreaterOrEqual.
+//     searchKey has Timestamp = InvertTimestamp(0) (MaxUint64).
 //     For the same user key, nodes are ordered by Timestamp descending
-//     (newer commitTS first, since Timestamp = MaxUint64 - commitTS).
-//     findLessOrEqual returns the node with the largest key <= searchKey,
-//     which for the same user key is the newest version with
-//     commitTS <= snapshotTS.
+//     (newer commitTS first).
 //  2. If node is nil or user key doesn't match → key doesn't exist.
-//  3. If node is deleted (tombstone) → key is deleted.
-//  4. Otherwise, return the value.
-//
-// See: ARCH-07, MVCC-03
+//  3. Iterate through all versions of this user key via next[0] pointers.
+//  4. For each version:
+//     - If timestamp is not visible (commitTS > snapshotTS) → skip
+//     - If version is a tombstone (deleted) → reset bestNode to nil
+//     - Otherwise → update bestNode (this is the newest visible non-deleted version)
+//  5. If bestNode is nil → key is deleted or doesn't exist.
+//  6. Otherwise, return the value.
 func (mt *MemTable) Get(key mvcc.MVCCKey) ([]byte, bool) {
 	if mt.sl == nil {
 		return nil, false
 	}
 
-	// findLessOrEqual returns the last node with key <= searchKey.
-	// For the same user key, nodes are ordered by Timestamp descending
-	// (newer commitTS first). findLessOrEqual finds the newest version
-	// with commitTS <= snapshotTS because:
-	//   - Timestamp = MaxUint64 - commitTS
-	//   - nodeKeyLess: for same key, a.Timestamp > b.Timestamp means a < b
-	//   - So larger commitTS = smaller Timestamp = "less" in ordering
-	//   - findLessOrEqual finds the last node <= searchKey
-	//   - This is the newest version with Timestamp >= key.Timestamp
-	//   - Which means commitTS <= snapshotTS
-	node := mt.sl.findLessOrEqual(key)
+	// Use findGreaterOrEqual with InvertTimestamp(0) = MaxUint64 to find
+	// the newest version of this key.
+	searchKey := mvcc.MVCCKey{
+		Key:       key.Key,
+		Timestamp: mvcc.InvertTimestamp(0),
+	}
+	node := mt.sl.findGreaterOrEqual(searchKey)
 	if node == nil {
 		return nil, false
 	}
 
-	// Check if the user key matches.
 	nodeKey := node.Key()
 	if nodeKey.Key == nil || !bytes.Equal(nodeKey.Key, key.Key) {
 		return nil, false
 	}
 
-	if node.deleted.Load() {
-		// Tombstone → key is deleted.
+	// Iterate all versions of this key via next[0] chain.
+	// Track the newest non-deleted version with commitTS <= snapshotTS.
+	var bestNode *Node
+	for node != nil {
+		nodeKey = node.Key()
+		if !bytes.Equal(nodeKey.Key, key.Key) {
+			break
+		}
+		// nodeKey.Timestamp >= key.Timestamp means commitTS <= snapshotTS
+		if nodeKey.Timestamp >= key.Timestamp {
+			if node.deleted.Load() {
+				// Tombstone: hide all older versions
+				bestNode = nil
+			} else {
+				bestNode = node
+			}
+		}
+		node = node.next[0].Load()
+	}
+
+	if bestNode == nil {
 		return nil, false
 	}
 
-	return node.Value(), true
+	return bestNode.Value(), true
 }
 
 // GetLatest returns the latest (newest) non-deleted value and its commit timestamp
@@ -131,8 +140,6 @@ func (mt *MemTable) Get(key mvcc.MVCCKey) ([]byte, bool) {
 //  2. Iterate through all versions of this user key via next[0] pointers.
 //  3. Track the newest non-deleted value (bestValue, bestTS).
 //  4. Return the newest non-deleted value, or (nil, 0, false) if none found.
-//
-// See: ARCH-07, MVCC-03
 func (mt *MemTable) GetLatest(key []byte) ([]byte, uint64, bool) {
 	if mt.sl == nil {
 		return nil, 0, false
@@ -153,18 +160,22 @@ func (mt *MemTable) GetLatest(key []byte) ([]byte, uint64, bool) {
 	var bestValue []byte
 	var bestTS uint64
 	found := false
+	iterCount := 0
 	for node != nil {
 		nodeKey = node.Key()
 		if !bytes.Equal(nodeKey.Key, key) {
 			break
 		}
 		commitTS := nodeKey.CommitTS()
-		if !node.deleted.Load() && commitTS > bestTS {
+		deleted := node.deleted.Load()
+		val := node.Value()
+		if !deleted && commitTS > bestTS {
 			bestTS = commitTS
-			bestValue = node.Value()
+			bestValue = val
 			found = true
 		}
 		node = node.next[0].Load()
+		iterCount++
 	}
 
 	return bestValue, bestTS, found

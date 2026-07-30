@@ -31,10 +31,6 @@ import (
 	"github.com/f4ga/ScoriaDB/internal/mvcc"
 )
 
-// debugPerf enables performance diagnostic output.
-// Set to true to see per-PutWithTS timing breakdown.
-const debugPerf = false
-
 // LSMEngine is the main LSM tree engine.
 type LSMEngine struct {
 	mu                  sync.RWMutex
@@ -266,12 +262,6 @@ func (e *LSMEngine) PutWithTS(key, value []byte, commitTS uint64) error {
 	var inlineValue []byte
 	var isLarge bool
 
-	// DIAGNOSTIC: measure unified mmap write time
-	var startWal time.Time
-	if debugPerf {
-		startWal = time.Now()
-	}
-
 	// Determine storage strategy based on value size
 	if len(value) <= MaxInlineSize {
 		inlineValue = value
@@ -327,10 +317,6 @@ func (e *LSMEngine) PutWithTS(key, value []byte, commitTS uint64) error {
 	atomic.AddInt64(&e.memSize, int64(len(key)+len(value)))
 	e.updateLastCommitCache(key, commitTS)
 
-	// DIAGNOSTIC: print unified mmap write time
-	if debugPerf {
-		fmt.Printf("[PERF] Unified mmap write: %d ns\n", time.Since(startWal).Nanoseconds())
-	}
 	return nil
 }
 
@@ -384,23 +370,18 @@ func (e *LSMEngine) GetWithTS(key []byte, snapshotTS uint64) ([]byte, error) {
 	defer e.mu.RUnlock()
 	mvccKey := mvcc.NewMVCCKey(key, snapshotTS)
 	val, found := e.memTable.Get(mvccKey)
-	fmt.Printf("[DEBUG-GETS] GetWithTS: key=%q, snapshotTS=%d, mvccKey.Timestamp=%d, found=%v, val=%v\n",
-		string(key), snapshotTS, mvccKey.Timestamp, found, val)
 	if found {
 		decoded, err := e.decodeStoredValue(val)
-		fmt.Printf("[DEBUG-GETS] GetWithTS: found, decoded=%v, err=%v\n", decoded, err)
 		return decoded, err
 	}
 	for _, level := range e.levels {
 		for _, sst := range level {
 			if val, found := sst.Lookup(mvccKey); found {
 				decoded, err := e.decodeStoredValue(val)
-				fmt.Printf("[DEBUG-GETS] GetWithTS: found in SSTable, decoded=%v\n", decoded)
 				return decoded, err
 			}
 		}
 	}
-	fmt.Printf("[DEBUG-GETS] GetWithTS: not found, returning nil\n")
 	return nil, nil
 }
 
@@ -425,17 +406,14 @@ func (e *LSMEngine) GetLatestInfo(key []byte) ([]byte, uint64, bool, error) {
 	defer e.mu.RUnlock()
 
 	val, ts, found := e.memTable.GetLatest(key)
-	fmt.Printf("[DEBUG-GLI] GetLatestInfo: key=%q, val=%v, ts=%d, found=%v\n", string(key), val, ts, found)
 	if ts > 0 {
 		// Key found in memtable (either live or deleted).
 		// If found=true, it's a live value. If found=false, it's a tombstone.
 		if found {
 			decoded, err := e.decodeStoredValue(val)
-			fmt.Printf("[DEBUG-GLI] GetLatestInfo: live value, decoded=%v, ts=%d, err=%v\n", decoded, ts, err)
 			return decoded, ts, true, err
 		}
 		// Tombstone — key is deleted, return nil with the tombstone TS.
-		fmt.Printf("[DEBUG-GLI] GetLatestInfo: TOMBSTONE, returning (nil, %d, false, nil)\n", ts)
 		return nil, ts, false, nil
 	}
 	if e.frozenMemTable != nil {
@@ -480,7 +458,6 @@ func (e *LSMEngine) GetLatestInfo(key []byte) ([]byte, uint64, bool, error) {
 			}
 		}
 	}
-	fmt.Printf("[DEBUG-GLI] GetLatestInfo: key not found, returning (nil, 0, false, nil)\n")
 	return nil, 0, false, nil
 }
 
@@ -524,8 +501,6 @@ func (e *LSMEngine) DeleteWithTS(key []byte, commitTS uint64) error {
 	}
 	putWalEntry(walEntry)
 	mvccKey := mvcc.NewMVCCKey(key, commitTS)
-	fmt.Printf("[DEBUG-DEL] DeleteWithTS: key=%q, commitTS=%d, mvccKey.Timestamp=%d\n",
-		string(key), commitTS, mvccKey.Timestamp)
 	e.memTable.DeleteWithTS(mvccKey)
 	atomic.AddInt64(&e.memSize, -int64(len(key)))
 	e.updateLastCommitCache(key, commitTS)
