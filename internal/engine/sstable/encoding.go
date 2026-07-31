@@ -22,27 +22,29 @@ import (
 )
 
 // encodeMVCCKey encodes MVCCKey into bytes for storage in SSTable.
-// Format: key length (2 bytes) + key (variable) + timestamp (8 bytes, little endian)
+// Format: key length (4 bytes, uint32) + key (variable) + timestamp (8 bytes, little endian)
+// The 4-byte length matches the format used by parseIndex in reader.go.
+// See: PROMPT-SSTABLE-FINAL
 func encodeMVCCKey(key mvcc.MVCCKey) []byte {
 	kl := len(key.Key)
-	buf := make([]byte, 2+kl+8)
-	binary.LittleEndian.PutUint16(buf[0:2], uint16(kl))
-	copy(buf[2:2+kl], key.Key)
-	binary.LittleEndian.PutUint64(buf[2+kl:], key.Timestamp)
+	buf := make([]byte, 4+kl+8)
+	binary.LittleEndian.PutUint32(buf[0:4], uint32(kl))
+	copy(buf[4:4+kl], key.Key)
+	binary.LittleEndian.PutUint64(buf[4+kl:], key.Timestamp)
 	return buf
 }
 
 // decodeMVCCKey decodes bytes back to MVCCKey.
 func decodeMVCCKey(data []byte) (mvcc.MVCCKey, error) {
-	if len(data) < 2 {
+	if len(data) < 4 {
 		return mvcc.MVCCKey{}, ErrCorrupted
 	}
-	kl := binary.LittleEndian.Uint16(data[0:2])
-	if len(data) < int(2+kl+8) {
+	kl := binary.LittleEndian.Uint32(data[0:4])
+	if len(data) < int(4+kl+8) {
 		return mvcc.MVCCKey{}, ErrCorrupted
 	}
-	userKey := data[2 : 2+kl]
-	timestamp := binary.LittleEndian.Uint64(data[2+kl:])
+	userKey := data[4 : 4+kl]
+	timestamp := binary.LittleEndian.Uint64(data[4+kl:])
 	return mvcc.MVCCKey{
 		Key:       userKey,
 		Timestamp: timestamp,

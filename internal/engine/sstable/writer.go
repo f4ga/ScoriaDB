@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"hash/crc32"
 	"os"
+	"sort"
 
 	"github.com/f4ga/ScoriaDB/internal/keys"
 	"github.com/f4ga/ScoriaDB/internal/mvcc"
@@ -34,24 +35,29 @@ const (
 	MagicNumber = 0x53434F5249415F53 // "SCORIA_S" in ASCII
 )
 
+// rawEntry is a key-value pair stored in memory before sorting and block formation.
+type rawEntry struct {
+	key   mvcc.MVCCKey
+	value []byte
+}
+
 // Writer writes SSTable to file.
+//
+// All entries are buffered in memory and sorted by encoded MVCC key during Finish().
+// This ensures the SSTable is correctly sorted even when keys are appended in
+// non-sorted order (e.g., after user key wrap-around with 2-byte keys >65536 entries).
+//
+// Blocks are formed from the sorted entries and written to disk in order.
+// The index stores the encoded MVCC key of the first entry in each block.
+//
+// See: PROMPT-SSTABLE-FINAL
 type Writer struct {
 	file   *os.File
 	writer *bufio.Writer
-	offset uint64
 
-	// Current block
-	blockBuf      []byte
-	blockEntries  int
-	blockStartKey []byte // first key in current block (for index)
-	blockStartOff uint64
-
-	// Block index: stores LAST key of each block and its offset
-	indexEntries [][]byte
-	indexOffsets []uint64
+	entries []rawEntry
 
 	bloomFilter *BloomFilter
-	keys        [][]byte
 	minKey      []byte
 	maxKey      []byte
 }
@@ -66,22 +72,26 @@ func NewWriter(path string, expectedKeys int) (*Writer, error) {
 	}
 	writer := bufio.NewWriter(file)
 
+	// Pre-allocate entries slice if expectedKeys is reasonable
+	entryCap := expectedKeys
+	if entryCap <= 0 || entryCap > 1000000 {
+		entryCap = 1024
+	}
+
 	return &Writer{
-		file:         file,
-		writer:       writer,
-		blockBuf:     make([]byte, 0, BlockSize),
-		bloomFilter:  NewBloomFilter(expectedKeys),
-		indexEntries: make([][]byte, 0),
-		indexOffsets: make([]uint64, 0),
-		keys:         make([][]byte, 0),
+		file:        file,
+		writer:      writer,
+		entries:     make([]rawEntry, 0, entryCap),
+		bloomFilter: NewBloomFilter(expectedKeys),
 	}, nil
 }
 
 // Append adds a key-value pair to the SSTable.
+// The entry is buffered in memory. Actual sorting and block formation
+// happens in Finish().
 func (w *Writer) Append(key mvcc.MVCCKey, value []byte) error {
 	// Add key to Bloom filter
 	w.bloomFilter.Add(key.Key)
-	w.keys = append(w.keys, key.Key)
 
 	// Update min/max keys
 	if w.minKey == nil || keys.CompareKeys(key.Key, w.minKey) < 0 {
@@ -91,128 +101,179 @@ func (w *Writer) Append(key mvcc.MVCCKey, value []byte) error {
 		w.maxKey = key.Key
 	}
 
-	// Serialize key and value
-	keyBytes := encodeMVCCKey(key)
-	entry := encodeEntry(keyBytes, value)
-
-	// If current block would overflow, flush it
-	if len(w.blockBuf)+len(entry) > BlockSize && w.blockEntries > 0 {
-		if err := w.flushBlock(); err != nil {
-			return err
-		}
-	}
-
-	// Remember first key of the block
-	if w.blockEntries == 0 {
-		w.blockStartKey = keyBytes
-		w.blockStartOff = w.offset
-	}
-
-	// Add entry to block
-	w.blockBuf = append(w.blockBuf, entry...)
-	w.blockEntries++
-
+	// Buffer entry in memory
+	w.entries = append(w.entries, rawEntry{key: key, value: value})
 	return nil
 }
 
-// flushBlock writes the current block to disk and adds an entry to the index.
-// Block format on disk: [blockSize:4][blockData:blockSize][CRC32:4]
-func (w *Writer) flushBlock() error {
-	if w.blockEntries == 0 {
-		return nil
-	}
-
-	// Store the LAST key of the block for binary search
-	// We need to track the last key of the current block.
-	// Since we only have the first key, we store the first key
-	// and the index will be used for binary search by first key.
-	w.indexEntries = append(w.indexEntries, w.blockStartKey)
-	w.indexOffsets = append(w.indexOffsets, w.blockStartOff)
-
-	// Write block size and data
-	blockSize := uint32(len(w.blockBuf))
-	if err := binary.Write(w.writer, binary.LittleEndian, blockSize); err != nil {
-		return fmt.Errorf("failed to write block size: %w", err)
-	}
-	if _, err := w.writer.Write(w.blockBuf); err != nil {
-		return fmt.Errorf("failed to write block data: %w", err)
-	}
-
-	// Write CRC32 checksum of block data
-	crc := crc32.ChecksumIEEE(w.blockBuf)
-	var crcBuf [4]byte
-	binary.LittleEndian.PutUint32(crcBuf[:], crc)
-	if _, err := w.writer.Write(crcBuf[:]); err != nil {
-		return fmt.Errorf("failed to write block CRC: %w", err)
-	}
-
-	w.offset += 4 + uint64(len(w.blockBuf)) + 4 // blockSize + data + CRC32
-
-	// Reset block buffer
-	w.blockBuf = w.blockBuf[:0]
-	w.blockEntries = 0
-
-	return nil
-}
-
-// Finish completes the SSTable write, writing index, Bloom filter, range keys, and footer.
+// Finish completes the SSTable write.
+//
+// Steps:
+// 1. Sort all entries by encoded MVCC key
+// 2. Form blocks from sorted entries
+// 3. Write blocks to disk
+// 4. Write index, Bloom filter, range keys, footer
+//
+// See: PROMPT-SSTABLE-FINAL
 func (w *Writer) Finish() error {
-	// Flush the last block
-	if err := w.flushBlock(); err != nil {
-		return err
+	if len(w.entries) == 0 {
+		// Write empty footer for empty SSTable
+		return w.writeFooter(0, nil, nil, nil, nil)
 	}
 
+	// Sort all entries by (user key, inverted timestamp).
+	// Using keys.CompareKeys for user key comparison ensures correct
+	// lexicographic ordering regardless of key length. Sorting by encoded
+	// MVCCKey bytes is WRONG because encodeMVCCKey prepends the key length
+	// as a 4-byte uint32, which would sort by key length first, not by content.
+	// See: BUG-SORT-01
+	sort.Slice(w.entries, func(i, j int) bool {
+		ki, kj := w.entries[i].key, w.entries[j].key
+		if cmp := keys.CompareKeys(ki.Key, kj.Key); cmp != 0 {
+			return cmp < 0
+		}
+		// Same user key: newer version (larger inverted timestamp) first
+		return ki.Timestamp > kj.Timestamp
+	})
+
+	// Form blocks from sorted entries
+	type block struct {
+		firstKey []byte // raw user key of first entry (for binary search in index)
+		data     []byte // serialized entries
+	}
+	var blocks []block
+	var currentBlock []byte
+	var blockFirstKey []byte
+
+	for _, entry := range w.entries {
+		keyBytes := encodeMVCCKey(entry.key)
+		entryBytes := encodeEntry(keyBytes, entry.value)
+
+		// If current block would overflow, flush it
+		if len(currentBlock)+len(entryBytes) > BlockSize && len(currentBlock) > 0 {
+			blocks = append(blocks, block{
+				firstKey: blockFirstKey,
+				data:     currentBlock,
+			})
+			currentBlock = nil
+			blockFirstKey = nil
+		}
+
+		if blockFirstKey == nil {
+			blockFirstKey = append([]byte(nil), entry.key.Key...) // raw user key
+		}
+		currentBlock = append(currentBlock, entryBytes...)
+	}
+
+	// Flush last block
+	if len(currentBlock) > 0 {
+		blocks = append(blocks, block{
+			firstKey: blockFirstKey,
+			data:     currentBlock,
+		})
+	}
+
+	// Write blocks to disk and build index
+	indexEntries := make([][]byte, 0, len(blocks))
+	indexOffsets := make([]uint64, 0, len(blocks))
+	var offset uint64
+
+	for _, blk := range blocks {
+		// Index stores raw user key (without timestamp) for binary search
+		indexEntries = append(indexEntries, blk.firstKey)
+		indexOffsets = append(indexOffsets, offset)
+
+		// Write block: [blockSize:4][blockData:blockSize][CRC32:4]
+		blockSize := uint32(len(blk.data))
+		if err := binary.Write(w.writer, binary.LittleEndian, blockSize); err != nil {
+			return fmt.Errorf("failed to write block size: %w", err)
+		}
+		if _, err := w.writer.Write(blk.data); err != nil {
+			return fmt.Errorf("failed to write block data: %w", err)
+		}
+		crc := crc32.ChecksumIEEE(blk.data)
+		var crcBuf [4]byte
+		binary.LittleEndian.PutUint32(crcBuf[:], crc)
+		if _, err := w.writer.Write(crcBuf[:]); err != nil {
+			return fmt.Errorf("failed to write block CRC: %w", err)
+		}
+		offset += 4 + uint64(len(blk.data)) + 4
+	}
+
+	return w.writeFooter(offset, indexEntries, indexOffsets, w.minKey, w.maxKey)
+}
+
+// writeFooter writes index, Bloom filter, range keys, and footer.
+func (w *Writer) writeFooter(
+	offset uint64,
+	indexEntries [][]byte,
+	indexOffsets []uint64,
+	minKey, maxKey []byte,
+) error {
 	// Write block index
-	indexStart := w.offset
-	for i, key := range w.indexEntries {
-		// Write key length and key
+	indexStart := offset
+	for i, key := range indexEntries {
 		if err := binary.Write(w.writer, binary.LittleEndian, uint32(len(key))); err != nil {
 			return err
 		}
-		w.offset += 4
+		offset += 4
 		if _, err := w.writer.Write(key); err != nil {
 			return err
 		}
-		w.offset += uint64(len(key))
-		// Write block offset
-		if err := binary.Write(w.writer, binary.LittleEndian, w.indexOffsets[i]); err != nil {
+		offset += uint64(len(key))
+		if err := binary.Write(w.writer, binary.LittleEndian, indexOffsets[i]); err != nil {
 			return err
 		}
-		w.offset += 8
+		offset += 8
 	}
-	indexSize := w.offset - indexStart
+	indexSize := offset - indexStart
 
 	// Write Bloom filter
-	bloomStart := w.offset
+	bloomStart := offset
 	bloomBytes := w.bloomFilter.Encode()
 	if err := binary.Write(w.writer, binary.LittleEndian, uint32(len(bloomBytes))); err != nil {
 		return err
 	}
-	w.offset += 4
+	offset += 4
 	if _, err := w.writer.Write(bloomBytes); err != nil {
 		return err
 	}
-	w.offset += uint64(len(bloomBytes))
-	bloomSize := w.offset - bloomStart
+	offset += uint64(len(bloomBytes))
+	bloomSize := offset - bloomStart
 
-	// Write min and max keys (range filter)
-	minKeyStart := w.offset
-	if err := binary.Write(w.writer, binary.LittleEndian, uint32(len(w.minKey))); err != nil {
-		return err
+	// Write min key
+	minKeyStart := offset
+	if minKey != nil {
+		if err := binary.Write(w.writer, binary.LittleEndian, uint32(len(minKey))); err != nil {
+			return err
+		}
+		if _, err := w.writer.Write(minKey); err != nil {
+			return err
+		}
+		offset += 4 + uint64(len(minKey))
+	} else {
+		if err := binary.Write(w.writer, binary.LittleEndian, uint32(0)); err != nil {
+			return err
+		}
+		offset += 4
 	}
-	if _, err := w.writer.Write(w.minKey); err != nil {
-		return err
-	}
-	w.offset += 4 + uint64(len(w.minKey))
 
-	maxKeyStart := w.offset
-	if err := binary.Write(w.writer, binary.LittleEndian, uint32(len(w.maxKey))); err != nil {
-		return err
+	// Write max key
+	maxKeyStart := offset
+	if maxKey != nil {
+		if err := binary.Write(w.writer, binary.LittleEndian, uint32(len(maxKey))); err != nil {
+			return err
+		}
+		if _, err := w.writer.Write(maxKey); err != nil {
+			return err
+		}
+		offset += 4 + uint64(len(maxKey))
+	} else {
+		if err := binary.Write(w.writer, binary.LittleEndian, uint32(0)); err != nil {
+			return err
+		}
+		offset += 4
 	}
-	if _, err := w.writer.Write(w.maxKey); err != nil {
-		return err
-	}
-	w.offset += 4 + uint64(len(w.maxKey))
 
 	// Write footer
 	footer := Footer{
@@ -220,21 +281,22 @@ func (w *Writer) Finish() error {
 		IndexSize:    indexSize,
 		BloomOffset:  bloomStart,
 		BloomSize:    bloomSize,
-		NumKeys:      uint64(len(w.keys)),
+		NumKeys:      uint64(len(w.entries)),
 		Magic:        MagicNumber,
 		MinKeyOffset: minKeyStart,
-		MinKeyLength: uint64(len(w.minKey)),
+		MinKeyLength: uint64(len(minKey)),
 		MaxKeyOffset: maxKeyStart,
-		MaxKeyLength: uint64(len(w.maxKey)),
+		MaxKeyLength: uint64(len(maxKey)),
 	}
 	if err := binary.Write(w.writer, binary.LittleEndian, footer); err != nil {
 		return fmt.Errorf("failed to write footer: %w", err)
 	}
 
-	// Flush and close
+	// Flush buffered data to disk
 	if err := w.writer.Flush(); err != nil {
 		return fmt.Errorf("failed to flush writer: %w", err)
 	}
+
 	if err := w.file.Close(); err != nil {
 		return fmt.Errorf("failed to close SSTable file: %w", err)
 	}

@@ -22,6 +22,10 @@ import (
 
 // SSTableIterator iterates over key-value pairs in an SSTable.
 // It reads blocks sequentially using the block index.
+//
+// On mmap platforms, block data is a slice of the mmap region (0 allocs).
+// On fallback platforms, block data is from the sync.Pool.
+//
 // See: ARCH-05, PERF-03
 type SSTableIterator struct {
 	reader    *Reader
@@ -32,15 +36,18 @@ type SSTableIterator struct {
 	val       []byte
 	err       error
 	ended     bool
+	isMmap    bool // true if reader uses mmap (no pool release needed)
 }
 
 // NewIterator creates a new SSTableIterator for this reader.
 // Returns an error if the first block cannot be read.
+//
 // See: ARCH-05
 func (r *Reader) NewIterator() (*SSTableIterator, error) {
 	it := &SSTableIterator{
 		reader:   r,
 		blockIdx: -1,
+		isMmap:   r.mmapFile.Data() != nil,
 	}
 	// Advance to the first block
 	if !it.nextBlock() {
@@ -87,7 +94,7 @@ func (it *SSTableIterator) Next() bool {
 			}
 
 			it.key = mvccKey
-			// Copy value since blockData will be reused
+			// Copy value since blockData may be from mmap or pool
 			val := make([]byte, len(entryVal))
 			copy(val, entryVal)
 			it.val = val
@@ -109,8 +116,8 @@ func (it *SSTableIterator) nextBlock() bool {
 		return false
 	}
 
-	// Release previous block data
-	if it.blockData != nil {
+	// Release previous block data (only if from pool, not mmap)
+	if it.blockData != nil && !it.isMmap {
 		ReleaseBlock(it.blockData)
 		it.blockData = nil
 	}
@@ -143,7 +150,7 @@ func (it *SSTableIterator) Err() error {
 
 // Close releases resources held by the iterator.
 func (it *SSTableIterator) Close() {
-	if it.blockData != nil {
+	if it.blockData != nil && !it.isMmap {
 		ReleaseBlock(it.blockData)
 		it.blockData = nil
 	}
