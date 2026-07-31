@@ -223,3 +223,15 @@ Thumbs.db
 
 # Temporary benchmark outputs
 bench_*.txt
+# Dev artifacts (не коммитить)
+.codeassistant/
+BACKLOG.md
+BENCHMARKS.md
+BENCHMARKS_REPORT.md
+FULL_AUDIT_REPORT.md
+NOLINT.md
+TECHDEBT.md
+benchmarks/
+plans/
+internal/engine/sstable/debug_lookup_test.go
+internal/engine/sstable/debug_test.go
