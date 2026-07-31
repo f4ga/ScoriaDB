@@ -45,7 +45,7 @@ func (e *LSMEngine) flushMemTable() error {
 	sstPath := filepath.Join(e.dataDir, fmt.Sprintf("%06d.sst", fileNum))
 
 	// Create writer (currently using old API that works with os)
-	writer, err := sstable.NewWriter(sstPath)
+	writer, err := sstable.NewWriter(sstPath, e.memTable.Size())
 	if err != nil {
 		return fmt.Errorf("failed to create SSTable writer: %w", err)
 	}

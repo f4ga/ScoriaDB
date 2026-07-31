@@ -98,7 +98,7 @@ func (e *LSMEngine) compactLevel0() error {
 	sstPath := filepath.Join(e.dataDir, fmt.Sprintf("%06d.sst", fileNum))
 
 	// Create writer for new SSTable
-	writer, err := sstable.NewWriter(sstPath)
+	writer, err := sstable.NewWriter(sstPath, len(allKVs))
 	if err != nil {
 		return fmt.Errorf("failed to create SSTable writer: %w", err)
 	}
