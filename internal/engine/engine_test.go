@@ -474,7 +474,7 @@ func TestDecodeStoredValue(t *testing.T) {
 	defer errors.CloseWithFatal(eng, "engine")
 
 	// Test nil value
-	val, err := eng.decodeStoredValue(nil)
+	val, err := eng.decodeStoredValue(nil, false)
 	if err != nil {
 		t.Fatalf("decodeStoredValue(nil) failed: %v", err)
 	}
@@ -484,7 +484,7 @@ func TestDecodeStoredValue(t *testing.T) {
 
 	// Test inline value (not a VLog pointer)
 	inlineVal := []byte("inline_value")
-	val, err = eng.decodeStoredValue(inlineVal)
+	val, err = eng.decodeStoredValue(inlineVal, false)
 	if err != nil {
 		t.Fatalf("decodeStoredValue(inline) failed: %v", err)
 	}
@@ -494,7 +494,7 @@ func TestDecodeStoredValue(t *testing.T) {
 
 	// Test empty value — should return empty slice (not nil)
 	// to distinguish "key found with empty value" from "key not found".
-	val, err = eng.decodeStoredValue([]byte{})
+	val, err = eng.decodeStoredValue([]byte{}, false)
 	if err != nil {
 		t.Fatalf("decodeStoredValue(empty) failed: %v", err)
 	}

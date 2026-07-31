@@ -371,13 +371,13 @@ func (e *LSMEngine) GetWithTS(key []byte, snapshotTS uint64) ([]byte, error) {
 	mvccKey := mvcc.NewMVCCKey(key, snapshotTS)
 	val, found := e.memTable.Get(mvccKey)
 	if found {
-		decoded, err := e.decodeStoredValue(val)
+		decoded, err := e.decodeStoredValue(val, false)
 		return decoded, err
 	}
 	for _, level := range e.levels {
 		for _, sst := range level {
 			if val, found := sst.Lookup(mvccKey); found {
-				decoded, err := e.decodeStoredValue(val)
+				decoded, err := e.decodeStoredValue(val, true)
 				return decoded, err
 			}
 		}
@@ -410,7 +410,7 @@ func (e *LSMEngine) GetLatestInfo(key []byte) ([]byte, uint64, bool, error) {
 		// Key found in memtable (either live or deleted).
 		// If found=true, it's a live value. If found=false, it's a tombstone.
 		if found {
-			decoded, err := e.decodeStoredValue(val)
+			decoded, err := e.decodeStoredValue(val, false)
 			return decoded, ts, true, err
 		}
 		// Tombstone — key is deleted, return nil with the tombstone TS.
@@ -420,7 +420,7 @@ func (e *LSMEngine) GetLatestInfo(key []byte) ([]byte, uint64, bool, error) {
 		val, ts, found = e.frozenMemTable.GetLatest(key)
 		if ts > 0 {
 			if found {
-				decoded, err := e.decodeStoredValue(val)
+				decoded, err := e.decodeStoredValue(val, false)
 				return decoded, ts, true, err
 			}
 			return nil, ts, false, nil
@@ -453,7 +453,7 @@ func (e *LSMEngine) GetLatestInfo(key []byte) ([]byte, uint64, bool, error) {
 				if len(bestValue) == 0 {
 					return nil, bestTS, false, nil
 				}
-				decoded, err := e.decodeStoredValue(bestValue)
+				decoded, err := e.decodeStoredValue(bestValue, true)
 				return decoded, bestTS, true, err
 			}
 		}
@@ -636,7 +636,14 @@ func (e *LSMEngine) Close() error {
 // decodeStoredValue decodes a stored value (inline, VLog pointer, or unified mmap pointer).
 // Checks unified mmap first, then falls back to VLog.
 // Uses ReadDirect for zero-copy internal reads.
-func (e *LSMEngine) decodeStoredValue(stored []byte) ([]byte, error) {
+//
+// If fromSSTable is true, the value comes from an SSTable mmap region and must be
+// copied before returning, because the mmap region may be released after the reader
+// is closed (e.g., during compaction). Values from MemTable are in the arena and
+// do not need copying.
+//
+// See: PROMPT-SSTABLE-FINAL
+func (e *LSMEngine) decodeStoredValue(stored []byte, fromSSTable bool) ([]byte, error) {
 	if len(stored) == 0 {
 		// Empty stored value — return empty slice (not nil) so callers
 		// can distinguish "key found with empty value" from "key not found".
@@ -658,6 +665,13 @@ func (e *LSMEngine) decodeStoredValue(stored []byte) ([]byte, error) {
 			return e.vlog.ReadDirect(vp)
 		}
 		return stored, nil
+	}
+	// Value from SSTable mmap — must copy because mmap may be released
+	// after the reader is closed (e.g., during compaction).
+	if fromSSTable {
+		val := make([]byte, len(stored))
+		copy(val, stored)
+		return val, nil
 	}
 	return stored, nil
 }
