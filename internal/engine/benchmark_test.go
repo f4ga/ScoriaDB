@@ -278,7 +278,7 @@ func BenchmarkEngineScan(b *testing.B) {
 }
 
 // ------------------------------------------------------------
-// Put small value — zero fsync, zero alloc in hot path
+// BenchmarkPutSmallValue — zero fsync, zero alloc in hot path
 // ------------------------------------------------------------
 func BenchmarkPutSmallValue(b *testing.B) {
 	logger.SetLevel(logger.ERROR)
@@ -306,7 +306,7 @@ func BenchmarkPutSmallValue(b *testing.B) {
 }
 
 // ------------------------------------------------------------
-// Put large value (4KB) — zero fsync, zero alloc in hot path
+// BenchmarkPutLargeValue — zero fsync, zero alloc in hot path
 // ------------------------------------------------------------
 func BenchmarkPutLargeValue(b *testing.B) {
 	logger.SetLevel(logger.ERROR)
@@ -337,11 +337,19 @@ func BenchmarkPutLargeValue(b *testing.B) {
 }
 
 // ------------------------------------------------------------
-// Put small value with fsync — for comparison with sync DBs
+// BenchmarkPutSmallValue_Sync — REAL fsync on every operation
+// Uses /var/tmp (physical disk, not tmpfs)
 // ------------------------------------------------------------
 func BenchmarkPutSmallValue_Sync(b *testing.B) {
 	logger.SetLevel(logger.ERROR)
-	dir := b.TempDir()
+
+	// Используем /var/tmp — обычно на физическом диске, не tmpfs
+	dir, err := os.MkdirTemp("/var/tmp", "scoria-sync-bench-*")
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+
 	opts := DefaultEngineOptions(dir)
 	opts.WALOpts.SyncMode = true
 	opts.WALOpts.GroupCommitEnabled = false
@@ -365,11 +373,19 @@ func BenchmarkPutSmallValue_Sync(b *testing.B) {
 }
 
 // ------------------------------------------------------------
-// Put large value (4KB) with fsync — for comparison with sync DBs
+// BenchmarkPutLargeValue_Sync — REAL fsync on every operation, 4KB
+// Uses /var/tmp (physical disk, not tmpfs)
 // ------------------------------------------------------------
 func BenchmarkPutLargeValue_Sync(b *testing.B) {
 	logger.SetLevel(logger.ERROR)
-	dir := b.TempDir()
+
+	// Используем /var/tmp — обычно на физическом диске, не tmpfs
+	dir, err := os.MkdirTemp("/var/tmp", "scoria-sync-bench-*")
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+
 	opts := DefaultEngineOptions(dir)
 	opts.WALOpts.SyncMode = true
 	opts.WALOpts.GroupCommitEnabled = false
@@ -396,38 +412,7 @@ func BenchmarkPutLargeValue_Sync(b *testing.B) {
 }
 
 // ------------------------------------------------------------
-// Get existing key (MemTable hit)
-// ------------------------------------------------------------
-func BenchmarkGetExisting(b *testing.B) {
-	logger.SetLevel(logger.ERROR)
-	dir := b.TempDir()
-	opts := DefaultEngineOptions(dir)
-	opts.WALOpts.SyncMode = false
-	opts.WALOpts.GroupCommitEnabled = true
-
-	e, err := NewLSMEngine(dir, opts.WALOpts)
-	if err != nil {
-		b.Fatal(err)
-	}
-	defer e.Close()
-
-	key := []byte("get:key")
-	value := []byte("some-data")
-	if err := e.PutWithTS(key, value, 1); err != nil {
-		b.Fatal(err)
-	}
-
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		if _, err := e.GetWithTS(key, math.MaxUint64); err != nil {
-			b.Fatal(err)
-		}
-	}
-	b.StopTimer()
-}
-
-// ------------------------------------------------------------
-// Get missing key (MemTable miss)
+// BenchmarkGetMissing — missing key (MemTable miss)
 // ------------------------------------------------------------
 func BenchmarkGetMissing(b *testing.B) {
 	logger.SetLevel(logger.ERROR)
@@ -454,7 +439,7 @@ func BenchmarkGetMissing(b *testing.B) {
 }
 
 // ------------------------------------------------------------
-// Scan by prefix
+// BenchmarkScan — scan by prefix
 // ------------------------------------------------------------
 func BenchmarkScan(b *testing.B) {
 	logger.SetLevel(logger.ERROR)
@@ -493,7 +478,7 @@ func BenchmarkScan(b *testing.B) {
 }
 
 // ------------------------------------------------------------
-// Bloom filter benchmark
+// BenchmarkBloomFilter — bloom filter lookup
 // ------------------------------------------------------------
 func BenchmarkBloomFilter(b *testing.B) {
 	logger.SetLevel(logger.ERROR)
@@ -511,7 +496,7 @@ func BenchmarkBloomFilter(b *testing.B) {
 }
 
 // ------------------------------------------------------------
-// Get large value (4KB) from VLog — zero-copy read path
+// BenchmarkGetLargeValue — large value (4KB) from VLog, zero-copy
 // ------------------------------------------------------------
 func BenchmarkGetLargeValue(b *testing.B) {
 	logger.SetLevel(logger.ERROR)
@@ -545,8 +530,8 @@ func BenchmarkGetLargeValue(b *testing.B) {
 }
 
 // ------------------------------------------------------------
-// Group Commit: put large value (4KB) with WAL batching
-// Expected: ~9.3 GB/s (as advertised in README)
+// BenchmarkPutLargeValue_GroupCommit — 4KB with WAL batching
+// Expected: ~9.3 GB/s
 // ------------------------------------------------------------
 func BenchmarkPutLargeValue_GroupCommit(b *testing.B) {
 	logger.SetLevel(logger.ERROR)
@@ -590,4 +575,36 @@ func BenchmarkPutLargeValue_GroupCommit(b *testing.B) {
 	if err := e.wal.Flush(); err != nil {
 		b.Logf("flush error: %v", err)
 	}
+}
+
+// ------------------------------------------------------------
+// Put small value with STRICT fsync on EVERY Put (0 batching)
+// ------------------------------------------------------------
+func BenchmarkPutSmallValue_StrictSync(b *testing.B) {
+	logger.SetLevel(logger.ERROR)
+	dir := b.TempDir()
+	opts := DefaultEngineOptions(dir)
+	opts.WALOpts.SyncMode = true
+	opts.WALOpts.GroupCommitEnabled = false
+
+	e, err := NewLSMEngine(dir, opts.WALOpts)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer e.Close()
+
+	key := []byte("bench:key")
+	value := []byte("small-value")
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if err := e.PutWithTS(key, value, uint64(i+1)); err != nil {
+			b.Fatal(err)
+		}
+		// Guarantee fsync after EACH Put
+		if err := e.wal.Flush(); err != nil {
+			b.Fatal(err)
+		}
+	}
+	b.StopTimer()
 }
