@@ -395,8 +395,8 @@ func TestArenaNewNode(t *testing.T) {
 	}
 
 	// Check height
-	if node.height != 10 {
-		t.Errorf("expected height 10, got %d", node.height)
+	if node.height.Load() != 10 {
+		t.Errorf("expected height 10, got %d", node.height.Load())
 	}
 
 	// Check deleted flag

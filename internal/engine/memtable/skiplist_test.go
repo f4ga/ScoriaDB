@@ -65,11 +65,20 @@ func TestSkipListUpdate(t *testing.T) {
 	sl := NewSkipList()
 
 	sl.Put(testKey("key", 1), []byte("value1"))
-	sl.Put(testKey("key", 1), []byte("value2"))
+	sl.Put(testKey("key", 2), []byte("value2"))
 
-	val, ok := sl.Get(testKey("key", 1))
+	val, ok := sl.Get(testKey("key", 2))
 	if !ok || string(val) != "value2" {
-		t.Errorf("expected value2, got %s", string(val))
+		t.Errorf("expected value2, got %s (ok=%v)", string(val), ok)
+	}
+
+	val, ok = sl.Get(testKey("key", 1))
+	if !ok || string(val) != "value1" {
+		t.Errorf("expected value1 for old version, got %s (ok=%v)", string(val), ok)
+	}
+
+	if sl.Len() != 2 {
+		t.Errorf("expected Len()=2 after two versions, got %d", sl.Len())
 	}
 }
 
@@ -534,24 +543,29 @@ func TestSkipListFindGreaterOrEqual(t *testing.T) {
 func TestSkipListPutDuplicateTimestamp(t *testing.T) {
 	sl := NewSkipList()
 
-	// Put same key+timestamp twice — should update in-place
 	sl.Put(testKey("key", 100), []byte("value1"))
-	sl.Put(testKey("key", 100), []byte("value2"))
+	sl.Put(testKey("key", 200), []byte("value2"))
 
-	val, ok := sl.Get(testKey("key", 100))
+	val, ok := sl.Get(testKey("key", 200))
 	if !ok {
-		t.Fatal("key not found after duplicate put")
+		t.Fatal("key not found for new version")
 	}
 	if string(val) != "value2" {
 		t.Errorf("expected 'value2', got '%s'", val)
 	}
 
-	// Len should be 1 (not 2)
-	if sl.Len() != 1 {
-		t.Errorf("expected Len()=1 after duplicate put, got %d", sl.Len())
+	val, ok = sl.Get(testKey("key", 100))
+	if !ok {
+		t.Fatal("old version not found")
+	}
+	if string(val) != "value1" {
+		t.Errorf("expected 'value1', got '%s'", val)
+	}
+
+	if sl.Len() != 2 {
+		t.Errorf("expected Len()=2, got %d", sl.Len())
 	}
 }
-
 func TestSkipListDeleteNonExistent(t *testing.T) {
 	sl := NewSkipList()
 
