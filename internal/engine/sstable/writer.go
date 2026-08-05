@@ -250,10 +250,12 @@ func (w *Writer) writeFooter(
 		if _, err := w.writer.Write(minKey); err != nil {
 			return err
 		}
+		offset += 4 + uint64(len(minKey))
 	} else {
 		if err := binary.Write(w.writer, binary.LittleEndian, uint32(0)); err != nil {
 			return err
 		}
+		offset += 4
 	}
 
 	// Write max key
@@ -265,10 +267,12 @@ func (w *Writer) writeFooter(
 		if _, err := w.writer.Write(maxKey); err != nil {
 			return err
 		}
+		offset += 4 + uint64(len(maxKey))
 	} else {
 		if err := binary.Write(w.writer, binary.LittleEndian, uint32(0)); err != nil {
 			return err
 		}
+		offset += 4
 	}
 
 	// Write footer
