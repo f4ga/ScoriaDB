@@ -267,11 +267,13 @@ func (w *Writer) writeFooter(
 		if _, err := w.writer.Write(maxKey); err != nil {
 			return err
 		}
+		//nolint:ineffassign // offset is tracked for future footer extensions
 		offset += 4 + uint64(len(maxKey))
 	} else {
 		if err := binary.Write(w.writer, binary.LittleEndian, uint32(0)); err != nil {
 			return err
 		}
+		//nolint:ineffassign // offset is tracked for future footer extensions
 		offset += 4
 	}
 
