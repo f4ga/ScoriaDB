@@ -97,6 +97,41 @@ func NewMergeIterator(e *LSMEngine, prefix []byte) *mergeIterator {
 	return mi
 }
 
+// NewMergeIteratorWithSnapshot creates a merge iterator from pre-snapshotted sources.
+// This allows releasing the engine lock before iterating, preventing writer starvation.
+// The caller must snapshot memTable, frozenMemTable, and levels under the engine lock,
+// then pass them here. The snapshotted sources are safe to use because:
+//   - MemTable arena is grow-only (nodes never freed until Reset)
+//   - SSTable readers are ref-counted and not closed while in use
+//   - levels slice is copied, so compaction can modify the original
+//
+// See: SYMPTOM-04
+func NewMergeIteratorWithSnapshot(e *LSMEngine, prefix []byte, mt, frozen *memtable.MemTable, levels [][]*sstable.Reader) *mergeIterator {
+	sources := 2
+	for _, level := range levels {
+		sources += len(level)
+	}
+	mi := &mergeIterator{
+		heap:   make(iterHeap, 0, sources),
+		engine: e,
+	}
+
+	if mt != nil {
+		mi.addSource(newMemtableIter(mt, prefix))
+	}
+	if frozen != nil {
+		mi.addSource(newMemtableIter(frozen, prefix))
+	}
+	for _, level := range levels {
+		for _, sst := range level {
+			mi.addSource(newSSTableIter(sst, prefix))
+		}
+	}
+
+	heap.Init(&mi.heap)
+	return mi
+}
+
 func (mi *mergeIterator) addSource(iter Iterator) {
 	if iter == nil {
 		return
@@ -395,10 +430,23 @@ func (it *emptyIterator) IsDeleted() bool { return false }
 // Scan returns an iterator over keys with the given prefix.
 // Allocations: O(number_of_sources), not O(number_of_entries).
 func (e *LSMEngine) Scan(prefix []byte) Iterator {
+	// CRITICAL: Copy MemTable pointers under RLock, then release lock.
+	// The merge iterator captures sources by pointer — MemTable and frozenMemTable
+	// are safe because arena is grow-only (nodes are never freed).
+	// levels slice is also copied under lock to prevent race with compaction.
+	// See: SYMPTOM-04
 	e.mu.RLock()
-	defer e.mu.RUnlock()
+	mt := e.memTable
+	frozen := e.frozenMemTable
+	levels := make([][]*sstable.Reader, len(e.levels))
+	for i, level := range e.levels {
+		levelCopy := make([]*sstable.Reader, len(level))
+		copy(levelCopy, level)
+		levels[i] = levelCopy
+	}
+	e.mu.RUnlock()
 
-	mi := NewMergeIterator(e, prefix)
+	mi := NewMergeIteratorWithSnapshot(e, prefix, mt, frozen, levels)
 	if len(mi.heap) == 0 && mi.err == nil {
 		return &emptyIterator{}
 	}

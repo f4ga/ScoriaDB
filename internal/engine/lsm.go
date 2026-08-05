@@ -189,9 +189,10 @@ func (e *LSMEngine) flushWorker() {
 		case <-e.stopCh:
 			return
 		case <-e.flushTicker.C:
-			e.mu.RLock()
-			size := e.memSize
-			e.mu.RUnlock()
+			// CRITICAL: Use atomic.LoadInt64 — e.memSize is written via atomic.AddInt64
+			// in PutWithTS/DeleteWithTS. Plain read is a data race.
+			// See: SYMPTOM-02
+			size := atomic.LoadInt64(&e.memSize)
 
 			if size > MaxMemTableSize {
 				select {
@@ -312,8 +313,15 @@ func (e *LSMEngine) PutWithTS(key, value []byte, commitTS uint64) error {
 		putWalEntry(walEntry)
 	}
 
-	// Insert into MemTable — SkipList has its own internal mutex
+	// CRITICAL: Protect memTable access with RLock to prevent race with flushMemTable.
+	// flushMemTable holds Lock (exclusive) while swapping e.memTable.
+	// RLock ensures we see a stable pointer — either the old MemTable (before swap)
+	// or the new one (after swap), never a half-swapped state.
+	// WAL write is done BEFORE the lock to avoid I/O under RLock.
+	// See: SYMPTOM-01, SYMPTOM-03
+	e.mu.RLock()
 	e.memTable.Put(mvccKey, storedValue)
+	e.mu.RUnlock()
 	atomic.AddInt64(&e.memSize, int64(len(key)+len(value)))
 	e.updateLastCommitCache(key, commitTS)
 
@@ -366,14 +374,30 @@ func (e *LSMEngine) GetWithTS(key []byte, snapshotTS uint64) ([]byte, error) {
 	if e.closed.Load() {
 		return nil, fmt.Errorf("engine closed")
 	}
+
+	// CRITICAL: Copy MemTable pointer under RLock, then release lock before SSTable scan.
+	// Holding RLock during SSTable scan starves flushMemTable (needs Lock).
+	// This also prevents the transaction hang (SYMPTOM-04) where 16 goroutines
+	// hold RLock while iterating many SSTables.
+	// See: SYMPTOM-04
+	mvccKey := mvcc.NewMVCCKey(key, snapshotTS)
+
+	e.mu.RLock()
+	mt := e.memTable
+	e.mu.RUnlock()
+
+	if mt != nil {
+		val, found := mt.Get(mvccKey)
+		if found {
+			decoded, err := e.decodeStoredValue(val, false)
+			return decoded, err
+		}
+	}
+
+	// Scan SSTables under RLock — this is fast (index lookup, not full scan).
+	// If this becomes a bottleneck, we can snapshot the levels slice too.
 	e.mu.RLock()
 	defer e.mu.RUnlock()
-	mvccKey := mvcc.NewMVCCKey(key, snapshotTS)
-	val, found := e.memTable.Get(mvccKey)
-	if found {
-		decoded, err := e.decodeStoredValue(val, false)
-		return decoded, err
-	}
 	for _, level := range e.levels {
 		for _, sst := range level {
 			if val, found := sst.Lookup(mvccKey); found {
@@ -402,22 +426,30 @@ func (e *LSMEngine) GetLatestInfo(key []byte) ([]byte, uint64, bool, error) {
 	if e.closed.Load() {
 		return nil, 0, false, fmt.Errorf("engine closed")
 	}
-	e.mu.RLock()
-	defer e.mu.RUnlock()
 
-	val, ts, found := e.memTable.GetLatest(key)
-	if ts > 0 {
-		// Key found in memtable (either live or deleted).
-		// If found=true, it's a live value. If found=false, it's a tombstone.
-		if found {
-			decoded, err := e.decodeStoredValue(val, false)
-			return decoded, ts, true, err
+	// CRITICAL: Copy MemTable pointers under RLock, then release lock.
+	// Holding RLock during SSTable scan starves flushMemTable.
+	// See: SYMPTOM-04
+	e.mu.RLock()
+	mt := e.memTable
+	frozen := e.frozenMemTable
+	e.mu.RUnlock()
+
+	if mt != nil {
+		val, ts, found := mt.GetLatest(key)
+		if ts > 0 {
+			// Key found in memtable (either live or deleted).
+			// If found=true, it's a live value. If found=false, it's a tombstone.
+			if found {
+				decoded, err := e.decodeStoredValue(val, false)
+				return decoded, ts, true, err
+			}
+			// Tombstone — key is deleted, return nil with the tombstone TS.
+			return nil, ts, false, nil
 		}
-		// Tombstone — key is deleted, return nil with the tombstone TS.
-		return nil, ts, false, nil
 	}
-	if e.frozenMemTable != nil {
-		val, ts, found = e.frozenMemTable.GetLatest(key)
+	if frozen != nil {
+		val, ts, found := frozen.GetLatest(key)
 		if ts > 0 {
 			if found {
 				decoded, err := e.decodeStoredValue(val, false)
@@ -428,6 +460,8 @@ func (e *LSMEngine) GetLatestInfo(key []byte) ([]byte, uint64, bool, error) {
 	}
 
 	// Search SSTables (already O(log N) via block index)
+	e.mu.RLock()
+	defer e.mu.RUnlock()
 	for _, level := range e.levels {
 		for _, sst := range level {
 			iter, err := sst.NewIterator()
@@ -501,7 +535,11 @@ func (e *LSMEngine) DeleteWithTS(key []byte, commitTS uint64) error {
 	}
 	putWalEntry(walEntry)
 	mvccKey := mvcc.NewMVCCKey(key, commitTS)
+	// CRITICAL: Protect memTable access with RLock to prevent race with flushMemTable.
+	// See: SYMPTOM-01, SYMPTOM-03
+	e.mu.RLock()
 	e.memTable.DeleteWithTS(mvccKey)
+	e.mu.RUnlock()
 	atomic.AddInt64(&e.memSize, -int64(len(key)))
 	e.updateLastCommitCache(key, commitTS)
 	return nil

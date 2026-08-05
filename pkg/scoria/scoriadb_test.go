@@ -772,6 +772,7 @@ func TestScoriaDB_LargeValue(t *testing.T) {
 // TestScoriaDB_EmptyValue tests that empty values ([]byte{}) are handled correctly.
 // CRITICAL: Empty values are valid and must be distinguishable from nil (tombstone).
 // This test ensures MVCC semantics for empty values.
+
 func TestScoriaDB_EmptyValue(t *testing.T) {
 	db, err := NewScoriaDB(t.TempDir())
 	if err != nil {

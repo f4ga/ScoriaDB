@@ -40,18 +40,28 @@ func (e *LSMEngine) flushMemTable() error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
+	// CRITICAL: Create new MemTable BEFORE iterating the old one.
+	// This ensures that any concurrent PutWithTS/DeleteWithTS that acquires
+	// RLock after this point writes to the new MemTable, not the old one.
+	// The old MemTable is captured for iteration before the swap.
+	// See: SYMPTOM-03
+	oldMemTable := e.memTable
+	newMemTable := memtable.NewMemTable()
+	e.memTable = newMemTable
+	atomic.StoreInt64(&e.memSize, 0)
+
 	// Get next file number from manifest
 	fileNum := e.manifest.NextFileNum()
 	sstPath := filepath.Join(e.dataDir, fmt.Sprintf("%06d.sst", fileNum))
 
 	// Create writer (currently using old API that works with os)
-	writer, err := sstable.NewWriter(sstPath, e.memTable.Size())
+	writer, err := sstable.NewWriter(sstPath, oldMemTable.Size())
 	if err != nil {
 		return fmt.Errorf("failed to create SSTable writer: %w", err)
 	}
 
 	// Iterate over all MemTable entries
-	iter := e.memTable.NewIterator()
+	iter := oldMemTable.NewIterator()
 	var minKey, maxKey []byte
 	var first = true
 	for iter.Next() {
@@ -133,12 +143,6 @@ func (e *LSMEngine) flushMemTable() error {
 
 	// Add reader to level 0
 	e.levels[0] = append(e.levels[0], reader)
-
-	// CRITICAL: Create new MemTable after successful flush.
-	// This resets the active MemTable for new writes.
-	// See: BLD-06, ARCH-03
-	e.memTable = memtable.NewMemTable()
-	atomic.StoreInt64(&e.memSize, 0)
 
 	return nil
 }
