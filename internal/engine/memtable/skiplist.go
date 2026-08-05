@@ -23,7 +23,7 @@
 //
 // Design principles:
 //   - Zero allocs/op in Put and Get (no mallocgc in hot path)
-//   - Lock-free writes: CAS on next pointers, no sync.Mutex
+//   - Mutex-protected writes, lock-free reads
 //   - Memory locality: nodes are dense in arena blocks
 //   - Manual memory management: arena grows, never frees until Reset
 // ============================================================
@@ -465,6 +465,7 @@ func (s *SkipList) Put(key mvcc.MVCCKey, value []byte) bool {
 		s.mu.Unlock()
 		return false
 	}
+
 	// Update height BEFORE inserting the node
 	for height > int(atomic.LoadInt32(&s.height)) {
 		atomic.StoreInt32(&s.height, int32(height))
@@ -540,47 +541,6 @@ func (s *SkipList) Height() int {
 // Arena returns the arena backing this skip list.
 func (s *SkipList) Arena() *Arena {
 	return s.arena
-}
-
-// getHeight returns the node height atomically.
-// Used in lock-free Delete.
-func (n *Node) getHeight() int {
-	return int(n.height.Load())
-}
-
-// findGreaterOrEqualFull returns predecessors and successors for all levels.
-// Used for CAS insertion. Lock-free traversal (read-only).
-func (s *SkipList) findGreaterOrEqualFull(key mvcc.MVCCKey) (preds, succs [MaxHeight]*Node) {
-	x := s.head
-	level := int(atomic.LoadInt32(&s.height)) - 1
-
-	for level >= 0 {
-		next := x.next[level].Load()
-		for next != nil && nodeKeyLess(next.Key(), key) {
-			x = next
-			next = x.next[level].Load()
-		}
-		preds[level] = x
-		succs[level] = next
-		level--
-	}
-	return preds, succs
-}
-
-// findPredecessor returns the predecessor at the given level.
-// Used for CAS deletion. Lock-free traversal (read-only).
-func (s *SkipList) findPredecessor(key mvcc.MVCCKey, level int) *Node {
-	x := s.head
-	top := int(atomic.LoadInt32(&s.height)) - 1
-
-	for l := top; l >= level; l-- {
-		next := x.next[l].Load()
-		for next != nil && nodeKeyLess(next.Key(), key) {
-			x = next
-			next = x.next[l].Load()
-		}
-	}
-	return x
 }
 
 // ============================================================
