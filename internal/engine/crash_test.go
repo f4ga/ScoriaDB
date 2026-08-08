@@ -166,8 +166,10 @@ func TestCorruptedWAL(t *testing.T) {
 		t.Fatalf("close failed: %v", err)
 	}
 
-	// Step 2: corrupt the last 10 bytes of the WAL file.
-	walPath := filepath.Join(dir, "wal.log")
+	// Step 2: corrupt the last 10 bytes of the shard-0 WAL file.
+	// Each shard owns its own WAL (wal_<id>.log); shard 0 always exists even
+	// when DefaultShardCount() > 1. See: HOT-01, REC-01
+	walPath := filepath.Join(dir, "wal_0.log")
 	corruptFileTail(t, walPath, 10)
 
 	// Step 3: reopen the engine – it should recover gracefully.
@@ -390,8 +392,10 @@ func TestCorruptedWAL_Truncated(t *testing.T) {
 		t.Fatalf("close failed: %v", err)
 	}
 
-	// Truncate the WAL file to half its size.
-	walPath := filepath.Join(dir, "wal.log")
+	// Truncate the shard-0 WAL file to half its size.
+	// Each shard owns its own WAL (wal_<id>.log); shard 0 always exists even
+	// when DefaultShardCount() > 1. See: HOT-01, REC-01
+	walPath := filepath.Join(dir, "wal_0.log")
 	truncateFile(t, walPath, 0.5)
 
 	eng2, err := NewLSMEngine(dir)

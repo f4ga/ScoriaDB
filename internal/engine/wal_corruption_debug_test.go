@@ -54,12 +54,14 @@ func TestWAL_Corruption_Debug(t *testing.T) {
 		t.Fatalf("engine.Close() failed: %v", err)
 	}
 
-	// Step 4: Truncate the last 32 bytes from the WAL to simulate a partial write
-	// (as would happen on process kill during group commit flush).
-	walPath := filepath.Join(dir, "wal.log")
+	// Step 4: Truncate the last 32 bytes from the shard-0 WAL to simulate a
+	// partial write (as would happen on process kill during group commit flush).
+	// Each shard owns its own WAL (wal_<id>.log); shard 0 always exists even
+	// when DefaultShardCount() > 1. See: HOT-01, REC-01
+	walPath := filepath.Join(dir, "wal_0.log")
 	stat, err := os.Stat(walPath)
 	if err != nil {
-		t.Fatalf("failed to stat wal.log: %v", err)
+		t.Fatalf("failed to stat wal_0.log: %v", err)
 	}
 	origSize := stat.Size()
 	truncateSize := origSize - 32
@@ -67,9 +69,9 @@ func TestWAL_Corruption_Debug(t *testing.T) {
 		truncateSize = 0
 	}
 	if err := os.Truncate(walPath, truncateSize); err != nil {
-		t.Fatalf("failed to truncate wal.log: %v", err)
+		t.Fatalf("failed to truncate wal_0.log: %v", err)
 	}
-	t.Logf("[SETUP] Truncated WAL from %d bytes to %d bytes to simulate partial write", origSize, truncateSize)
+	t.Logf("[SETUP] Truncated wal_0.log from %d bytes to %d bytes to simulate partial write", origSize, truncateSize)
 
 	// Step 5: Try to re-open the engine
 	engine2, err := NewLSMEngine(dir, opts)
