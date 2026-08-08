@@ -37,9 +37,8 @@ func TestEpochManagerNew(t *testing.T) {
 func TestEpochManagerEnterExitEpoch(t *testing.T) {
 	em := NewEpochManager(1000)
 
-	epoch := em.EnterEpoch()
+	em.EnterEpoch()
 	// EnterEpoch returns the current global epoch value
-	_ = epoch
 
 	// ExitEpoch should not panic
 	em.ExitEpoch()

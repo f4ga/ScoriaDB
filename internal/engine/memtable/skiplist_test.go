@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/f4ga/ScoriaDB/internal/mvcc"
 )
@@ -104,9 +105,11 @@ func TestSkipListMultipleVersions(t *testing.T) {
 		t.Errorf("expected v3, got %s", string(val))
 	}
 
-	_, ok = sl.Get(testKey("key", 999))
-	if ok {
-		t.Errorf("expected false for non-existent timestamp")
+	// Snapshot beyond the newest version returns the latest visible version.
+	// See: ARCH-07 (Get walks the chain to the last CommitTS <= snapshot).
+	val, ok = sl.Get(testKey("key", 999))
+	if !ok || string(val) != "v3" {
+		t.Errorf("expected v3 for snapshot beyond newest, got %s (ok=%v)", string(val), ok)
 	}
 }
 
@@ -382,22 +385,19 @@ func BenchmarkSkipListGetSequential(b *testing.B) {
 func TestSkipListFindLast(t *testing.T) {
 	sl := NewSkipList()
 
-	// Empty list — findLast should return head
-	last := sl.findLast()
-	if last == nil {
-		t.Fatal("findLast on empty list returned nil")
-	}
-	if last != sl.head {
-		t.Error("findLast on empty list should return head")
+	// Empty list — FindLast should return 0 (index)
+	last := sl.FindLast()
+	if last != 0 {
+		t.Error("FindLast on empty list should return 0")
 	}
 
 	// Single node
 	sl.Put(testKey("a", 100), []byte("val_a"))
-	last = sl.findLast()
-	if last == nil {
-		t.Fatal("findLast returned nil after insert")
+	last = sl.FindLast()
+	if last == 0 {
+		t.Fatal("FindLast returned 0 after insert")
 	}
-	lastKey := last.Key()
+	lastKey := sl.NodeAt(last).Key()
 	if string(lastKey.Key) != "a" {
 		t.Errorf("expected last key 'a', got '%s'", lastKey.Key)
 	}
@@ -405,11 +405,11 @@ func TestSkipListFindLast(t *testing.T) {
 	// Multiple nodes
 	sl.Put(testKey("b", 100), []byte("val_b"))
 	sl.Put(testKey("c", 100), []byte("val_c"))
-	last = sl.findLast()
-	if last == nil {
-		t.Fatal("findLast returned nil after multiple inserts")
+	last = sl.FindLast()
+	if last == 0 {
+		t.Fatal("FindLast returned 0 after multiple inserts")
 	}
-	lastKey = last.Key()
+	lastKey = sl.NodeAt(last).Key()
 	if string(lastKey.Key) != "c" {
 		t.Errorf("expected last key 'c', got '%s'", lastKey.Key)
 	}
@@ -425,12 +425,12 @@ func TestSkipListFindLastAfterDelete(t *testing.T) {
 	// Delete the last key
 	sl.Delete(testKey("c", 100))
 
-	// findLast should return the previous max key
-	last := sl.findLast()
-	if last == nil {
-		t.Fatal("findLast returned nil after delete")
+	// FindLast should return the previous max key
+	last := sl.FindLast()
+	if last == 0 {
+		t.Fatal("FindLast returned 0 after delete")
 	}
-	lastKey := last.Key()
+	lastKey := sl.NodeAt(last).Key()
 	if string(lastKey.Key) != "b" {
 		t.Errorf("expected last key 'b' after delete, got '%s'", lastKey.Key)
 	}
@@ -449,22 +449,22 @@ func TestSkipListFindLastAfterDeleteWithVersions(t *testing.T) {
 	sl.Delete(testKey("b", 200))
 
 	// The old version of 'b' (timestamp 100) should still exist
-	last := sl.findLast()
-	if last == nil {
-		t.Fatal("findLast returned nil")
+	last := sl.FindLast()
+	if last == 0 {
+		t.Fatal("FindLast returned 0")
 	}
-	lastKey := last.Key()
+	lastKey := sl.NodeAt(last).Key()
 	if string(lastKey.Key) != "c" {
 		t.Errorf("expected last key 'c', got '%s'", lastKey.Key)
 	}
 
 	// Delete 'c' entirely
 	sl.Delete(testKey("c", 100))
-	last = sl.findLast()
-	if last == nil {
-		t.Fatal("findLast returned nil")
+	last = sl.FindLast()
+	if last == 0 {
+		t.Fatal("FindLast returned 0")
 	}
-	lastKey = last.Key()
+	lastKey = sl.NodeAt(last).Key()
 	if string(lastKey.Key) != "b" {
 		t.Errorf("expected last key 'b', got '%s'", lastKey.Key)
 	}
@@ -515,28 +515,28 @@ func TestSkipListFindGreaterOrEqual(t *testing.T) {
 
 	// Find existing key
 	node := sl.findGreaterOrEqual(testKey("b", 100))
-	if node == nil {
-		t.Fatal("findGreaterOrEqual returned nil for existing key")
+	if node == 0 {
+		t.Fatal("findGreaterOrEqual returned 0 for existing key")
 	}
-	nodeKey := node.Key()
+	nodeKey := sl.NodeAt(node).Key()
 	if string(nodeKey.Key) != "b" {
 		t.Errorf("expected key 'b', got '%s'", nodeKey.Key)
 	}
 
 	// Find non-existent key (should return next greater)
 	node = sl.findGreaterOrEqual(testKey("bb", 100))
-	if node == nil {
-		t.Fatal("findGreaterOrEqual returned nil for non-existent key")
+	if node == 0 {
+		t.Fatal("findGreaterOrEqual returned 0 for non-existent key")
 	}
-	nodeKey = node.Key()
+	nodeKey = sl.NodeAt(node).Key()
 	if string(nodeKey.Key) != "c" {
 		t.Errorf("expected key 'c' (next greater), got '%s'", nodeKey.Key)
 	}
 
 	// Find key greater than all existing
 	node = sl.findGreaterOrEqual(testKey("z", 100))
-	if node != nil {
-		t.Errorf("expected nil for key beyond max, got key '%s'", string(node.Key().Key))
+	if node != 0 {
+		t.Errorf("expected 0 for key beyond max, got key '%s'", string(sl.NodeAt(node).Key().Key))
 	}
 }
 
@@ -706,4 +706,65 @@ func TestSkipListConcurrentDelete(t *testing.T) {
 	if sl.Len() != 0 {
 		t.Errorf("expected Len()=0 after all deletes, got %d", sl.Len())
 	}
+}
+
+// TestEpochResetSafety verifies that Reset() (used by Close) does not cause a
+// use-after-free when readers are concurrently traversing the skip list.
+//
+// EBR SAFETY (DEF-02, Глава IV.3, Глава IX):
+// Readers enter an epoch via EnterEpoch/ExitEpoch. Reset() must quiesce (wait
+// for active readers == 0) before zeroing the arena. This test would previously
+// SIGSEGV or trigger a -race detection because Reset() zeroed the arena while
+// readers held pointers into it.
+func TestEpochResetSafety(t *testing.T) {
+	sl := NewSkipList()
+
+	// Insert 1000 keys so the list is non-empty. Pre-build key slices once and
+	// reuse them in the readers — no fmt.Sprintf in the hot loop (allocs).
+	const numKeys = 1000
+	keys := make([][]byte, numKeys)
+	for i := 0; i < numKeys; i++ {
+		keys[i] = []byte(fmt.Sprintf("key:%d", i))
+	}
+	for i := 0; i < numKeys; i++ {
+		sl.Put(mvcc.NewMVCCKey(keys[i], 1), []byte("value"))
+	}
+
+	start := time.Now()
+	defer func() {
+		if elapsed := time.Since(start); elapsed > 900*time.Millisecond {
+			t.Errorf("TestEpochResetSafety took %v, expected < 900ms", elapsed)
+		}
+	}()
+
+	var wg sync.WaitGroup
+	done := make(chan struct{})
+
+	// Launch 10 reader goroutines continuously calling Get on random keys.
+	const numReaders = 10
+	for r := 0; r < numReaders; r++ {
+		wg.Add(1)
+		go func(seed int) {
+			defer wg.Done()
+			counter := uint32(seed)
+			for {
+				select {
+				case <-done:
+					return
+				default:
+				}
+				counter += 7919
+				idx := int(counter % numKeys)
+				// Get on a random key; must not panic even if the arena is being reset.
+				sl.Get(mvcc.NewMVCCKey(keys[idx], 1))
+			}
+		}(r)
+	}
+
+	// Wait 10ms for readers to start, then reset from the main goroutine.
+	time.Sleep(10 * time.Millisecond)
+	sl.Reset()
+
+	close(done)
+	wg.Wait()
 }

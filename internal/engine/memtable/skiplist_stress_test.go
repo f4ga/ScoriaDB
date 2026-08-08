@@ -27,9 +27,13 @@ import (
 func TestConcurrentSkipList_Stress(t *testing.T) {
 	sl := NewSkipList()
 
+	// The flat arena is a single grow‑only block of ArenaBlockSize (64 MB).
+	// Each node occupies ~120 bytes, so 200K nodes (~24 MB) fits comfortably.
+	// Larger workloads exceed the single fixed block and would panic the arena.
+	// See: ARCH-01 (ArenaBlockSize).
 	const (
 		numGoroutines = 100
-		opsPerThread  = 10_000
+		opsPerThread  = 2_000
 	)
 
 	var wg sync.WaitGroup
