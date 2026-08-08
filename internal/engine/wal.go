@@ -203,18 +203,41 @@ func (w *WAL) Close() error {
 // Encoding — zero allocation in hot path
 // ============================================================
 
+// WAL record format (v0.4+):
+//
+//	[0:1]    Op (1 byte)
+//	[1:2]    Flags (1 byte) — bit 0 = IsLarge
+//	[2:10]   Timestamp (8 bytes)
+//	[10:12]  KeyLen (2 bytes)
+//	[12:16]  ValueLen (4 bytes)
+//	[16:16+KL] Key (variable)
+//	[16+KL:16+KL+VL] Value (variable)
+//	[end-4:end] CRC32 (4 bytes)
+//
+// The IsLarge flag disambiguates a user value of exactly ValuePointerSize (12)
+// bytes from a real ValuePointer. See DEF-02 / DEF-04.
+const walFlagIsLarge byte = 0x01
+
 // encodeWalEntryTo writes entry directly into dst buffer.
 // Returns number of bytes written. Zero allocations.
 func encodeWalEntryTo(entry *WalEntry, dst []byte) (int, error) {
 	keyLen := len(entry.Key)
 	valLen := len(entry.Value)
-	totalSize := 1 + 8 + 2 + 4 + keyLen + valLen + 4 // + CRC
+	// Header grew from 15 to 16 bytes (1 op + 1 flags + 8 ts + 2 klen + 4 vlen).
+	totalSize := 1 + 1 + 8 + 2 + 4 + keyLen + valLen + 4 // + CRC
 	if totalSize > len(dst) {
 		return 0, fmt.Errorf("encodeWalEntryTo: dst too small: need %d, have %d", totalSize, len(dst))
 	}
 
 	pos := 0
 	dst[pos] = byte(entry.Op)
+	pos++
+
+	var flags byte
+	if entry.IsLarge {
+		flags |= walFlagIsLarge
+	}
+	dst[pos] = flags
 	pos++
 
 	binary.BigEndian.PutUint64(dst[pos:pos+8], entry.Timestamp)
@@ -243,15 +266,16 @@ func encodeWalEntryTo(entry *WalEntry, dst []byte) (int, error) {
 // NOTE: This allocates key/value slices during recovery only,
 // not in hot path.
 func decodeWalEntry(r io.Reader) (*WalEntry, error) {
-	header := make([]byte, 1+8+2+4)
+	header := make([]byte, 1+1+8+2+4)
 	if _, err := io.ReadFull(r, header); err != nil {
 		return nil, err
 	}
 
 	op := OpType(header[0])
-	timestamp := binary.BigEndian.Uint64(header[1:9])
-	keyLen := binary.BigEndian.Uint16(header[9:11])
-	valLen := binary.BigEndian.Uint32(header[11:15])
+	flags := header[1]
+	timestamp := binary.BigEndian.Uint64(header[2:10])
+	keyLen := binary.BigEndian.Uint16(header[10:12])
+	valLen := binary.BigEndian.Uint32(header[12:16])
 
 	key := make([]byte, keyLen)
 	if _, err := io.ReadFull(r, key); err != nil {
@@ -268,10 +292,10 @@ func decodeWalEntry(r io.Reader) (*WalEntry, error) {
 	}
 	crcStored := binary.BigEndian.Uint32(crcBuf)
 
-	data := make([]byte, 1+8+2+4+int(keyLen)+int(valLen))
+	data := make([]byte, 1+1+8+2+4+int(keyLen)+int(valLen))
 	copy(data[0:], header)
-	copy(data[1+8+2+4:], key)
-	copy(data[1+8+2+4+int(keyLen):], value)
+	copy(data[1+1+8+2+4:], key)
+	copy(data[1+1+8+2+4+int(keyLen):], value)
 
 	if crc := crc32.ChecksumIEEE(data); crc != crcStored {
 		return nil, fmt.Errorf("crc mismatch: stored=%x, computed=%x", crcStored, crc)
@@ -283,15 +307,10 @@ func decodeWalEntry(r io.Reader) (*WalEntry, error) {
 	entry.Value = value
 	entry.Timestamp = timestamp
 
-	// Detect large values: if len(value) == ValuePointerSize, it might be a ValuePointer.
-	// The caller (LSMEngine) will know for sure from IsLarge flag.
-	// We store the flag in the entry during Write.
-	// For recovery, we need to detect it.
-	// We'll add a marker: if len(value) == ValuePointerSize and it's a Put operation,
-	// it's likely a ValuePointer. The caller will decode it.
-	if op == OpPut && len(value) == ValuePointerSize {
-		entry.IsLarge = true
-	}
+	// Use the on-disk IsLarge flag (bit 0) to disambiguate a real ValuePointer
+	// from a user value of exactly ValuePointerSize bytes. This flag is always
+	// written correctly for new data. See DEF-02 / DEF-04.
+	entry.IsLarge = flags&walFlagIsLarge != 0
 
 	return entry, nil
 }

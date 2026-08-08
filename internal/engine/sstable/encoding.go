@@ -53,3 +53,19 @@ func decodeMVCCKey(data []byte) (mvcc.MVCCKey, error) {
 
 // ErrCorrupted is returned when SSTable data is corrupted.
 var ErrCorrupted = errors.New("corrupted SSTable data")
+
+// Type tags for stored values, mirroring the engine-level tags. The sstable
+// package cannot import the engine package (import cycle), so the byte values
+// are duplicated here and must stay in sync with engine.TypeInline /
+// TypeValuePointer / TypeTombstone. See DEF-02 / DEF-04.
+const (
+	tagInline    = 0x00
+	tagValuePtr  = 0x01
+	tagTombstone = 0x02
+)
+
+// isValidValueTag reports whether b is a well-known value tag. A value whose
+// first byte is not a valid tag is treated as the legacy (untagged) format.
+func isValidValueTag(b byte) bool {
+	return b == tagInline || b == tagValuePtr || b == tagTombstone
+}

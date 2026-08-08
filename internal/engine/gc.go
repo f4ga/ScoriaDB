@@ -31,10 +31,17 @@ func (e *LSMEngine) CollectLiveValuePointers() (map[ValuePointer]struct{}, error
 	defer e.mu.RUnlock()
 	livePointers := make(map[ValuePointer]struct{})
 	processValue := func(value []byte) {
-		if len(value) == ValuePointerSize {
-			if vp, ok := DecodeValuePointer(value); ok {
-				livePointers[vp] = struct{}{}
-			}
+		// Respect the type tag (new format); fall back to length heuristic for
+		// legacy data without a tag. See DEF-02 / DEF-04.
+		if !IsStoredValuePointer(value) {
+			return
+		}
+		payload := value
+		if IsValidValueTag(value[0]) {
+			payload = value[1:]
+		}
+		if vp, ok := DecodeValuePointer(payload); ok {
+			livePointers[vp] = struct{}{}
 		}
 	}
 	// Collect live pointers from every shard's active and frozen MemTable.
@@ -84,7 +91,10 @@ func (e *LSMEngine) InvalidateVLogPointers() {
 		var toDelete []mvcc.MVCCKey
 		for iter.Next() {
 			val := iter.Value()
-			if len(val) == 12 {
+			// Only invalidate genuine ValuePointers (via tag, or legacy length
+			// heuristic). A user value of exactly 12 bytes is NOT invalidated.
+			// See DEF-02 / DEF-04.
+			if IsStoredValuePointer(val) {
 				toDelete = append(toDelete, iter.Key())
 			}
 		}

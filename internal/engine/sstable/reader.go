@@ -604,8 +604,19 @@ func (r *Reader) Lookup(key mvcc.MVCCKey) ([]byte, bool) {
 		if cmp == 0 {
 			// Check version visibility
 			if mvccKey.Timestamp >= key.Timestamp {
+				// A tombstone is either an empty value (legacy) or a single
+				// TypeTombstone tag byte (v0.4+). See DEF-02 / DEF-04.
 				if len(entryVal) == 0 {
 					return nil, false // tombstone
+				}
+				if len(entryVal) == 1 && entryVal[0] == tagTombstone {
+					return nil, false // tombstone (tagged)
+				}
+				// Strip the leading type tag (v0.4+). Legacy values have no tag
+				// and are returned as-is. The tag is not part of the user value.
+				// Zero-allocation: returned slice points into the mmap region.
+				if isValidValueTag(entryVal[0]) {
+					entryVal = entryVal[1:]
 				}
 				// Zero-allocation return: entryVal is a slice of the mmap region.
 				// The value is valid only until the Reader is closed.

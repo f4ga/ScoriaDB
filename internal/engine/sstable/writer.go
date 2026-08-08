@@ -306,14 +306,30 @@ func (w *Writer) writeFooter(
 }
 
 // encodeEntry encodes a key-value pair into bytes.
+// The value is stored with a leading type tag (v0.4+), except legacy nil
+// tombstones which are written as a single TypeTombstone byte. Tagging here
+// disambiguates a real ValuePointer from a user value of exactly 12 bytes and
+// survives flush/compaction rewrites (gradual migration). See DEF-02 / DEF-04.
 func encodeEntry(key, value []byte) []byte {
 	kl := len(key)
-	vl := len(value)
-	buf := make([]byte, 4+4+kl+vl)
+	// Value storage: 1 tag byte + payload (nil → 1-byte tombstone).
+	var storedLen int
+	if value == nil {
+		storedLen = 1
+	} else {
+		storedLen = 1 + len(value)
+	}
+	buf := make([]byte, 4+4+kl+storedLen)
 	binary.LittleEndian.PutUint32(buf[0:4], uint32(kl))
-	binary.LittleEndian.PutUint32(buf[4:8], uint32(vl))
+	binary.LittleEndian.PutUint32(buf[4:8], uint32(storedLen))
 	copy(buf[8:8+kl], key)
-	copy(buf[8+kl:], value)
+	valPos := 8 + kl
+	if value == nil {
+		buf[valPos] = tagTombstone
+	} else {
+		buf[valPos] = tagInline
+		copy(buf[valPos+1:], value)
+	}
 	return buf
 }
 

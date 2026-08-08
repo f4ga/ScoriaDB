@@ -97,6 +97,11 @@ func (it *SSTableIterator) Next() bool {
 			// Copy value since blockData may be from mmap or pool
 			val := make([]byte, len(entryVal))
 			copy(val, entryVal)
+			// Strip the leading type tag (v0.4+). Legacy values have no tag and
+			// are passed through as-is. See DEF-02 / DEF-04.
+			if len(val) > 0 && isValidValueTag(val[0]) {
+				val = val[1:]
+			}
 			it.val = val
 			return true
 		}

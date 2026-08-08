@@ -208,49 +208,66 @@ func (mi *mergeIterator) Key() []byte { return mi.key }
 
 // Value returns the current value.
 // Resolves ValuePointer from either Unified MMap (new) or VLog (legacy).
-// See: decodeStoredValue for the same logic in Get path.
-// HOT-02, ARCH-06
+// Reads the leading type tag (v0.4+) to disambiguate a real ValuePointer from a
+// user value of exactly 12 bytes; legacy data without a tag uses the length
+// heuristic. See DEF-02 / DEF-04.
 func (mi *mergeIterator) Value() []byte {
 	if mi.value == nil {
 		return nil
 	}
 
-	// Check if this is a ValuePointer (12 bytes) pointing to large value storage.
-	if len(mi.value) == ValuePointerSize {
-		vp, ok := DecodeValuePointer(mi.value)
-		if !ok || vp.Offset < 0 || vp.Size <= 0 {
-			// Invalid ValuePointer — return as-is (should not happen).
-			return mi.value
+	// Determine whether the stored value is a ValuePointer and isolate payload.
+	payload := mi.value
+	isPtr := false
+	if IsValidValueTag(mi.value[0]) {
+		switch mi.value[0] {
+		case TypeTombstone:
+			return nil
+		case TypeValuePointer:
+			isPtr = true
+		default: // TypeInline
 		}
-
-		// 1. Check Unified MMap first (v0.3.0+ hot path).
-		if mi.engine.unifiedMmap != nil && vp.Offset < mi.engine.unifiedMmap.Size() {
-			value, err := mi.engine.unifiedMmap.ReadValue(uint64(vp.Offset), vp.Size)
-			if err == nil {
-				return value
-			}
-			// If Unified MMap read fails, fall through to VLog.
-		}
-
-		// 2. Fall back to VLog (legacy path).
-		if vp.Offset+int64(vp.Size)+8 <= mi.engine.vlog.Size() {
-			view, err := mi.engine.vlog.ReadView(vp)
-			if err != nil {
-				mi.err = err
-				return nil
-			}
-			// Store view for later Release in Close().
-			mi.views = append(mi.views, view)
-			return view.Data()
-		}
-
-		// 3. Both sources failed — value pointer out of range.
-		mi.err = fmt.Errorf("value pointer out of range: offset=%d size=%d", vp.Offset, vp.Size)
-		return nil
+		payload = mi.value[1:]
+	} else {
+		// Legacy format: no tag — infer from length.
+		isPtr = len(mi.value) == ValuePointerSize
 	}
 
-	// Inline value (small, stored directly in MemTable).
-	return mi.value
+	if !isPtr {
+		// Inline value (small, stored directly in MemTable).
+		return payload
+	}
+
+	vp, ok := DecodeValuePointer(payload)
+	if !ok || vp.Offset < 0 || vp.Size <= 0 {
+		// Invalid ValuePointer — return as-is (should not happen).
+		return payload
+	}
+
+	// 1. Check Unified MMap first (v0.3.0+ hot path).
+	if mi.engine.unifiedMmap != nil && vp.Offset < mi.engine.unifiedMmap.Size() {
+		value, err := mi.engine.unifiedMmap.ReadValue(uint64(vp.Offset), vp.Size)
+		if err == nil {
+			return value
+		}
+		// If Unified MMap read fails, fall through to VLog.
+	}
+
+	// 2. Fall back to VLog (legacy path).
+	if vp.Offset+int64(vp.Size)+8 <= mi.engine.vlog.Size() {
+		view, err := mi.engine.vlog.ReadView(vp)
+		if err != nil {
+			mi.err = err
+			return nil
+		}
+		// Store view for later Release in Close().
+		mi.views = append(mi.views, view)
+		return view.Data()
+	}
+
+	// 3. Both sources failed — value pointer out of range.
+	mi.err = fmt.Errorf("value pointer out of range: offset=%d size=%d", vp.Offset, vp.Size)
+	return nil
 }
 
 func (mi *mergeIterator) Err() error      { return mi.err }
