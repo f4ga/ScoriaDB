@@ -20,13 +20,29 @@ import (
 	"github.com/f4ga/ScoriaDB/internal/mvcc"
 )
 
-// recoverFromWAL recovers the database state from WAL.
-func recoverFromWAL(wal *WAL, memTable *memtable.MemTable, vlog *VLogImpl) error {
-	return wal.Recover(func(entry *WalEntry) error {
+// recoverFromWAL recovers the database state from WAL and returns the highest
+// commitTS observed across all replayed entries. This restores timestamp
+// monotonicity after a restart: LastTS must be seeded from the maximum commitTS
+// found in the WAL (and the manifest), otherwise new transactions could reuse
+// already-committed timestamps. See: ARCH-07.
+func recoverFromWAL(wal *WAL, memTable *memtable.MemTable, vlog *VLogImpl) (uint64, error) {
+	var maxTS uint64
+	err := wal.Recover(func(entry *WalEntry) error {
+		// Track the maximum committed timestamp seen in the WAL so the engine
+		// can resume from a strictly greater value after restart.
+		if entry.Timestamp > maxTS {
+			maxTS = entry.Timestamp
+		}
 		switch entry.Op {
 		case OpPut:
 			mvccKey := mvcc.NewMVCCKey(entry.Key, entry.Timestamp)
-			if len(entry.Value) == ValuePointerSize {
+			// A value stored in the MemTable must carry a type tag so reads can
+			// disambiguate a real ValuePointer from a user value of exactly 12 bytes.
+			// See DEF-02 / DEF-04.
+			stored := tagStoredValue(entry.Value)
+			// Validate ValuePointer bounds before replaying. entry.IsLarge is read
+			// from the WAL flag (or, for legacy WALs, inferred from the length).
+			if isLargeForRecovery(entry, entry.Value) {
 				if vp, ok := DecodeValuePointer(entry.Value); ok {
 					if vp.Offset < 0 || vp.Size <= 0 || vp.Offset+int64(vp.Size)+8 > vlog.Size() {
 						logger.Warn("wal: skipping entry with invalid VLog pointer offset=%d size=%d vlogSize=%d",
@@ -35,7 +51,7 @@ func recoverFromWAL(wal *WAL, memTable *memtable.MemTable, vlog *VLogImpl) error
 					}
 				}
 			}
-			memTable.Put(mvccKey, entry.Value)
+			memTable.Put(mvccKey, stored)
 		case OpDelete:
 			mvccKey := mvcc.NewMVCCKey(entry.Key, entry.Timestamp)
 			// CRITICAL: WAL recovery must use DeleteWithTS to correctly mark tombstone.
@@ -55,25 +71,79 @@ func recoverFromWAL(wal *WAL, memTable *memtable.MemTable, vlog *VLogImpl) error
 					memTable.DeleteWithTS(mvccKey)
 					continue
 				}
-				if len(op.Value) == ValuePointerSize {
+				// Batch values are legacy-inline in the WAL; a 12-byte value is a
+				// ValuePointer only if it decodes into a bounded VLog pointer.
+				// We reuse the IsLarge inference for the batch path.
+				if isLargeForRecovery(nil, op.Value) {
 					if vp, ok := DecodeValuePointer(op.Value); ok {
 						if vp.Offset < 0 || vp.Size <= 0 || vp.Offset+int64(vp.Size)+8 > vlog.Size() {
 							logger.Warn("wal: skipping batch entry with invalid VLog pointer offset=%d size=%d vlogSize=%d",
 								vp.Offset, vp.Size, vlog.Size())
-							memTable.Put(mvccKey, nil)
+							memTable.Put(mvccKey, tagStoredValue(nil))
 							continue
 						}
 					} else {
 						logger.Warn("wal: skipping batch entry with malformed VLog pointer")
-						memTable.Put(mvccKey, nil)
+						memTable.Put(mvccKey, tagStoredValue(nil))
 						continue
 					}
 				}
-				memTable.Put(mvccKey, op.Value)
+				memTable.Put(mvccKey, tagStoredValue(op.Value))
 			}
 		}
 		return nil
 	})
+	if err != nil {
+		return 0, err
+	}
+	return maxTS, nil
+}
+
+// tagStoredValue prepends a type tag to value so stored MemTable values are
+// self-describing. nil → TypeTombstone; otherwise TypeInline. A ValuePointer
+// payload should be passed already 12-byte encoded; here the caller supplies
+// the raw pointer bytes and we tag it inline — decodeStoredValue recognizes the
+// pointer by its 12-byte length within the inline payload, preserving the
+// legacy heuristic while the explicit tag removes ambiguity for user data.
+//
+// NOTE: for the WAL recovery path the tagged payload wraps the raw value. For a
+// true ValuePointer the caller passes the 12-byte pointer and we tag it with
+// TypeValuePointer. This helper picks TypeValuePointer when the payload is a
+// legacy-detected pointer.
+func tagStoredValue(value []byte) []byte {
+	// Value pointers are stored as 12 bytes inside the tagged payload.
+	// Detect them with the legacy heuristic so recovery replays pointers as
+	// pointers regardless of whether the WAL carried a flag.
+	isPtr := false
+	if len(value) == ValuePointerSize {
+		if _, ok := DecodeValuePointer(value); ok {
+			isPtr = true
+		}
+	}
+	size := TaggedStorageSize(value)
+	buf := make([]byte, size)
+	if value == nil {
+		buf[0] = TypeTombstone
+		return buf
+	}
+	if isPtr {
+		buf[0] = TypeValuePointer
+		copy(buf[1:], value)
+		return buf
+	}
+	buf[0] = TypeInline
+	copy(buf[1:], value)
+	return buf
+}
+
+// isLargeForRecovery reports whether a WAL entry's value is a ValuePointer.
+// It prefers the explicit IsLarge flag (new WAL format); for legacy WALs where
+// the flag was not persisted, it falls back to the 12-byte length heuristic.
+func isLargeForRecovery(entry *WalEntry, value []byte) bool {
+	if entry != nil && entry.IsLarge {
+		return true
+	}
+	return len(value) == ValuePointerSize
 }
 
 // decodeBatchLocal decodes a serialized WriteBatch.

@@ -181,7 +181,9 @@ func (e *LSMEngine) flushOneMemTable(mt *memtable.MemTable, fileNum uint64) (*ss
 		return nil, fmt.Errorf("failed to stat SSTable: %w", err)
 	}
 
-	// Create VersionEdit to add new file
+	// Create VersionEdit to add new file. LastTS persists the highest committed
+	// timestamp so it survives restart even after the WAL is truncated.
+	// See: ARCH-07.
 	edit := &VersionEdit{
 		NewFiles: []SSTableInfo{
 			{
@@ -193,6 +195,7 @@ func (e *LSMEngine) flushOneMemTable(mt *memtable.MemTable, fileNum uint64) (*ss
 			},
 		},
 		NextFileNum: fileNum + 1,
+		LastTS:      atomic.LoadUint64(&e.LastTS),
 	}
 
 	// Apply edit to manifest

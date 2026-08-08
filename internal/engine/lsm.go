@@ -21,7 +21,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-	"unsafe"
 
 	"github.com/f4ga/ScoriaDB/internal/engine/memtable"
 	"github.com/f4ga/ScoriaDB/internal/engine/sstable"
@@ -73,7 +72,7 @@ func NewLSMEngine(dataDir string, opts ...WALOptions) (*LSMEngine, error) {
 	}
 
 	manifestPath := filepath.Join(dataDir, "MANIFEST")
-	manifest, err := NewManifest(vfs, manifestPath)
+	manifest, err := NewManifest(manifestPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open manifest: %w", err)
 	}
@@ -125,7 +124,13 @@ func NewLSMEngine(dataDir string, opts ...WALOptions) (*LSMEngine, error) {
 		shardWALs[i] = wal
 	}
 
-	lastTS := uint64(1)
+	// Seed timestamp monotonicity from the manifest first (persisted LastTS),
+	// then raise it further from the highest commitTS found in any shard WAL.
+	// See: ARCH-07.
+	lastTS := manifest.LastTS()
+	if lastTS < 1 {
+		lastTS = 1
+	}
 
 	levels := make([][]*sstable.Reader, 10)
 	manifestLevels := manifest.GetLevels()
@@ -172,11 +177,21 @@ func NewLSMEngine(dataDir string, opts ...WALOptions) (*LSMEngine, error) {
 	// Recover each shard's WAL into that shard's MemTable. Each shard only
 	// replayed entries that were routed to it, so recovery preserves the
 	// sharding layout across restarts. See: REC-01, HOT-01
+	// Track the maximum commitTS across all shards and raise LastTS so new
+	// timestamps continue to be strictly monotonic and unique after restart.
+	var walMaxTS uint64
 	for _, shard := range engine.shards {
-		if err := recoverFromWAL(shard.wal, shard.memTable, engine.vlog); err != nil {
+		maxTS, err := recoverFromWAL(shard.wal, shard.memTable, engine.vlog)
+		if err != nil {
 			errors.CloseWithLog(engine, "engine")
 			return nil, fmt.Errorf("failed to recover from wal for shard %d: %w", shard.id, err)
 		}
+		if maxTS > walMaxTS {
+			walMaxTS = maxTS
+		}
+	}
+	if walMaxTS > engine.LastTS {
+		engine.LastTS = walMaxTS
 	}
 
 	// Start background tasks
@@ -326,10 +341,12 @@ func (e *LSMEngine) PutWithTS(key, value []byte, commitTS uint64) error {
 
 	mvccKey := mvcc.NewMVCCKey(key, commitTS)
 
-	// Encode stored value: either inline bytes or 12-byte ValuePointer
-	// Stack-allocated buffer — zero allocation
-	// NOTE: vpBuf is stack-allocated [ValuePointerSize]byte. Using vpBuf[:] creates a slice
-	// header that the compiler may move to heap. We use unsafe to prevent this.
+	// Encode stored value with a leading type tag (v0.4+). The tag byte
+	// disambiguates a real ValuePointer from a user value of exactly 12 bytes.
+	// See DEF-02 / DEF-04.
+	//
+	// Large values carry tag TypeValuePointer + 12-byte ValuePointer.
+	// Inline values carry tag TypeInline + raw bytes.
 	var vpBuf [ValuePointerSize]byte
 	var storedValue []byte
 	if isLarge {
@@ -337,9 +354,26 @@ func (e *LSMEngine) PutWithTS(key, value []byte, commitTS uint64) error {
 		// Use unsafe to create slice without causing vpBuf to escape to heap.
 		// The slice points to the stack-allocated array, and Put() copies the
 		// data into the arena, so the stack lifetime is sufficient.
-		storedValue = unsafe.Slice((*byte)(unsafe.Pointer(&vpBuf)), ValuePointerSize)
+		var tagged [1 + ValuePointerSize]byte
+		tagged[0] = TypeValuePointer
+		copy(tagged[1:], vpBuf[:])
+		storedValue = tagged[:]
 	} else {
-		storedValue = inlineValue
+		// Small inline value (<= MaxInlineSize, default 64). Tag on a stack
+		// buffer so the hot path stays allocation-free. MaxInlineSize is a var
+		// (raised temporarily in benchmarks); fall back to a heap slice only if
+		// it grows beyond this fixed stack budget. See DEF-02 / DEF-04.
+		const maxInlineStack = 1 + 64
+		if len(inlineValue) <= maxInlineStack-1 {
+			var tagged [maxInlineStack]byte
+			tagged[0] = TypeInline
+			copy(tagged[1:], inlineValue)
+			storedValue = tagged[:1+len(inlineValue)]
+		} else {
+			storedValue = make([]byte, 1+len(inlineValue))
+			storedValue[0] = TypeInline
+			copy(storedValue[1:], inlineValue)
+		}
 	}
 
 	// Route this key to its shard. The shard owns both the WAL and the MemTable,
@@ -355,7 +389,9 @@ func (e *LSMEngine) PutWithTS(key, value []byte, commitTS uint64) error {
 		walEntry := newWalEntry()
 		walEntry.Op = OpPut
 		walEntry.Key = key
-		walEntry.Value = storedValue
+		// WAL stores the raw (untagged) user value. Recovery re-tags it on replay,
+		// so the WAL never double-tags. See DEF-02 / DEF-04.
+		walEntry.Value = inlineValue
 		walEntry.Timestamp = commitTS
 		walEntry.IsLarge = false
 
@@ -429,7 +465,7 @@ func (e *LSMEngine) WriteAtomicBatch(data []byte, commitTS uint64) error {
 			// See: PROMPT-TOMBSTONE-BATCH-FIX
 			shard.memTable.DeleteWithTS(mvccKey)
 		} else {
-			shard.memTable.Put(mvccKey, op.Value)
+			shard.memTable.Put(mvccKey, tagStoredValue(op.Value))
 			shardDeltas[e.shardIndex(op.Key)] += int64(len(op.Key) + len(op.Value))
 		}
 		e.updateLastCommitCache(op.Key, commitTS)
@@ -801,6 +837,9 @@ func copyValue(src []byte) []byte {
 }
 
 // decodeStoredValue decodes a stored value (inline, VLog pointer, or unified mmap pointer).
+// It reads the leading type tag (v0.4+) to disambiguate a real ValuePointer from
+// a user value of exactly 12 bytes. See DEF-02 / DEF-04.
+//
 // Checks unified mmap first, then falls back to VLog.
 // Uses ReadDirect for zero-copy internal reads.
 //
@@ -819,9 +858,31 @@ func (e *LSMEngine) decodeStoredValue(stored []byte, fromSSTable bool) ([]byte, 
 		}
 		return []byte{}, nil
 	}
-	if vp, ok := DecodeValuePointer(stored); ok {
+
+	// Determine the payload and whether it is a ValuePointer, honoring the tag.
+	payload := stored
+	isPtr := false
+	if IsValidValueTag(stored[0]) {
+		switch stored[0] {
+		case TypeTombstone:
+			return nil, nil
+		case TypeValuePointer:
+			isPtr = true
+		default: // TypeInline
+		}
+		payload = stored[1:]
+	} else {
+		// Legacy format: no tag — infer from length.
+		isPtr = len(stored) == ValuePointerSize
+	}
+
+	if isPtr {
+		vp, ok := DecodeValuePointer(payload)
+		if !ok {
+			return payload, nil
+		}
 		if vp.Offset < 0 || vp.Size <= 0 {
-			return stored, nil
+			return payload, nil
 		}
 		// Check unified mmap first (v0.3.1+ hot path)
 		if e.unifiedMmap != nil && vp.Offset < e.unifiedMmap.Size() {
@@ -843,16 +904,16 @@ func (e *LSMEngine) decodeStoredValue(stored []byte, fromSSTable bool) ([]byte, 
 			// DEF-18: same copy for VLog mmap (extendMmap unmaps the old region).
 			return copyValue(val), nil
 		}
-		return stored, nil
+		return payload, nil
 	}
-	// Value from SSTable mmap — must copy because mmap may be released
-	// after the reader is closed (e.g., during compaction).
+
+	// Inline (or legacy inline) value.
 	if fromSSTable {
-		val := make([]byte, len(stored))
-		copy(val, stored)
+		val := make([]byte, len(payload))
+		copy(val, payload)
 		return val, nil
 	}
-	return stored, nil
+	return payload, nil
 }
 func (e *LSMEngine) ReadVLogView(vp *ValuePointer) (*VLogView, error) {
 	return e.vlog.ReadView(*vp)

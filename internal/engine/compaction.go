@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"sort"
+	"sync/atomic"
 
 	"github.com/f4ga/ScoriaDB/internal/engine/sstable"
 	"github.com/f4ga/ScoriaDB/internal/errors"
@@ -222,16 +223,24 @@ func (e *LSMEngine) compactLevel0() error {
 	}
 
 	// Prepare VersionEdit: delete old level-0 files, add new level-1 file
-	var deletedFiles []SSTableInfo
+	var deletedFiles []struct {
+		FileNum uint64
+		Level   int
+	}
 	if level0Infos != nil {
-		deletedFiles = level0Infos
+		for _, info := range level0Infos {
+			deletedFiles = append(deletedFiles, struct {
+				FileNum uint64
+				Level   int
+			}{FileNum: info.FileNum, Level: info.Level})
+		}
 	} else {
 		// Fallback: create placeholder deletions (should not happen)
 		for range e.levels[0] {
-			deletedFiles = append(deletedFiles, SSTableInfo{
-				Level: 0,
-				// FileNum unknown
-			})
+			deletedFiles = append(deletedFiles, struct {
+				FileNum uint64
+				Level   int
+			}{Level: 0})
 		}
 	}
 
@@ -247,6 +256,9 @@ func (e *LSMEngine) compactLevel0() error {
 			},
 		},
 		NextFileNum: fileNum + 1,
+		// Persist the highest committed timestamp with the edit so it survives
+		// restart even if the WAL is truncated.
+		LastTS: atomic.LoadUint64(&e.LastTS),
 	}
 
 	// Apply edit to manifest
