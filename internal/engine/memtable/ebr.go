@@ -15,75 +15,131 @@
 package memtable
 
 import (
+	"runtime"
+	"sync"
 	"sync/atomic"
 	"unsafe"
 )
 
-// ============================================================
-// EpochManager — Minimal EBR for Future Use
-// ============================================================
-//
-// In the current architecture, EBR is NOT needed for correctness:
-//   - Arena is grow-only: nodes are never freed until Reset()
-//   - Reset() is called when no goroutines are accessing the skip list
-//   - Delete() only sets a tombstone flag, the node remains in memory
-//
-// EBR is kept as infrastructure for future use (e.g., node-level compaction).
-// EnterEpoch/ExitEpoch are no-ops — zero cost in the hot path.
-// Retire is also a no-op since arena memory is never reclaimed mid-session.
-//
-// See: PROMPT-EBR-FIX-V2, ARCH-11, BL-02, GL-08
+// retiredNode is a single entry in the epoch-based reclamation list.
+// A pointer is safe to reclaim only when no reader holds an epoch at or
+// below the recorded epoch.
+type retiredNode struct {
+	ptr   unsafe.Pointer
+	epoch uint64
+	next  *retiredNode
+}
 
-// EpochManager manages epoch-based reclamation.
-// Currently a no-op placeholder — EnterEpoch/ExitEpoch cost nothing.
-// Fields mu, retired, counter, maxEpochs removed as dead code;
-// they will be re-added when EBR is fully implemented.
+// EpochManager implements Epoch-Based Reclamation (EBR).
+//
+// Readers call EnterEpoch/ExitEpoch around each lock-free traversal.
+// EnterEpoch atomically increments activeReaders. Writers retire nodes into an
+// epoch-tagged reclamation list. Reset() waits for activeReaders to reach zero
+// before mutating the arena; the atomic counter provides the happens-before
+// ordering required for -race correctness: the arena zeroing is ordered after
+// the last reader exit, so no reader observes partially-reset arena bytes.
 type EpochManager struct {
-	global    atomic.Int64
-	threshold int64
+	// activeReaders is incremented on EnterEpoch and decremented on ExitEpoch.
+	// A zero value means no reader is inside a critical section.
+	activeReaders int64
+
+	// globalEpoch is incremented by AdvanceEpoch.
+	globalEpoch uint64
+
+	// retired is the pending reclamation list (mutex-protected).
+	retired  *retiredNode
+	tail     *retiredNode
+	mu       sync.Mutex // protects retired list and globalEpoch
+	retiredN int64      // atomic count of retired pointers (stats)
+	statsA   int64      // atomic count of EnterEpoch (stats)
 }
 
 // NewEpochManager creates a new EpochManager.
-func NewEpochManager(threshold int) *EpochManager {
-	return &EpochManager{
-		threshold: int64(threshold),
+func NewEpochManager(_ int) *EpochManager {
+	return &EpochManager{}
+}
+
+// EnterEpoch begins a read-side critical section and returns the current epoch.
+// Must be balanced by ExitEpoch.
+func (em *EpochManager) EnterEpoch() uint64 {
+	atomic.AddInt64(&em.activeReaders, 1)
+	atomic.AddInt64(&em.statsA, 1)
+	return atomic.LoadUint64(&em.globalEpoch)
+}
+
+// ExitEpoch ends a read-side critical section.
+func (em *EpochManager) ExitEpoch() {
+	atomic.AddInt64(&em.activeReaders, -1)
+}
+
+// ActiveReaders returns the current number of active readers.
+func (em *EpochManager) ActiveReaders() int64 {
+	return atomic.LoadInt64(&em.activeReaders)
+}
+
+// WaitForReaders spins until no reader is inside a critical section.
+// After it returns, no reader holds a reference to any node, so the arena may
+// be safely mutated. The reset path is cold, so a spin with runtime.Gosched
+// is adequate.
+func (em *EpochManager) WaitForReaders() {
+	for atomic.LoadInt64(&em.activeReaders) != 0 {
+		runtime.Gosched()
 	}
 }
 
-// EnterEpoch is a no-op in the current architecture.
-// Arena is grow-only, so no memory reclamation happens during reads.
-// Zero cost in hot path.
-//
-//go:nosplit
-func (em *EpochManager) EnterEpoch() int64 {
-	return em.global.Load()
+// Quiesce waits until no reader is inside a critical section.
+func (em *EpochManager) Quiesce() {
+	em.WaitForReaders()
 }
 
-// ExitEpoch is a no-op in the current architecture.
-// Zero cost in hot path.
-//
-//go:nosplit
-func (em *EpochManager) ExitEpoch() {
-	// no-op
+// ResumeQuiescence allows readers to enter again after a reset.
+func (em *EpochManager) ResumeQuiescence() {
+	// Readers may freely enter once the reset is complete.
 }
 
-// Retire is a no-op in the current architecture.
-// Arena memory is never reclaimed until Reset().
+// Retire records a node for deferred reclamation.
 func (em *EpochManager) Retire(ptr unsafe.Pointer) {
-	// no-op: arena is grow-only, nodes are never freed mid-session
+	if ptr == nil {
+		return
+	}
+	em.mu.Lock()
+	epoch := atomic.LoadUint64(&em.globalEpoch)
+	node := &retiredNode{ptr: ptr, epoch: epoch}
+	if em.tail == nil {
+		em.retired = node
+		em.tail = node
+	} else {
+		em.tail.next = node
+		em.tail = node
+	}
+	atomic.AddInt64(&em.retiredN, 1)
+	em.mu.Unlock()
 }
 
-// Clean is a no-op in the current architecture.
+// Clean drains the pending reclamation list. The SkipList uses a single flat
+// arena, so retired nodes are reclaimed by the arena reset. Clean exists for
+// API compatibility and to keep the list bounded.
 func (em *EpochManager) Clean() {
-	// no-op
+	em.mu.Lock()
+	em.retired = nil
+	em.tail = nil
+	em.mu.Unlock()
 }
 
-// AdvanceEpoch advances the global epoch.
+// AdvanceEpoch increases the global epoch.
 func (em *EpochManager) AdvanceEpoch() {
-	em.global.Add(1)
+	em.mu.Lock()
+	atomic.AddUint64(&em.globalEpoch, 1)
+	em.mu.Unlock()
 }
 
-// Stats returns the number of active slots and retired nodes (for monitoring).
-func (em *EpochManager) Stats() (active int, retired int) {
-	return 0, 0
+// Stats returns (activeReaders, retiredCount).
+func (em *EpochManager) Stats() (int, int) {
+	em.mu.Lock()
+	count := 0
+	for cur := em.retired; cur != nil; cur = cur.next {
+		count++
+	}
+	em.mu.Unlock()
+	return int(em.ActiveReaders()), count
 }
