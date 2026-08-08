@@ -40,25 +40,6 @@ import (
 	"github.com/f4ga/ScoriaDB/internal/logger"
 )
 
-// openBenchDB creates a temporary database for benchmarks.
-// NOTE: Uses default WALOptions (SyncMode=true). For zero-fsync benchmarks,
-// use the per-benchmark options directly.
-func openBenchDB(b *testing.B) *LSMEngine {
-	b.Helper()
-	logger.SetLevel(logger.ERROR)
-	dir, err := os.MkdirTemp("", "scoriadb-bench-*")
-	if err != nil {
-		b.Fatal(err)
-	}
-	b.Cleanup(func() { errors.RemoveAll(dir) })
-
-	db, err := NewLSMEngine(dir)
-	if err != nil {
-		b.Fatal(err)
-	}
-	return db
-}
-
 // ------------------------------------------------------------
 // BenchmarkEnginePut — small value (16B), parallel, zero fsync
 // ------------------------------------------------------------
@@ -278,7 +259,48 @@ func BenchmarkEngineScan(b *testing.B) {
 }
 
 // ------------------------------------------------------------
-// BenchmarkPutSmallValue — zero fsync, zero alloc in hot path
+// BenchmarkGetExisting — read existing keys, parallel, different keys.
+// Keys are pre-allocated before ResetTimer; the hot path does zero allocs.
+// ------------------------------------------------------------
+func BenchmarkGetExisting(b *testing.B) {
+	logger.SetLevel(logger.ERROR)
+	dir := b.TempDir()
+	opts := DefaultEngineOptions(dir)
+	opts.WALOpts.SyncMode = false
+	opts.WALOpts.GroupCommitEnabled = true
+
+	e, err := NewLSMEngine(dir, opts.WALOpts)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer e.Close()
+
+	// Pre-allocate numKeys distinct keys once (cold path).
+	const numKeys = 1000
+	keys := make([][]byte, numKeys)
+	for i := 0; i < numKeys; i++ {
+		keys[i] = []byte(fmt.Sprintf("bench-key-%d", i))
+		if err := e.PutWithTS(keys[i], []byte("value"), uint64(i+1)); err != nil {
+			b.Fatal(err)
+		}
+	}
+
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		var i int
+		for pb.Next() {
+			key := keys[i%numKeys]
+			if _, err := e.GetWithTS(key, math.MaxUint64); err != nil {
+				b.Fatal(err)
+			}
+			i++
+		}
+	})
+}
+
+// ------------------------------------------------------------
+// BenchmarkPutSmallValue — write different keys, parallel.
+// Keys are pre-allocated before ResetTimer; the hot path does zero allocs.
 // ------------------------------------------------------------
 func BenchmarkPutSmallValue(b *testing.B) {
 	logger.SetLevel(logger.ERROR)
@@ -293,16 +315,25 @@ func BenchmarkPutSmallValue(b *testing.B) {
 	}
 	defer e.Close()
 
-	key := []byte("bench:key")
-	value := []byte("small-value")
+	// Pre-allocate distinct keys once (cold path) so the hot path
+	// only issues PutWithTS with an already-allocated key slice.
+	const numKeys = 1000
+	keys := make([][]byte, numKeys)
+	for i := 0; i < numKeys; i++ {
+		keys[i] = []byte(fmt.Sprintf("bench-key-%d", i))
+	}
 
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		if err := e.PutWithTS(key, value, uint64(i+1)); err != nil {
-			b.Fatal(err)
+	b.RunParallel(func(pb *testing.PB) {
+		var i int
+		for pb.Next() {
+			key := keys[i%numKeys]
+			if err := e.PutWithTS(key, []byte("value"), uint64(i+1)); err != nil {
+				b.Fatal(err)
+			}
+			i++
 		}
-	}
-	b.StopTimer()
+	})
 }
 
 // ------------------------------------------------------------

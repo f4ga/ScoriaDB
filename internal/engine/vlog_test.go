@@ -939,3 +939,97 @@ func TestVLogShutdownRejectsNewViews(t *testing.T) {
 		t.Error("expected error from ReadView during shutdown, got nil")
 	}
 }
+
+// TestVLogReadAfterExtend verifies that reading a large value from VLog/unified-mmap
+// does not read from freed memory when the mmap is concurrently extended.
+//
+// DEF-18 (use-after-munmap, Глава II, Глава VI): decodeStoredValue returned a direct
+// slice into the mmap region. A concurrent extendMmap() unmaps the old region, so a
+// slice read after extension would point to freed memory (SIGBUS/panic). The fix
+// copies the value before returning it to the caller.
+func TestVLogReadAfterExtend(t *testing.T) {
+	dir := t.TempDir()
+	eng, err := NewLSMEngine(dir)
+	if err != nil {
+		t.Fatalf("failed to create engine: %v", err)
+	}
+	defer errors.CloseWithFatal(eng, "engine")
+
+	// Large value (>MaxInlineSize) — lands in VLog/unified-mmap.
+	key := []byte("large_key")
+	large := make([]byte, 8192)
+	for i := range large {
+		large[i] = byte(i)
+	}
+	if err := eng.PutWithTS(key, large, 1); err != nil {
+		t.Fatalf("PutWithTS failed: %v", err)
+	}
+
+	// Verify the value is readable before the concurrency phase.
+	got, err := eng.GetWithTS(key, 1)
+	if err != nil {
+		t.Fatalf("GetWithTS failed: %v", err)
+	}
+	if len(got) != len(large) {
+		t.Fatalf("expected value len %d, got %d", len(large), len(got))
+	}
+
+	var wg sync.WaitGroup
+	done := make(chan struct{})
+
+	// Reader goroutine continuously reads the large key.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		readErr := 0
+		for {
+			select {
+			case <-done:
+				return
+			default:
+			}
+			val, err := eng.GetWithTS(key, 1)
+			if err != nil {
+				readErr++
+				continue
+			}
+			_ = val // touch the slice; a SIGBUS would surface here if the mmap was freed
+		}
+	}()
+
+	// Writer goroutine repeatedly writes large values to trigger extendMmap.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		big := make([]byte, 4096)
+		for i := range big {
+			big[i] = byte(i & 0xFF)
+		}
+		i := 2
+		for {
+			select {
+			case <-done:
+				return
+			default:
+			}
+			if err := eng.PutWithTS([]byte("bulk_key"), big, uint64(i)); err != nil {
+				return
+			}
+			i++
+		}
+	}()
+
+	// Run for 5 seconds (or until the reader/writer naturally finish).
+	time.Sleep(5 * time.Second)
+	close(done)
+	wg.Wait()
+
+	// Final sanity check — the large key must still be readable.
+	final, err := eng.GetWithTS(key, 1)
+	if err != nil {
+		t.Fatalf("GetWithTS after extend failed: %v", err)
+	}
+	if len(final) != len(large) {
+		t.Fatalf("after extend: expected value len %d, got %d", len(large), len(final))
+	}
+}
