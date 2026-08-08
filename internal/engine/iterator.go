@@ -76,16 +76,27 @@ func NewMergeIterator(e *LSMEngine, prefix []byte) *mergeIterator {
 	for _, level := range e.levels {
 		sources += len(level)
 	}
+	for _, shard := range e.shards {
+		if shard.memTable != nil {
+			sources++
+		}
+		if shard.frozenMemTable != nil {
+			sources++
+		}
+	}
 	mi := &mergeIterator{
 		heap:   make(iterHeap, 0, sources),
 		engine: e,
 	}
 
-	if e.memTable != nil {
-		mi.addSource(newMemtableIter(e.memTable, prefix))
-	}
-	if e.frozenMemTable != nil {
-		mi.addSource(newMemtableIter(e.frozenMemTable, prefix))
+	// Every shard contributes its active and (during flush) frozen MemTable.
+	for _, shard := range e.shards {
+		if shard.memTable != nil {
+			mi.addSource(newMemtableIter(shard.memTable, prefix))
+		}
+		if shard.frozenMemTable != nil {
+			mi.addSource(newMemtableIter(shard.frozenMemTable, prefix))
+		}
 	}
 	for _, level := range e.levels {
 		for _, sst := range level {
@@ -99,15 +110,16 @@ func NewMergeIterator(e *LSMEngine, prefix []byte) *mergeIterator {
 
 // NewMergeIteratorWithSnapshot creates a merge iterator from pre-snapshotted sources.
 // This allows releasing the engine lock before iterating, preventing writer starvation.
-// The caller must snapshot memTable, frozenMemTable, and levels under the engine lock,
+// The caller must snapshot all shard MemTables and the levels under the engine lock,
 // then pass them here. The snapshotted sources are safe to use because:
 //   - MemTable arena is grow-only (nodes never freed until Reset)
 //   - SSTable readers are ref-counted and not closed while in use
 //   - levels slice is copied, so compaction can modify the original
 //
-// See: SYMPTOM-04
-func NewMergeIteratorWithSnapshot(e *LSMEngine, prefix []byte, mt, frozen *memtable.MemTable, levels [][]*sstable.Reader) *mergeIterator {
-	sources := 2
+// mtList is the flat list of every shard's active and frozen MemTable.
+// See: SYMPTOM-04, HOT-01
+func NewMergeIteratorWithSnapshot(e *LSMEngine, prefix []byte, mtList []*memtable.MemTable, levels [][]*sstable.Reader) *mergeIterator {
+	sources := len(mtList)
 	for _, level := range levels {
 		sources += len(level)
 	}
@@ -116,11 +128,10 @@ func NewMergeIteratorWithSnapshot(e *LSMEngine, prefix []byte, mt, frozen *memta
 		engine: e,
 	}
 
-	if mt != nil {
-		mi.addSource(newMemtableIter(mt, prefix))
-	}
-	if frozen != nil {
-		mi.addSource(newMemtableIter(frozen, prefix))
+	for _, mt := range mtList {
+		if mt != nil {
+			mi.addSource(newMemtableIter(mt, prefix))
+		}
 	}
 	for _, level := range levels {
 		for _, sst := range level {
@@ -268,7 +279,7 @@ func (mi *mergeIterator) Close() error {
 // ============================================================
 
 type memtableIter struct {
-	inner  *memtable.MemTableIterator
+	inner  *memtable.SkipListIterator
 	prefix []byte
 	key    []byte
 	value  []byte
@@ -431,13 +442,21 @@ func (it *emptyIterator) IsDeleted() bool { return false }
 // Allocations: O(number_of_sources), not O(number_of_entries).
 func (e *LSMEngine) Scan(prefix []byte) Iterator {
 	// CRITICAL: Copy MemTable pointers under RLock, then release lock.
-	// The merge iterator captures sources by pointer — MemTable and frozenMemTable
-	// are safe because arena is grow-only (nodes are never freed).
+	// The merge iterator captures sources by pointer — MemTables are safe because
+	// the arena is grow-only (nodes are never freed).
 	// levels slice is also copied under lock to prevent race with compaction.
-	// See: SYMPTOM-04
+	// See: SYMPTOM-04, HOT-01
 	e.mu.RLock()
-	mt := e.memTable
-	frozen := e.frozenMemTable
+	// Snapshot every shard's active and frozen MemTable (flat list).
+	mtList := make([]*memtable.MemTable, 0, len(e.shards)*2)
+	for _, shard := range e.shards {
+		if shard.memTable != nil {
+			mtList = append(mtList, shard.memTable)
+		}
+		if shard.frozenMemTable != nil {
+			mtList = append(mtList, shard.frozenMemTable)
+		}
+	}
 	levels := make([][]*sstable.Reader, len(e.levels))
 	for i, level := range e.levels {
 		levelCopy := make([]*sstable.Reader, len(level))
@@ -446,7 +465,7 @@ func (e *LSMEngine) Scan(prefix []byte) Iterator {
 	}
 	e.mu.RUnlock()
 
-	mi := NewMergeIteratorWithSnapshot(e, prefix, mt, frozen, levels)
+	mi := NewMergeIteratorWithSnapshot(e, prefix, mtList, levels)
 	if len(mi.heap) == 0 && mi.err == nil {
 		return &emptyIterator{}
 	}

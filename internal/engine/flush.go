@@ -33,35 +33,97 @@ const (
 	MaxLevel0Files = 4
 )
 
-// flushMemTable flushes current MemTable into a Level0 SSTable.
+// flushMemTable flushes all shards' active MemTables into Level0 SSTables.
+//
+// With sharding, each shard owns an independent MemTable. This function drains
+// every shard whose active MemTable exceeds the size threshold, swapping it to
+// frozen (so concurrent writers get a fresh MemTable) and writing it to its own
+// SSTable. All shards share the Level0 set and Manifest, so file numbers remain
+// globally unique and reads can find flushed data in any shard's SSTable.
+//
+// The caller (flushWorker) holds no lock; this function acquires e.mu.Lock once
+// to atomically snapshot and swap all eligible shard MemTables.
 //
 //nolint:unused // flush goroutine worker
 func (e *LSMEngine) flushMemTable() error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	// CRITICAL: Create new MemTable BEFORE iterating the old one.
-	// This ensures that any concurrent PutWithTS/DeleteWithTS that acquires
-	// RLock after this point writes to the new MemTable, not the old one.
-	// The old MemTable is captured for iteration before the swap.
-	// See: SYMPTOM-03
-	oldMemTable := e.memTable
-	newMemTable := memtable.NewMemTable()
-	e.memTable = newMemTable
-	atomic.StoreInt64(&e.memSize, 0)
+	// Collect eligible shards under the lock: swap each shard's active MemTable
+	// to frozen and reset its size watermark. Writers acquiring RLock after this
+	// point write to the fresh MemTable, never the frozen one being flushed.
+	// See: SYMPTOM-03, HOT-01
+	type flushCandidate struct {
+		shard *Shard
+		mt    *memtable.MemTable
+	}
+	var candidates []flushCandidate
+	for _, shard := range e.shards {
+		if shard.memSizeLoad() == 0 {
+			continue
+		}
+		old := shard.memTable
+		shard.memTable = memtable.NewMemTable()
+		shard.frozenMemTable = old
+		atomic.StoreInt64(&shard.memSize, 0)
+		candidates = append(candidates, flushCandidate{shard: shard, mt: old})
+	}
 
-	// Get next file number from manifest
-	fileNum := e.manifest.NextFileNum()
+	if len(candidates) == 0 {
+		return nil
+	}
+
+	// Flush each candidate MemTable into its own Level0 SSTable.
+	// Readers opened here are appended to the shared e.levels[0]; manifest file
+	// numbers are allocated sequentially to remain unique across shards.
+	nextFileNum := e.manifest.NextFileNum()
+	var newReaders []*sstable.Reader
+	for _, cand := range candidates {
+		reader, err := e.flushOneMemTable(cand.mt, nextFileNum)
+		if err != nil {
+			// On failure, clear the frozen pointer we swapped in and put the
+			// MemTable back so its data is not lost.
+			cand.shard.frozenMemTable = nil
+			// Close any readers already produced this round.
+			for _, r := range newReaders {
+				errors.CloseWithLog(r, "flush-new-sstable")
+			}
+			return err
+		}
+		nextFileNum++
+		newReaders = append(newReaders, reader)
+	}
+
+	// Successfully flushed — release the MemTable's arena immediately (instead
+	// of waiting for GC), then clear frozen pointers and publish to Level0.
+	// Close() calls sl.Reset() -> arena.Reset(), which drops all blocks so the
+	// GC can reclaim them. Previously the arena blocks (512 MB each) were held
+	// until a later GC, causing OOM across many flush cycles. See: SYMPTOM-03
+	for i, cand := range candidates {
+		if cand.mt != nil {
+			cand.mt.Close()
+		}
+		cand.shard.frozenMemTable = nil
+		e.levels[0] = append(e.levels[0], newReaders[i])
+	}
+
+	return nil
+}
+
+// flushOneMemTable writes a single MemTable to a new Level0 SSTable and registers
+// it in the manifest. Caller must hold e.mu.Lock (flushMemTable holds it) and pass
+// a globally unique fileNum (allocated in flushMemTable).
+func (e *LSMEngine) flushOneMemTable(mt *memtable.MemTable, fileNum uint64) (*sstable.Reader, error) {
 	sstPath := filepath.Join(e.dataDir, fmt.Sprintf("%06d.sst", fileNum))
 
 	// Create writer (currently using old API that works with os)
-	writer, err := sstable.NewWriter(sstPath, oldMemTable.Size())
+	writer, err := sstable.NewWriter(sstPath, mt.Size())
 	if err != nil {
-		return fmt.Errorf("failed to create SSTable writer: %w", err)
+		return nil, fmt.Errorf("failed to create SSTable writer: %w", err)
 	}
 
 	// Iterate over all MemTable entries
-	iter := oldMemTable.NewIterator()
+	iter := mt.NewIterator()
 	var minKey, maxKey []byte
 	var first = true
 	for iter.Next() {
@@ -88,15 +150,16 @@ func (e *LSMEngine) flushMemTable() error {
 			if err := e.vfs.Remove(sstPath); err != nil {
 				logger.WarnComponent(logger.ComponentFlush, "flush: failed to remove %s: %v", sstPath, err)
 			}
-			return fmt.Errorf("failed to append key to SSTable: %w", err)
+			return nil, fmt.Errorf("failed to append key to SSTable: %w", err)
 		}
 	}
+	iter.Close()
 
 	if err := writer.Finish(); err != nil {
 		if err := e.vfs.Remove(sstPath); err != nil {
 			logger.WarnComponent(logger.ComponentFlush, "flush: failed to remove %s: %v", sstPath, err)
 		}
-		return fmt.Errorf("failed to finish SSTable: %w", err)
+		return nil, fmt.Errorf("failed to finish SSTable: %w", err)
 	}
 
 	// Open the created SSTable for reading
@@ -105,7 +168,7 @@ func (e *LSMEngine) flushMemTable() error {
 		if err := e.vfs.Remove(sstPath); err != nil {
 			logger.WarnComponent(logger.ComponentFlush, "flush: failed to remove %s: %v", sstPath, err)
 		}
-		return fmt.Errorf("failed to open SSTable: %w", err)
+		return nil, fmt.Errorf("failed to open SSTable: %w", err)
 	}
 
 	// Get file size
@@ -115,7 +178,7 @@ func (e *LSMEngine) flushMemTable() error {
 		if err := e.vfs.Remove(sstPath); err != nil {
 			logger.WarnComponent(logger.ComponentFlush, "flush: failed to remove %s: %v", sstPath, err)
 		}
-		return fmt.Errorf("failed to stat SSTable: %w", err)
+		return nil, fmt.Errorf("failed to stat SSTable: %w", err)
 	}
 
 	// Create VersionEdit to add new file
@@ -138,11 +201,8 @@ func (e *LSMEngine) flushMemTable() error {
 		if err := e.vfs.Remove(sstPath); err != nil {
 			logger.WarnComponent(logger.ComponentFlush, "flush: failed to remove %s: %v", sstPath, err)
 		}
-		return fmt.Errorf("failed to apply manifest edit: %w", err)
+		return nil, fmt.Errorf("failed to apply manifest edit: %w", err)
 	}
 
-	// Add reader to level 0
-	e.levels[0] = append(e.levels[0], reader)
-
-	return nil
+	return reader, nil
 }

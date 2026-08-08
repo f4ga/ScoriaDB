@@ -37,16 +37,22 @@ func (e *LSMEngine) CollectLiveValuePointers() (map[ValuePointer]struct{}, error
 			}
 		}
 	}
-	iter := e.memTable.NewIterator()
-	defer iter.Close()
-	for iter.Next() {
-		processValue(iter.Value())
-	}
-	if e.frozenMemTable != nil {
-		iter := e.frozenMemTable.NewIterator()
-		defer iter.Close()
-		for iter.Next() {
-			processValue(iter.Value())
+	// Collect live pointers from every shard's active and frozen MemTable.
+	// See: HOT-01
+	for _, shard := range e.shards {
+		if shard.memTable != nil {
+			iter := shard.memTable.NewIterator()
+			for iter.Next() {
+				processValue(iter.Value())
+			}
+			iter.Close()
+		}
+		if shard.frozenMemTable != nil {
+			iter := shard.frozenMemTable.NewIterator()
+			for iter.Next() {
+				processValue(iter.Value())
+			}
+			iter.Close()
 		}
 	}
 	for level := 0; level < len(e.levels); level++ {
@@ -86,8 +92,14 @@ func (e *LSMEngine) InvalidateVLogPointers() {
 			mt.DeleteWithTS(key)
 		}
 	}
-	processTable(e.memTable)
-	if e.frozenMemTable != nil {
-		processTable(e.frozenMemTable)
+	// Invalidate pointers in every shard's active and frozen MemTable.
+	// See: HOT-01
+	for _, shard := range e.shards {
+		if shard.memTable != nil {
+			processTable(shard.memTable)
+		}
+		if shard.frozenMemTable != nil {
+			processTable(shard.frozenMemTable)
+		}
 	}
 }

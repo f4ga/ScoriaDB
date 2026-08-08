@@ -32,11 +32,18 @@ import (
 )
 
 // LSMEngine is the main LSM tree engine.
+//
+// Writes are sharded across multiple MemTables (see Shard) to eliminate the
+// single-SkipList-mutex contention that serialized all PUTs. Each shard owns an
+// independent active MemTable (and thus its own SkipList mutex), so concurrent
+// writes with different keys scale near-linearly with the number of cores.
+//
+// All shards share the WAL, Manifest, VLog, and the SSTable level set. Reads
+// scan every shard's active/frozen MemTable plus the shared SSTables.
 type LSMEngine struct {
 	mu                  sync.RWMutex
 	dataDir             string
-	memTable            *memtable.MemTable
-	frozenMemTable      *memtable.MemTable
+	shards              []*Shard // independent write partitions
 	vlog                *VLogImpl
 	wal                 *WAL
 	unifiedMmap         *UnifiedMmap // unified mmap ring buffer (hot path)
@@ -46,7 +53,6 @@ type LSMEngine struct {
 	LastTS              uint64
 	minActiveSnapshotTS uint64
 	closed              atomic.Bool
-	memSize             int64
 	lastCommitCache     map[string]uint64
 	cacheMu             sync.RWMutex
 
@@ -79,34 +85,46 @@ func NewLSMEngine(dataDir string, opts ...WALOptions) (*LSMEngine, error) {
 		return nil, fmt.Errorf("failed to open vlog: %w", err)
 	}
 
-	walPath := filepath.Join(dataDir, "wal.log")
 	walOpts := DefaultWALOptions()
 	if len(opts) > 0 {
 		walOpts = opts[0]
 	}
-	var wal *WAL
-	if walOpts.GroupCommitEnabled {
-		wal, err = OpenWALWithOptions(walPath, walOpts)
-	} else {
-		wal, err = OpenWAL(walPath)
-	}
-	if err != nil {
-		errors.CloseWithLog(vlog, "vlog")
-		errors.CloseWithLog(manifest, "manifest")
-		return nil, fmt.Errorf("failed to open wal: %w", err)
-	}
+	shardCount := DefaultShardCount()
 
 	// Open unified mmap ring buffer (hot write path)
 	unifiedPath := filepath.Join(dataDir, "data.mmap")
 	unifiedMmap, err := OpenUnifiedMmap(unifiedPath)
 	if err != nil {
-		errors.CloseWithLog(wal, "wal")
 		errors.CloseWithLog(vlog, "vlog")
 		errors.CloseWithLog(manifest, "manifest")
 		return nil, fmt.Errorf("failed to open unified mmap: %w", err)
 	}
 
-	memTable := memtable.NewMemTable()
+	// Open one WAL per shard. Each shard gets its own WAL file (wal_<id>.log)
+	// with its own mutex and group-commit writer, removing the single-WAL
+	// serialization point that otherwise caps write throughput regardless of
+	// core count. See: HOT-01
+	shardWALs := make([]*WAL, shardCount)
+	for i := 0; i < shardCount; i++ {
+		walPath := filepath.Join(dataDir, fmt.Sprintf("wal_%d.log", i))
+		var wal *WAL
+		if walOpts.GroupCommitEnabled {
+			wal, err = OpenWALWithOptions(walPath, walOpts)
+		} else {
+			wal, err = OpenWAL(walPath)
+		}
+		if err != nil {
+			errors.CloseWithLog(unifiedMmap, "unified-mmap")
+			errors.CloseWithLog(vlog, "vlog")
+			errors.CloseWithLog(manifest, "manifest")
+			for j := 0; j < i; j++ {
+				errors.CloseWithLog(shardWALs[j], "wal")
+			}
+			return nil, fmt.Errorf("failed to open wal for shard %d: %w", i, err)
+		}
+		shardWALs[i] = wal
+	}
+
 	lastTS := uint64(1)
 
 	levels := make([][]*sstable.Reader, 10)
@@ -127,22 +145,38 @@ func NewLSMEngine(dataDir string, opts ...WALOptions) (*LSMEngine, error) {
 
 	engine := &LSMEngine{
 		dataDir:         dataDir,
-		memTable:        memTable,
+		shards:          make([]*Shard, shardCount),
 		vlog:            vlog,
-		wal:             wal,
 		unifiedMmap:     unifiedMmap,
 		manifest:        manifest,
 		vfs:             vfs,
 		levels:          levels,
 		LastTS:          lastTS,
-		memSize:         0,
 		lastCommitCache: make(map[string]uint64),
 	}
 
+	// Create one shard per core. Each shard owns an independent MemTable (and
+	// therefore an independent SkipList mutex) and an independent WAL (with its
+	// own mutex and group-commit writer), enabling concurrent writes to scale
+	// across cores. See: HOT-01
+	for i := range engine.shards {
+		engine.shards[i] = NewShard(i)
+		engine.shards[i].wal = shardWALs[i]
+	}
+	// Backward-compatible handle: e.wal points to shard 0's WAL. Kept for
+	// callers (e.g. benchmarks/tests) that flush a single WAL; production
+	// writes go through the shard-local WAL.
+	engine.wal = shardWALs[0]
+
 	engine.InvalidateVLogPointers()
-	if err := recoverFromWAL(engine.wal, engine.memTable, engine.vlog); err != nil {
-		errors.CloseWithLog(engine, "engine")
-		return nil, fmt.Errorf("failed to recover from wal: %w", err)
+	// Recover each shard's WAL into that shard's MemTable. Each shard only
+	// replayed entries that were routed to it, so recovery preserves the
+	// sharding layout across restarts. See: REC-01, HOT-01
+	for _, shard := range engine.shards {
+		if err := recoverFromWAL(shard.wal, shard.memTable, engine.vlog); err != nil {
+			errors.CloseWithLog(engine, "engine")
+			return nil, fmt.Errorf("failed to recover from wal for shard %d: %w", shard.id, err)
+		}
 	}
 
 	// Start background tasks
@@ -189,17 +223,29 @@ func (e *LSMEngine) flushWorker() {
 		case <-e.stopCh:
 			return
 		case <-e.flushTicker.C:
-			// CRITICAL: Use atomic.LoadInt64 — e.memSize is written via atomic.AddInt64
-			// in PutWithTS/DeleteWithTS. Plain read is a data race.
-			// See: SYMPTOM-02
-			size := atomic.LoadInt64(&e.memSize)
-
-			if size > MaxMemTableSize {
-				select {
-				case e.flushCh <- struct{}{}:
-				default:
+			// Check every shard's MemTable size. We trigger a flush when the
+			// shard's arena has grown past MaxMemTableSize OR when the logical
+			// byte counter crosses the watermark. The arena is now block-aligned
+			// at 4 MB, so SizeBytes reflects real occupancy and prevents the
+			// arena from silently holding hundreds of MB before a flush.
+			// See: SYMPTOM-02, SYMPTOM-03, HOT-01, PERF-01
+			e.mu.RLock()
+			for _, shard := range e.shards {
+				mt := shard.memTable
+				if mt == nil {
+					continue
+				}
+				if shard.memSizeLoad() > MaxMemTableSize ||
+					int64(mt.SizeBytes()) > MaxMemTableSize {
+					e.mu.RUnlock()
+					select {
+					case e.flushCh <- struct{}{}:
+					default:
+					}
+					break
 				}
 			}
+			e.mu.RUnlock()
 		case <-e.flushCh:
 			if err := e.flushMemTable(); err != nil {
 				logger.Warn("flush failed: %v", err)
@@ -296,7 +342,14 @@ func (e *LSMEngine) PutWithTS(key, value []byte, commitTS uint64) error {
 		storedValue = inlineValue
 	}
 
-	// For small values: write to WAL (still needed for durability)
+	// Route this key to its shard. The shard owns both the WAL and the MemTable,
+	// so the WAL write and the MemTable Put hit the SAME shard, never a global
+	// lock. Concurrent writes with different keys touch different shard WALs
+	// (different mutexes) AND different SkipList mutexes — removing both global
+	// serialization points. See: HOT-01
+	shard := e.shard(key)
+
+	// For small values: write to the shard-local WAL (still needed for durability)
 	// For large values: WAL write is ELIMINATED — data is already in unified mmap
 	if !isLarge {
 		walEntry := newWalEntry()
@@ -306,7 +359,7 @@ func (e *LSMEngine) PutWithTS(key, value []byte, commitTS uint64) error {
 		walEntry.Timestamp = commitTS
 		walEntry.IsLarge = false
 
-		if err := e.wal.Write(walEntry); err != nil {
+		if err := shard.wal.Write(walEntry); err != nil {
 			putWalEntry(walEntry)
 			return fmt.Errorf("failed to write to wal: %w", err)
 		}
@@ -314,15 +367,15 @@ func (e *LSMEngine) PutWithTS(key, value []byte, commitTS uint64) error {
 	}
 
 	// CRITICAL: Protect memTable access with RLock to prevent race with flushMemTable.
-	// flushMemTable holds Lock (exclusive) while swapping e.memTable.
+	// flushMemTable holds Lock (exclusive) while swapping a shard's memTable.
 	// RLock ensures we see a stable pointer — either the old MemTable (before swap)
 	// or the new one (after swap), never a half-swapped state.
 	// WAL write is done BEFORE the lock to avoid I/O under RLock.
-	// See: SYMPTOM-01, SYMPTOM-03
+	// See: SYMPTOM-01, SYMPTOM-03, HOT-01
 	e.mu.RLock()
-	e.memTable.Put(mvccKey, storedValue)
+	shard.memTable.Put(mvccKey, storedValue)
 	e.mu.RUnlock()
-	atomic.AddInt64(&e.memSize, int64(len(key)+len(value)))
+	atomic.AddInt64(&shard.memSize, int64(len(key)+len(value)))
 	e.updateLastCommitCache(key, commitTS)
 
 	return nil
@@ -335,37 +388,55 @@ func (e *LSMEngine) WriteAtomicBatch(data []byte, commitTS uint64) error {
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	walEntry := newWalEntry()
-	walEntry.Op = OpBatch
-	walEntry.Key = nil
-	walEntry.Value = data
-	walEntry.Timestamp = commitTS
-	walEntry.IsLarge = false
-	if err := e.wal.Write(walEntry); err != nil {
-		putWalEntry(walEntry)
-		return fmt.Errorf("failed to write batch to wal: %w", err)
-	}
-	putWalEntry(walEntry)
-	// Decode and apply each operation to the memtable
+	// Decode ops once to determine which shards are affected by this batch.
 	ops, err := decodeBatchLocal(data)
 	if err != nil {
 		return fmt.Errorf("failed to decode batch: %w", err)
 	}
-	var totalSize int64
+
+	// Write the full batch to each affected shard's WAL. A batch may span
+	// multiple shards; writing it to every affected shard's WAL guarantees that
+	// recovery replays the whole batch into the correct shards.
+	// See: HOT-01, REC-01
+	affected := make(map[int]struct{}, len(ops))
+	for _, op := range ops {
+		affected[e.shardIndex(op.Key)] = struct{}{}
+	}
+	for idx := range affected {
+		walEntry := newWalEntry()
+		walEntry.Op = OpBatch
+		walEntry.Key = nil
+		walEntry.Value = data
+		walEntry.Timestamp = commitTS
+		walEntry.IsLarge = false
+		if err := e.shards[idx].wal.Write(walEntry); err != nil {
+			putWalEntry(walEntry)
+			return fmt.Errorf("failed to write batch to wal: %w", err)
+		}
+		putWalEntry(walEntry)
+	}
+
+	// Track memSize growth per shard so each shard's watermark stays accurate
+	// for the flush worker. Batch path is cold (already allocates during decode),
+	// so a small map is acceptable here. See: HOT-01, PERF-01
+	shardDeltas := make(map[int]int64, len(ops))
 	for _, op := range ops {
 		mvccKey := mvcc.NewMVCCKey(op.Key, commitTS)
+		shard := e.shard(op.Key)
 		if op.IsDelete {
 			// CRITICAL: Delete requires both Put(nil) AND Delete() to set deleted flag.
 			// DeleteWithTS ensures tombstone is correctly marked as deleted.
 			// See: PROMPT-TOMBSTONE-BATCH-FIX
-			e.memTable.DeleteWithTS(mvccKey)
+			shard.memTable.DeleteWithTS(mvccKey)
 		} else {
-			e.memTable.Put(mvccKey, op.Value)
-			totalSize += int64(len(op.Key) + len(op.Value))
+			shard.memTable.Put(mvccKey, op.Value)
+			shardDeltas[e.shardIndex(op.Key)] += int64(len(op.Key) + len(op.Value))
 		}
 		e.updateLastCommitCache(op.Key, commitTS)
 	}
-	atomic.AddInt64(&e.memSize, totalSize)
+	for idx, delta := range shardDeltas {
+		atomic.AddInt64(&e.shards[idx].memSize, delta)
+	}
 	return nil
 }
 
@@ -375,24 +446,27 @@ func (e *LSMEngine) GetWithTS(key []byte, snapshotTS uint64) ([]byte, error) {
 		return nil, fmt.Errorf("engine closed")
 	}
 
-	// CRITICAL: Copy MemTable pointer under RLock, then release lock before SSTable scan.
+	// CRITICAL: Copy MemTable pointers under RLock, then release lock before SSTable scan.
 	// Holding RLock during SSTable scan starves flushMemTable (needs Lock).
 	// This also prevents the transaction hang (SYMPTOM-04) where 16 goroutines
 	// hold RLock while iterating many SSTables.
-	// See: SYMPTOM-04
+	// A key may live in any shard's active or frozen MemTable, so we scan all of them.
+	// See: SYMPTOM-04, HOT-01
 	mvccKey := mvcc.NewMVCCKey(key, snapshotTS)
 
 	e.mu.RLock()
-	mt := e.memTable
-	e.mu.RUnlock()
-
-	if mt != nil {
-		val, found := mt.Get(mvccKey)
-		if found {
+	for _, shard := range e.shards {
+		mt := shard.memTable
+		if mt == nil {
+			continue
+		}
+		if val, found := mt.Get(mvccKey); found {
+			e.mu.RUnlock()
 			decoded, err := e.decodeStoredValue(val, false)
 			return decoded, err
 		}
 	}
+	e.mu.RUnlock()
 
 	// Scan SSTables under RLock — this is fast (index lookup, not full scan).
 	// If this becomes a bottleneck, we can snapshot the levels slice too.
@@ -429,15 +503,16 @@ func (e *LSMEngine) GetLatestInfo(key []byte) ([]byte, uint64, bool, error) {
 
 	// CRITICAL: Copy MemTable pointers under RLock, then release lock.
 	// Holding RLock during SSTable scan starves flushMemTable.
-	// See: SYMPTOM-04
+	// A key may live in any shard's active or frozen MemTable, so we scan all.
+	// See: SYMPTOM-04, HOT-01
 	e.mu.RLock()
-	mt := e.memTable
-	frozen := e.frozenMemTable
-	e.mu.RUnlock()
-
-	if mt != nil {
-		val, ts, found := mt.GetLatest(key)
+	for _, shard := range e.shards {
+		if shard.memTable == nil {
+			continue
+		}
+		val, ts, found := shard.memTable.GetLatest(key)
 		if ts > 0 {
+			e.mu.RUnlock()
 			// Key found in memtable (either live or deleted).
 			// If found=true, it's a live value. If found=false, it's a tombstone.
 			if found {
@@ -447,17 +522,19 @@ func (e *LSMEngine) GetLatestInfo(key []byte) ([]byte, uint64, bool, error) {
 			// Tombstone — key is deleted, return nil with the tombstone TS.
 			return nil, ts, false, nil
 		}
-	}
-	if frozen != nil {
-		val, ts, found := frozen.GetLatest(key)
-		if ts > 0 {
-			if found {
-				decoded, err := e.decodeStoredValue(val, false)
-				return decoded, ts, true, err
+		if shard.frozenMemTable != nil {
+			val, ts, found = shard.frozenMemTable.GetLatest(key)
+			if ts > 0 {
+				e.mu.RUnlock()
+				if found {
+					decoded, err := e.decodeStoredValue(val, false)
+					return decoded, ts, true, err
+				}
+				return nil, ts, false, nil
 			}
-			return nil, ts, false, nil
 		}
 	}
+	e.mu.RUnlock()
 
 	// Search SSTables (already O(log N) via block index)
 	e.mu.RLock()
@@ -529,27 +606,41 @@ func (e *LSMEngine) DeleteWithTS(key []byte, commitTS uint64) error {
 	walEntry.Value = nil
 	walEntry.Timestamp = commitTS
 	walEntry.IsLarge = false
-	if err := e.wal.Write(walEntry); err != nil {
+	// Route the tombstone to the SAME shard that owns the value. The shard owns
+	// both the WAL and the MemTable, so the WAL write and the MemTable Delete
+	// hit the same shard, ensuring recovery replays both Put and Delete into the
+	// same shard. See: HOT-01, REC-01
+	shard := e.shard(key)
+	if err := shard.wal.Write(walEntry); err != nil {
 		putWalEntry(walEntry)
 		return fmt.Errorf("failed to write to wal: %w", err)
 	}
 	putWalEntry(walEntry)
 	mvccKey := mvcc.NewMVCCKey(key, commitTS)
 	// CRITICAL: Protect memTable access with RLock to prevent race with flushMemTable.
-	// See: SYMPTOM-01, SYMPTOM-03
+	// See: SYMPTOM-01, SYMPTOM-03, HOT-01
 	e.mu.RLock()
-	e.memTable.DeleteWithTS(mvccKey)
+	shard.memTable.DeleteWithTS(mvccKey)
 	e.mu.RUnlock()
-	atomic.AddInt64(&e.memSize, -int64(len(key)))
+	atomic.AddInt64(&shard.memSize, -int64(len(key)))
 	e.updateLastCommitCache(key, commitTS)
 	return nil
 }
 
-// ActiveMemTable returns the active MemTable.
-func (e *LSMEngine) ActiveMemTable() *memtable.MemTable { return e.memTable }
+// ActiveMemTable returns the active MemTable of shard 0.
+// NOTE: With sharding, there is one active MemTable per shard. This accessor is
+// retained for backwards compatibility with callers (e.g. tests) that assume a
+// single MemTable; production reads scan every shard via GetWithTS/GetLatestInfo.
+// See: HOT-01
+func (e *LSMEngine) ActiveMemTable() *memtable.MemTable {
+	return e.shards[0].memTable
+}
 
-// FrozenMemTable returns the frozen MemTable.
-func (e *LSMEngine) FrozenMemTable() *memtable.MemTable { return e.frozenMemTable }
+// FrozenMemTable returns the frozen MemTable of shard 0, or nil if none is
+// being flushed. Retained for backwards compatibility. See: HOT-01
+func (e *LSMEngine) FrozenMemTable() *memtable.MemTable {
+	return e.shards[0].frozenMemTable
+}
 
 // SetMinActiveSnapshotTS sets the minimum active snapshot timestamp.
 func (e *LSMEngine) SetMinActiveSnapshotTS(ts uint64) {
@@ -568,10 +659,15 @@ func (e *LSMEngine) Shutdown() error {
 
 	var errs []error
 
-	// Close MemTable
+	// Close all shard MemTables (active + frozen)
 	e.mu.Lock()
-	if e.memTable != nil {
-		e.memTable.Close()
+	for _, shard := range e.shards {
+		if shard.memTable != nil {
+			shard.memTable.Close()
+		}
+		if shard.frozenMemTable != nil {
+			shard.frozenMemTable.Close()
+		}
 	}
 	e.mu.Unlock()
 
@@ -601,9 +697,15 @@ func (e *LSMEngine) Shutdown() error {
 		}
 	}
 
-	// Close WAL
-	if err := e.wal.Close(); err != nil {
-		errs = append(errs, err)
+	// Close all shard WALs (DEF-12). Each shard owns an independent WAL file;
+	// closing only e.wal (the shard 0 handle) leaks the rest and prevents their
+	// group-commit goroutines from stopping cleanly.
+	for _, shard := range e.shards {
+		if shard.wal != nil {
+			if err := shard.wal.Close(); err != nil {
+				errs = append(errs, err)
+			}
+		}
 	}
 
 	// Close Manifest
@@ -629,9 +731,14 @@ func (e *LSMEngine) Close() error {
 	e.stopBackgroundTasks()
 	var errs []error
 
-	// Close MemTable
-	if e.memTable != nil {
-		e.memTable.Close()
+	// Close all shard MemTables (active + frozen)
+	for _, shard := range e.shards {
+		if shard.memTable != nil {
+			shard.memTable.Close()
+		}
+		if shard.frozenMemTable != nil {
+			shard.frozenMemTable.Close()
+		}
 	}
 
 	// Close SSTable readers
@@ -654,9 +761,15 @@ func (e *LSMEngine) Close() error {
 		}
 	}
 
-	// Close WAL
-	if err := e.wal.Close(); err != nil {
-		errs = append(errs, err)
+	// Close all shard WALs (DEF-12). Each shard owns an independent WAL file;
+	// closing only e.wal (the shard 0 handle) leaks the rest and prevents their
+	// group-commit goroutines from stopping cleanly.
+	for _, shard := range e.shards {
+		if shard.wal != nil {
+			if err := shard.wal.Close(); err != nil {
+				errs = append(errs, err)
+			}
+		}
 	}
 
 	// Close Manifest
@@ -669,6 +782,22 @@ func (e *LSMEngine) Close() error {
 	}
 	logger.Info("engine closed successfully")
 	return nil
+}
+
+// copyValue copies src into a fresh heap slice. It is used when a value slice
+// references mmap memory that may be unmapped concurrently (extendMmap / Close).
+// One allocation — large values are rare and not on the hot path (small values
+// are stored inline in the MemTable arena). See: DEF-18, Глава II, Глава VI.
+func copyValue(src []byte) []byte {
+	if len(src) == 0 {
+		if src == nil {
+			return nil
+		}
+		return []byte{}
+	}
+	dst := make([]byte, len(src))
+	copy(dst, src)
+	return dst
 }
 
 // decodeStoredValue decodes a stored value (inline, VLog pointer, or unified mmap pointer).
@@ -696,11 +825,23 @@ func (e *LSMEngine) decodeStoredValue(stored []byte, fromSSTable bool) ([]byte, 
 		}
 		// Check unified mmap first (v0.3.1+ hot path)
 		if e.unifiedMmap != nil && vp.Offset < e.unifiedMmap.Size() {
-			return e.unifiedMmap.ReadValue(uint64(vp.Offset), vp.Size)
+			// DEF-18 (use-after-munmap): ReadValue now returns a heap copy made
+			// under um.mu, so the returned slice is safe even if extendMmap()
+			// remaps the region after the lock is released. No further copy here.
+			val, err := e.unifiedMmap.ReadValue(uint64(vp.Offset), vp.Size)
+			if err != nil {
+				return nil, err
+			}
+			return val, nil
 		}
 		// Fall back to VLog (legacy path)
 		if vp.Offset+int64(vp.Size)+8 <= e.vlog.Size() {
-			return e.vlog.ReadDirect(vp)
+			val, err := e.vlog.ReadDirect(vp)
+			if err != nil {
+				return nil, err
+			}
+			// DEF-18: same copy for VLog mmap (extendMmap unmaps the old region).
+			return copyValue(val), nil
 		}
 		return stored, nil
 	}
