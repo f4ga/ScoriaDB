@@ -71,7 +71,18 @@ type mergeIterator struct {
 
 // NewMergeIterator creates a merge iterator from all available sources.
 // Allocations: O(number_of_sources), not O(number_of_entries).
+//
+// DEF-B5 INVARIANT: e.levels and e.shards are mutated by flushMemTable /
+// compactLevel0 under e.mu.Lock. This function snapshots them under RLock so
+// reads are never racing a concurrent write. Prefer NewMergeIteratorWithSnapshot
+// (via Scan) for hot paths that must not hold the engine lock while iterating.
 func NewMergeIterator(e *LSMEngine, prefix []byte) *mergeIterator {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+
+	// Snapshot the levels and shard MemTable pointers under RLock. The readers
+	// are ref-counted, so a concurrent compaction cannot close one mid-iteration;
+	// the snapshotted slices are detached from the engine's live slices.
 	sources := 2
 	for _, level := range e.levels {
 		sources += len(level)
@@ -84,21 +95,34 @@ func NewMergeIterator(e *LSMEngine, prefix []byte) *mergeIterator {
 			sources++
 		}
 	}
+
+	mtList := make([]*memtable.MemTable, 0, len(e.shards)*2)
+	for _, shard := range e.shards {
+		if shard.memTable != nil {
+			mtList = append(mtList, shard.memTable)
+		}
+		if shard.frozenMemTable != nil {
+			mtList = append(mtList, shard.frozenMemTable)
+		}
+	}
+	levels := make([][]*sstable.Reader, len(e.levels))
+	for i, level := range e.levels {
+		levelCopy := make([]*sstable.Reader, len(level))
+		copy(levelCopy, level)
+		levels[i] = levelCopy
+	}
+	e.mu.RUnlock()
+
 	mi := &mergeIterator{
 		heap:   make(iterHeap, 0, sources),
 		engine: e,
 	}
-
-	// Every shard contributes its active and (during flush) frozen MemTable.
-	for _, shard := range e.shards {
-		if shard.memTable != nil {
-			mi.addSource(newMemtableIter(shard.memTable, prefix))
-		}
-		if shard.frozenMemTable != nil {
-			mi.addSource(newMemtableIter(shard.frozenMemTable, prefix))
+	for _, mt := range mtList {
+		if mt != nil {
+			mi.addSource(newMemtableIter(mt, prefix))
 		}
 	}
-	for _, level := range e.levels {
+	for _, level := range levels {
 		for _, sst := range level {
 			mi.addSource(newSSTableIter(sst, prefix))
 		}

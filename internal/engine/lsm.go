@@ -40,14 +40,19 @@ import (
 // All shards share the WAL, Manifest, VLog, and the SSTable level set. Reads
 // scan every shard's active/frozen MemTable plus the shared SSTables.
 type LSMEngine struct {
-	mu                  sync.RWMutex
-	dataDir             string
-	shards              []*Shard // independent write partitions
-	vlog                *VLogImpl
-	wal                 *WAL
-	unifiedMmap         *UnifiedMmap // unified mmap ring buffer (hot path)
-	manifest            *Manifest
-	vfs                 vfs.VFS
+	mu          sync.RWMutex
+	dataDir     string
+	shards      []*Shard // independent write partitions
+	vlog        *VLogImpl
+	wal         *WAL
+	unifiedMmap *UnifiedMmap // unified mmap ring buffer (hot path)
+	manifest    *Manifest
+	vfs         vfs.VFS
+	// levels is the shared LSM SSTable level set. DEF-B5 INVARIANT: every read of
+	// e.levels must happen under e.mu.RLock, and every mutation (flushMemTable
+	// append, compactLevel0 clear/append) under e.mu.Lock. Readers must snapshot
+	// the slices under RLock (see Scan / NewMergeIterator) and never hold pointers
+	// into the live slices after releasing the lock.
 	levels              [][]*sstable.Reader
 	LastTS              uint64
 	minActiveSnapshotTS uint64

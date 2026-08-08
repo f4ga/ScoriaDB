@@ -93,7 +93,16 @@ func (it *SSTableIterator) Next() bool {
 				return false
 			}
 
-			it.key = mvccKey
+			// DEF-B6: decodeMVCCKey returns mvccKey.Key as a slice into entryKey,
+			// which itself is a slice into blockData. blockData may come from the
+			// sync.Pool (released in nextBlock/Close) or from the mmap region
+			// (unmapped when the Reader is closed). If the caller holds the key
+			// beyond the current block, it becomes a use-after-free. The value is
+			// already deep-copied below, so deep-copy the key the same way.
+			keyCopy := make([]byte, len(mvccKey.Key))
+			copy(keyCopy, mvccKey.Key)
+			it.key = mvcc.MVCCKey{Key: keyCopy, Timestamp: mvccKey.Timestamp}
+
 			// Copy value since blockData may be from mmap or pool
 			val := make([]byte, len(entryVal))
 			copy(val, entryVal)

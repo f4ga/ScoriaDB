@@ -153,3 +153,61 @@ func TestUnifiedMmapRoundTrip(t *testing.T) {
 		readOffset += entryLen
 	}
 }
+
+// TestUnifiedMmapUnalignedCopy (DEF-B4) verifies WriteEntry correctly persists
+// keys/values whose payload offset is NOT 8-byte aligned. The previous
+// memcpyWordAligned performed unaligned 64-bit word reads which trigger SIGBUS
+// on ARM64. The fix uses the standard copy() (runtime memmove), which is safe
+// on all platforms. This test reproduces the unaligned-offset scenario with a
+// run of entries whose variable lengths place payloads at odd byte offsets.
+func TestUnifiedMmapUnalignedCopy(t *testing.T) {
+	dir := t.TempDir()
+	path := dir + "/data.mmap"
+
+	um, err := OpenUnifiedMmap(path)
+	if err != nil {
+		t.Fatalf("failed to open unified mmap: %v", err)
+	}
+	defer func() { _ = um.Close() }()
+
+	cases := []struct {
+		op  OpType
+		key []byte
+		val []byte
+		ts  uint64
+	}{
+		{OpPut, []byte("a"), []byte("b"), 1},
+		{OpPut, []byte("abc"), []byte("vwxyz"), 2},
+		{OpPut, []byte("abcde"), []byte("123"), 3},
+		{OpPut, []byte("abcdefg"), []byte("7654321"), 4},
+		{OpPut, []byte("abcdefghijklmno"), []byte("123456789"), 5},
+	}
+
+	for i, c := range cases {
+		if _, err := um.WriteEntry(c.op, c.key, c.val, c.ts); err != nil {
+			t.Fatalf("case %d WriteEntry failed: %v", i, err)
+		}
+	}
+
+	// Verify each entry round-trips correctly.
+	readOff := uint64(0)
+	for i, c := range cases {
+		entry, err := um.ReadEntry(readOff)
+		if err != nil {
+			t.Fatalf("case %d ReadEntry at %d failed: %v", i, readOff, err)
+		}
+		if entry.Op != c.op {
+			t.Errorf("case %d: op = %d, want %d", i, entry.Op, c.op)
+		}
+		if !bytes.Equal(entry.Key, c.key) {
+			t.Errorf("case %d: key = %q, want %q", i, entry.Key, c.key)
+		}
+		if !bytes.Equal(entry.Value, c.val) {
+			t.Errorf("case %d: value = %q, want %q", i, entry.Value, c.val)
+		}
+		if entry.Timestamp != c.ts {
+			t.Errorf("case %d: timestamp = %d, want %d", i, entry.Timestamp, c.ts)
+		}
+		readOff += uint64(1 + 1 + 8 + 2 + 4 + len(entry.Key) + len(entry.Value) + 4)
+	}
+}

@@ -192,12 +192,14 @@ func (um *UnifiedMmap) WriteEntry(op OpType, key, value []byte, timestamp uint64
 	binary.BigEndian.PutUint32(um.data[offset+uint64(pos):offset+uint64(pos)+4], uint32(valLen))
 	pos += 4
 
-	// Key (variable) — word-aligned copy
-	memcpyWordAligned(unsafe.Add(dst, pos), unsafe.Pointer(unsafe.SliceData(key)), keyLen)
+	// Key (variable) — standard copy (runtime memmove is safe on all platforms,
+	// including ARM64 where unaligned word reads in memcpyWordAligned could
+	// trigger SIGBUS). See DEF-B4.
+	copy(um.data[offset+uint64(pos):offset+uint64(pos)+uint64(keyLen)], key)
 	pos += uintptr(keyLen)
 
-	// Value (variable) — word-aligned copy
-	memcpyWordAligned(unsafe.Add(dst, pos), unsafe.Pointer(unsafe.SliceData(value)), valLen)
+	// Value (variable) — standard copy. See DEF-B4.
+	copy(um.data[offset+uint64(pos):offset+uint64(pos)+uint64(valLen)], value)
 	pos += uintptr(valLen)
 
 	// CRC32 (4 bytes) — computed on the written data; order-independent.
@@ -366,26 +368,7 @@ func (um *UnifiedMmap) extendMmap(neededSize int64) error {
 	return nil
 }
 
-// ============================================================
-// Zero-Bounds-Check memcpy — Direct uint64 Word Copy
-// ============================================================
-//
-// Replaces Go's runtime.memmove (which does bounds checking)
-// with a direct word-by-word copy using unsafe pointers.
-//
-// For 4KB values, this saves ~10-15ns per call by eliminating
-// the bounds check that Go's runtime performs on every copy().
-//
-//go:nosplit
-//go:nocheckptr
-func memcpyWordAligned(dst, src unsafe.Pointer, n int) {
-	// Copy word-by-word (8 bytes at a time) for maximum bus utilization
-	i := 0
-	for ; i+8 <= n; i += 8 {
-		*(*uint64)(unsafe.Add(dst, i)) = *(*uint64)(unsafe.Add(src, i))
-	}
-	// Handle remaining bytes (if any)
-	for ; i < n; i++ {
-		*(*byte)(unsafe.Add(dst, i)) = *(*byte)(unsafe.Add(src, i))
-	}
-}
+// memcpyWordAligned was removed in DEF-B4. It performed unaligned 64-bit reads
+// which trigger SIGBUS on ARM64 when the source offset is not 8-byte aligned.
+// The callers now use the standard copy() (runtime memmove), which is safe on
+// all platforms and handles alignment internally.
