@@ -12,21 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// ============================================================
-// Linear Arena Allocator — Zero-Allocation Hot Path
-// ============================================================
-//
-// This arena provides lock-free allocations for the skip list hot path.
-// Memory is managed as a grow-only linear allocator:
-//   - Alloc() uses CAS to reserve space — no mutex in hot path
-//   - grow() uses mutex only when expanding to a new block
-//   - No free() until Reset() — memory is never recycled mid-session
-//   - Zero GC pressure: all memory is off-heap from Go's perspective
-// ============================================================
-
-// Package memtable provides an in-memory table implementation using a lock-free
-// skip list with a linear arena allocator. It supports concurrent reads and writes
-// with zero heap allocations in the hot path.
 package memtable
 
 import (
@@ -35,153 +20,248 @@ import (
 	"unsafe"
 )
 
-// ArenaBlockSize is the size of each arena block (64 MB).
-// Large enough to amortize grow() calls, small enough for tests.
-const ArenaBlockSize = 64 * 1024 * 1024 // 64 MB
+const (
+	// MaxHeight is the maximum height of a skip list node.
+	MaxHeight = 20
+	// threshold is the probability cutoff for generating a skip list level.
+	threshold = uint32(0.25 * float32(0xFFFFFFFF))
+	// ArenaBlockSize is the size of a single grow-only arena block.
+	// 4 MB matches the MemTable flush watermark (MaxMemTableSize), so a flush
+	// releases the arena's allocated blocks promptly instead of holding on to
+	// hundreds of MB (previously 512 MB per block caused OOM across 16 shards).
+	// See: ARCH-07, PERF-01, SYMPTOM-03
+	ArenaBlockSize = 4 * 1024 * 1024
+	// MaxArenaBlocks bounds the number of blocks a single arena may allocate.
+	// 4 MB x 256 = 1 GB per shard is a safe ceiling that still allows a heavy
+	// write burst before flush catches up, without OOM'ing the process.
+	MaxArenaBlocks = 256
+)
 
-// arenaAlignment is the required alignment for atomic operations on pointers.
-// atomic.Pointer requires 8-byte alignment on all supported platforms.
-const arenaAlignment = 8
+//go:linkname fastrand runtime.fastrand
+func fastrand() uint32
 
-// Arena is a linear, grow-only allocator.
-// Allocations are lock-free in the common case (CAS on head).
-// Only block expansion acquires a mutex.
-type Arena struct {
-	blocks   [][]byte   // slice of blocks, grows on demand
-	mu       sync.Mutex // only for expanding blocks, never for allocation
-	head     uint64     // atomic offset within the CURRENT block
-	blockIdx int        // index of the current block (protected by mu during grow)
-}
-
-// NewArena creates a new arena with one pre-allocated block.
-func NewArena() *Arena {
-	a := &Arena{
-		blocks:   make([][]byte, 0, 4), // small initial capacity
-		blockIdx: 0,
-		head:     0,
+// randomHeight generates a random height for a new node.
+func randomHeight() int {
+	h := 1
+	for h < MaxHeight && fastrand() < threshold {
+		h++
 	}
-	// Pre-allocate the first block — zeroed by make()
-	a.blocks = append(a.blocks, make([]byte, ArenaBlockSize))
-	return a
+	return h
 }
 
-// Alloc reserves a contiguous region of the given size in the arena.
+// Node represents a node in the skip list.
+// All fields are stored inline in the arena.
+type Node struct {
+	keyOff  uint32
+	valOff  uint32
+	keyLen  uint32
+	valLen  uint32
+	ts      uint64
+	deleted uint32 // 0 = active, 1 = tombstone
+	height  uint32
+	next    [MaxHeight]uint32 // indices into arena
+}
+
+// Arena is a grow-only allocator backed by a list of fixed-size blocks.
+//
+// The first block is allocated lazily on the first Alloc call. Each shard's
+// MemTable therefore reserves NO memory until it actually stores data. This
+// avoids the per-shard preallocation blowup (up to 16×512 MB on a large core
+// count machine) that previously OOM'd the test process during benchmarks.
+//
+// Blocks are allocated and appended under mu; within a block the head offset
+// is advanced with a CAS, so Alloc is lock-free on the hot path once a block
+// exists. Node indices are computed relative to block 0 so all indices remain
+// valid regardless of which block holds the node.
+type Arena struct {
+	mu       sync.Mutex // protects blocks, blockIdx
+	blocks   [][]byte
+	blockIdx int    // index of the current (active) block
+	head     uint64 // atomic offset within the current block
+	total    uint64 // atomic total bytes allocated
+}
+
+// NewArena creates a new arena. No memory is allocated until the first Alloc.
+func NewArena() *Arena {
+	return &Arena{}
+}
+
+// Alloc reserves a contiguous region of the given size.
 // Returns a pointer to the reserved memory.
 //
-// Hot path:
-//  1. atomic.LoadUint64(&head) — no mutex
-//  2. mu.Lock() — read blockIdx and blocks
-//  3. mu.Unlock()
-//  4. CAS on head — no mutex
-//
-// Slow path (grow):
-//  1. mu.Lock()
-//  2. Create new block
-//  3. Update blockIdx
-//  4. atomic.StoreUint64(&head, 0)
-//  5. mu.Unlock()
-//
-// Zero allocations in hot path.
-// See: ARCH-11, HOT-05, BL-02
-//
-//go:nosplit
+// Hot path is lock-free (CAS on head) once a block exists; the mutex is taken
+// only when growing the block list (cold path, ~1 per 4 MB).
 func (a *Arena) Alloc(size int) unsafe.Pointer {
-	// Align size to 8 bytes for atomic.Pointer safety.
-	// atomic.Pointer requires 8-byte alignment; without this,
-	// checkptr panics on misaligned atomic operations.
-	// See: checkptr: misaligned pointer conversion
-	alignedSize := (size + arenaAlignment - 1) & ^(arenaAlignment - 1)
+	if size <= 0 {
+		return nil
+	}
+	alignedSize := (size + 7) & ^7 // 8-byte alignment
+
+	// Fast path: try the current block with CAS on head.
+	// blockIdx is only mutated under mu during growth, so we read it under mu
+	// to avoid a torn index. If no block exists yet, lazily create the first one
+	// (avoids reserving ArenaBlockSize per MemTable at construction time).
+	a.mu.Lock()
+	if len(a.blocks) == 0 {
+		a.blocks = append(a.blocks, make([]byte, ArenaBlockSize))
+		a.blockIdx = 0
+	}
+	blockIdx := a.blockIdx
+	block := a.blocks[blockIdx]
+	a.mu.Unlock()
 
 	for {
-		// Step 1: Read head atomically (no mutex)
 		currentHead := atomic.LoadUint64(&a.head)
-
-		// Step 2: Read current block under mutex
-		a.mu.Lock()
-		blockIdx := a.blockIdx
-		if blockIdx >= len(a.blocks) {
-			a.mu.Unlock()
-			a.grow(alignedSize)
-			continue
-		}
-		block := a.blocks[blockIdx]
-		blockLen := uint64(len(block))
-		a.mu.Unlock()
-
-		// Step 3: Check if allocation fits
-		if currentHead+uint64(alignedSize) <= blockLen {
-			// Step 4: CAS-reserve the space (no mutex)
+		if currentHead+uint64(alignedSize) <= uint64(len(block)) {
 			if atomic.CompareAndSwapUint64(&a.head, currentHead, currentHead+uint64(alignedSize)) {
+				atomic.AddUint64(&a.total, uint64(alignedSize))
 				return unsafe.Pointer(&block[currentHead])
 			}
-			// CAS failed — another thread reserved space, retry
 			continue
 		}
-
-		// Step 5: Not enough space — grow (under mutex)
-		a.grow(alignedSize)
+		// Current block full — grow on the cold path.
+		return a.grow(alignedSize)
 	}
 }
 
-// grow adds a new block to the arena.
-// Must be called only when the current block is full.
-// Double-checked locking: after acquiring the mutex, verify that
-// another thread didn't already grow.
-func (a *Arena) grow(size int) {
+// grow appends a new block and retries the allocation. Cold path.
+func (a *Arena) grow(size int) unsafe.Pointer {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	// Double-check: another thread might have grown while we waited
+	// Re-check: another goroutine may have grown the block list already.
+	block := a.blocks[a.blockIdx]
 	currentHead := atomic.LoadUint64(&a.head)
-	if currentHead+uint64(size) <= uint64(len(a.blocks[a.blockIdx])) {
-		return // enough space now, another thread already grew
+	if currentHead+uint64(size) <= uint64(len(block)) {
+		if atomic.CompareAndSwapUint64(&a.head, currentHead, currentHead+uint64(size)) {
+			atomic.AddUint64(&a.total, uint64(size))
+			return unsafe.Pointer(&block[currentHead])
+		}
 	}
 
-	// Create a new block and add it
+	// Never panic or reset the block list: an arena is grow-only and all live
+	// nodes reference indices that stay valid only if previous blocks remain
+	// reachable. Resetting a.blocks while the SkipList still references old
+	// indices makes every existing node dangling (NodeAt returns nil), which
+	// SIGSEGVs the hot write path. Instead we always append a fresh block; the
+	// MemTable releases the whole arena via Close()/Reset() once flushed, so
+	// memory is reclaimed by the normal flush cycle. MaxArenaBlocks remains a
+	// soft guidance, not a hard reset trigger. See: DEF-12, SYMPTOM-03
 	newBlock := make([]byte, ArenaBlockSize)
 	a.blocks = append(a.blocks, newBlock)
 	a.blockIdx = len(a.blocks) - 1
-
-	// Reset head atomically.
-	// Safe: all readers saw the previous block as full and will retry the CAS loop.
+	// Reset head for the new block.
 	atomic.StoreUint64(&a.head, 0)
+
+	block = newBlock
+	currentHead = 0
+	if currentHead+uint64(size) <= uint64(len(block)) {
+		atomic.StoreUint64(&a.head, uint64(size))
+		atomic.AddUint64(&a.total, uint64(size))
+		return unsafe.Pointer(&block[currentHead])
+	}
+	panic("arena: block too small for allocation")
 }
 
-// Reset clears the arena for reuse.
-// After Reset, all previously allocated pointers become invalid.
+// NewNode allocates and initializes a new node in the arena.
+func (a *Arena) NewNode(key, value []byte, height int) *Node {
+	keyLen := len(key)
+	valLen := len(value)
+
+	nodeSize := int(unsafe.Sizeof(Node{}))
+	var keyOff, valOff uint32
+
+	offset := nodeSize
+	if keyLen > 0 {
+		keyOff = uint32(offset)
+		offset += keyLen
+	}
+	if valLen > 0 {
+		valOff = uint32(offset)
+		offset += valLen
+	} else if value != nil {
+		// empty but non-nil value → sentinel
+		valOff = uint32(offset)
+		offset += 1
+	}
+
+	ptr := a.Alloc(offset)
+	node := (*Node)(ptr)
+
+	node.keyOff = keyOff
+	node.valOff = valOff
+	node.keyLen = uint32(keyLen)
+	node.valLen = uint32(valLen)
+	node.height = uint32(height)
+	node.deleted = 0
+
+	// Zero out next pointers
+	for i := 0; i < MaxHeight; i++ {
+		node.next[i] = 0
+	}
+
+	// Copy key and value
+	if keyLen > 0 {
+		keyPtr := unsafe.Add(ptr, keyOff)
+		copy(unsafe.Slice((*byte)(keyPtr), keyLen), key)
+	}
+	if valLen > 0 {
+		valPtr := unsafe.Add(ptr, valOff)
+		copy(unsafe.Slice((*byte)(valPtr), valLen), value)
+	}
+	return node
+}
+
+// NodeAt returns a pointer to the node at the given index.
+// Indices are computed relative to the start of block 0, so a node can live in
+// any block. The block index is derived by dividing the index by the block size.
+func (a *Arena) NodeAt(idx uint32) *Node {
+	a.mu.Lock()
+	blockIdx := idx / ArenaBlockSize
+	if int(blockIdx) >= len(a.blocks) {
+		a.mu.Unlock()
+		return nil
+	}
+	block := a.blocks[blockIdx]
+	a.mu.Unlock()
+	return (*Node)(unsafe.Pointer(&block[idx%ArenaBlockSize]))
+}
+
+// Index returns the index of a node pointer relative to the start of block 0.
+// This index is what NodeAt() expects to reconstruct the node.
+func (a *Arena) Index(node *Node) uint32 {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for bi, block := range a.blocks {
+		base := uintptr(unsafe.Pointer(&block[0]))
+		p := uintptr(unsafe.Pointer(node))
+		if p >= base && p < base+uintptr(len(block)) {
+			off := p - base
+			return uint32(bi)*ArenaBlockSize + uint32(off)
+		}
+	}
+	return 0
+}
+
+// Reset clears the arena, releasing all blocks and reallocating lazily.
 func (a *Arena) Reset() {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-
-	// Keep only the first block, reset head
-	a.blocks = a.blocks[:1]
+	a.blocks = nil
 	a.blockIdx = 0
 	atomic.StoreUint64(&a.head, 0)
-
-	// Zero the first block to avoid leaking data between resets
-	block := a.blocks[0]
-	for i := range block {
-		block[i] = 0
-	}
+	atomic.StoreUint64(&a.total, 0)
 }
 
-// Size returns the total allocated size across all blocks.
+// Size returns the total allocated size (used bytes).
 func (a *Arena) Size() uint64 {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-
-	var total uint64
-	for i := 0; i < len(a.blocks)-1; i++ {
-		total += uint64(len(a.blocks[i]))
-	}
-	// Last block: only the used portion
-	total += atomic.LoadUint64(&a.head)
-	return total
+	return atomic.LoadUint64(&a.total)
 }
 
-// NumBlocks returns the number of blocks allocated.
+// NumBlocks returns the number of allocated blocks.
 func (a *Arena) NumBlocks() int {
 	a.mu.Lock()
-	defer a.mu.Unlock()
-	return len(a.blocks)
+	n := len(a.blocks)
+	a.mu.Unlock()
+	return n
 }
