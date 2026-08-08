@@ -63,7 +63,11 @@ func (e *LSMEngine) compactLevel0() error {
 	// Get minimum active snapshot timestamp
 	minActiveSnapshotTS := e.GetMinActiveSnapshotTS()
 
-	// Collect all key-value pairs from all iterators
+	// Collect all key-value pairs from all iterators.
+	// IMPORTANT: data from SSTable iterators may reference the mmap region.
+	// The SSTable file may be closed (mmap unmapped) before compaction finishes,
+	// so key and value bytes MUST be copied into engine-owned memory.
+	// See: Глава 14 — compaction must copy data out of mmap.
 	type kv struct {
 		key   mvcc.MVCCKey
 		value []byte
@@ -71,10 +75,16 @@ func (e *LSMEngine) compactLevel0() error {
 	var allKVs []kv
 	for _, iter := range iterators {
 		for iter.Next() {
-			key := iter.Key()
-			value := iter.Value()
+			srcKey := iter.Key()
+			srcVal := iter.Value()
+			// Deep-copy key bytes (Key is a slice into mmap)
+			k := make([]byte, len(srcKey.Key))
+			copy(k, srcKey.Key)
+			// Deep-copy value bytes (Value may be a slice into mmap)
+			v := make([]byte, len(srcVal))
+			copy(v, srcVal)
 			// Skip tombstones during collection (they will be handled during processing)
-			allKVs = append(allKVs, kv{key, value})
+			allKVs = append(allKVs, kv{mvcc.MVCCKey{Key: k, Timestamp: srcKey.Timestamp}, v})
 		}
 		iter.Close()
 	}
