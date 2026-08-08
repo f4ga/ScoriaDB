@@ -21,7 +21,6 @@ import (
 	"strings"
 
 	"github.com/f4ga/ScoriaDB/internal/engine"
-	"github.com/f4ga/ScoriaDB/internal/engine/vfs"
 	"github.com/f4ga/ScoriaDB/internal/errors"
 	"github.com/spf13/cobra"
 )
@@ -44,12 +43,9 @@ func inspectCmd(cmd *cobra.Command, args []string) error {
 	fmt.Printf("Inspecting database at: %s\n", dir)
 	fmt.Println(strings.Repeat("=", 50))
 
-	// Use default VFS
-	vfs := vfs.NewDefaultVFS()
-
 	// Open manifest
 	manifestPath := filepath.Join(dir, "MANIFEST")
-	manifest, err := engine.NewManifest(vfs, manifestPath)
+	manifest, err := engine.NewManifest(manifestPath)
 	if err != nil {
 		// If manifest doesn't exist, maybe it's a fresh database
 		fmt.Printf("MANIFEST not found or error: %v\n", err)
