@@ -81,9 +81,15 @@ type Arena struct {
 	total    uint64 // atomic total bytes allocated
 }
 
-// NewArena creates a new arena. No memory is allocated until the first Alloc.
+// NewArena creates a new arena with a single preallocated block. The first
+// block is allocated eagerly so callers (and tests) observe NumBlocks()==1 and
+// Alloc(0) returns a valid pointer immediately. Alloc remains lock-free on the
+// hot path once the current block exists. See: PERF-01.
 func NewArena() *Arena {
-	return &Arena{}
+	a := &Arena{}
+	a.blocks = append(a.blocks, make([]byte, ArenaBlockSize))
+	a.blockIdx = 0
+	return a
 }
 
 // Alloc reserves a contiguous region of the given size.
@@ -92,8 +98,11 @@ func NewArena() *Arena {
 // Hot path is lock-free (CAS on head) once a block exists; the mutex is taken
 // only when growing the block list (cold path, ~1 per 4 MB).
 func (a *Arena) Alloc(size int) unsafe.Pointer {
-	if size <= 0 {
+	if size < 0 {
 		return nil
+	}
+	if size == 0 {
+		size = 1 // Alloc(0) returns a valid pointer, not nil (see tests)
 	}
 	alignedSize := (size + 7) & ^7 // 8-byte alignment
 
@@ -243,11 +252,12 @@ func (a *Arena) Index(node *Node) uint32 {
 	return 0
 }
 
-// Reset clears the arena, releasing all blocks and reallocating lazily.
+// Reset clears the arena, releasing all blocks and reallocating a single fresh
+// block so the arena remains immediately usable (NumBlocks()==1, Alloc works).
 func (a *Arena) Reset() {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.blocks = nil
+	a.blocks = append([][]byte(nil), make([]byte, ArenaBlockSize))
 	a.blockIdx = 0
 	atomic.StoreUint64(&a.head, 0)
 	atomic.StoreUint64(&a.total, 0)
