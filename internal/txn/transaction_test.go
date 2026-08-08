@@ -21,6 +21,10 @@ import (
 // mockEngine implements Engine for testing.
 type mockEngine struct {
 	nextTS uint64
+	// minActiveSnapshotTS is the minimum TS among registered snapshots.
+	// Updated by RegisterSnapshot/UnregisterSnapshot. Not concurrency-safe; tests
+	// use it single-threaded.
+	minActiveSnapshotTS uint64
 }
 
 func (m *mockEngine) NextTimestamp() uint64 {
@@ -32,9 +36,19 @@ func (m *mockEngine) WriteAtomicBatch(data []byte, commitTS uint64) error {
 	return nil
 }
 
-func (m *mockEngine) RegisterSnapshot(snapshotTS uint64) {}
+func (m *mockEngine) RegisterSnapshot(snapshotTS uint64) {
+	if m.minActiveSnapshotTS == 0 || snapshotTS < m.minActiveSnapshotTS {
+		m.minActiveSnapshotTS = snapshotTS
+	}
+}
 
-func (m *mockEngine) UnregisterSnapshot(snapshotTS uint64) {}
+func (m *mockEngine) UnregisterSnapshot(snapshotTS uint64) {
+	// Single-transaction mock: only tracks a single min. When unregistering the
+	// min TS, reset to 0. Used to verify snapshot registration on Begin.
+	if m.minActiveSnapshotTS == snapshotTS {
+		m.minActiveSnapshotTS = 0
+	}
+}
 
 func (m *mockEngine) CheckConflict(key []byte, startTS uint64) (bool, error) {
 	return false, nil
@@ -132,5 +146,56 @@ func TestBeginWithNextTS(t *testing.T) {
 	}
 	if tx.StartTS() != 51 {
 		t.Errorf("expected startTS 51, got %d", tx.StartTS())
+	}
+}
+
+// TestTransactionSnapshotRegistration verifies that opening a transaction
+// registers its snapshot with the engine, and closing it (Commit or Rollback)
+// unregisters it. This guarantees compaction does not discard versions needed
+// by an active transaction.
+func TestTransactionSnapshotRegistration(t *testing.T) {
+	db := &mockEngine{nextTS: 0}
+
+	// Initially no active snapshots.
+	if min := db.minActiveSnapshotTS; min != 0 {
+		t.Fatalf("expected no active snapshot, got %d", min)
+	}
+
+	// Begin must register the snapshot.
+	tx := Begin(db, 100)
+	if min := db.minActiveSnapshotTS; min != 100 {
+		t.Errorf("expected minActiveSnapshotTS 100 after Begin, got %d", min)
+	}
+
+	// Commit must unregister the snapshot.
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("Commit failed: %v", err)
+	}
+	if min := db.minActiveSnapshotTS; min != 0 {
+		t.Errorf("expected minActiveSnapshotTS 0 after Commit, got %d", min)
+	}
+
+	// Begin again, then Rollback must also unregister.
+	tx2 := Begin(db, 200)
+	if min := db.minActiveSnapshotTS; min != 200 {
+		t.Errorf("expected minActiveSnapshotTS 200 after second Begin, got %d", min)
+	}
+	if err := tx2.Rollback(); err != nil {
+		t.Fatalf("Rollback failed: %v", err)
+	}
+	if min := db.minActiveSnapshotTS; min != 0 {
+		t.Errorf("expected minActiveSnapshotTS 0 after Rollback, got %d", min)
+	}
+
+	// BeginWithNextTS inherits registration via Begin.
+	tx3, err := BeginWithNextTS(db)
+	if err != nil {
+		t.Fatalf("BeginWithNextTS failed: %v", err)
+	}
+	if got := tx3.StartTS(); got != 1 {
+		t.Errorf("expected startTS 1, got %d", got)
+	}
+	if min := db.minActiveSnapshotTS; min != 1 {
+		t.Errorf("expected minActiveSnapshotTS 1 after BeginWithNextTS, got %d", min)
 	}
 }

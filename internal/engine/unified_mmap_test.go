@@ -154,7 +154,7 @@ func TestUnifiedMmapRoundTrip(t *testing.T) {
 	}
 }
 
-// TestUnifiedMmapUnalignedCopy (DEF-B4) verifies WriteEntry correctly persists
+// TestUnifiedMmapUnalignedCopy verifies WriteEntry correctly persists
 // keys/values whose payload offset is NOT 8-byte aligned. The previous
 // memcpyWordAligned performed unaligned 64-bit word reads which trigger SIGBUS
 // on ARM64. The fix uses the standard copy() (runtime memmove), which is safe

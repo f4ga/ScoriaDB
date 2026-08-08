@@ -510,5 +510,143 @@ func copyBytes(src []byte) []byte {
 	return dst
 }
 
+// ============================================================
+// Tombstone-aware test iterator for MVCCIterator tests
+// ============================================================
+
+// tombstoneIter is a test iterator that yields entries in (userKey, ascending
+// commitTS) order and reports IsDeleted() for tombstones (nil value).
+type tombstoneIter struct {
+	entries []struct{ key, value []byte }
+	pos     int
+	closed  bool
+}
+
+func newTombstoneIter(keys, values [][]byte) *tombstoneIter {
+	entries := make([]struct{ key, value []byte }, len(keys))
+	for i := range keys {
+		entries[i] = struct{ key, value []byte }{keys[i], values[i]}
+	}
+	return &tombstoneIter{entries: entries, pos: -1}
+}
+
+func (it *tombstoneIter) Next() bool {
+	if it.closed || it.pos+1 >= len(it.entries) {
+		return false
+	}
+	it.pos++
+	return true
+}
+
+func (it *tombstoneIter) Key() []byte {
+	if it.pos < 0 || it.pos >= len(it.entries) {
+		return nil
+	}
+	return it.entries[it.pos].key
+}
+
+func (it *tombstoneIter) Value() []byte {
+	if it.pos < 0 || it.pos >= len(it.entries) {
+		return nil
+	}
+	return it.entries[it.pos].value
+}
+
+func (it *tombstoneIter) Err() error   { return nil }
+func (it *tombstoneIter) Close() error { it.closed = true; return nil }
+func (it *tombstoneIter) IsDeleted() bool {
+	if it.pos < 0 || it.pos >= len(it.entries) {
+		return false
+	}
+	return it.entries[it.pos].value == nil
+}
+
+// TestMVCCIteratorTombstoneOrder verifies MVCCIterator correctly handles
+// tombstones that appear before or between live versions of the same user key:
+//   - [tombstone, live]     → the live version is returned (re-insert after delete).
+//   - [live, tombstone]     → the key is skipped (deleted last).
+//   - [live, tombstone, live] → the last live version is returned.
+//   - Multiple keys interleaved.
+func TestMVCCIteratorTombstoneOrder(t *testing.T) {
+	cases := []struct {
+		name     string
+		keys     [][]byte
+		values   [][]byte
+		wantKeys []string
+		wantVals []string
+	}{
+		{
+			name: "tombstone then live",
+			keys: [][]byte{[]byte("k"), []byte("k")},
+			// nil value = tombstone (oldest), then a live value (newest).
+			values:   [][]byte{nil, []byte("live")},
+			wantKeys: []string{"k"},
+			wantVals: []string{"live"},
+		},
+		{
+			name: "live then tombstone",
+			keys: [][]byte{[]byte("k"), []byte("k")},
+			// live (oldest), then tombstone (newest) — key is deleted.
+			values:   [][]byte{[]byte("v1"), nil},
+			wantKeys: nil,
+			wantVals: nil,
+		},
+		{
+			name: "live tombstone live",
+			keys: [][]byte{[]byte("k"), []byte("k"), []byte("k")},
+			// live, then tombstone, then live again — newest visible is live.
+			values:   [][]byte{[]byte("v1"), nil, []byte("v3")},
+			wantKeys: []string{"k"},
+			wantVals: []string{"v3"},
+		},
+		{
+			name: "multiple keys",
+			keys: [][]byte{
+				[]byte("a"), []byte("a"), // tombstone then live → "a"
+				[]byte("b"), []byte("b"), // live then tombstone → skip
+				[]byte("c"), []byte("c"), []byte("c"), // live, tombstone, live → "c2"
+			},
+			values: [][]byte{
+				nil, []byte("a-live"),
+				[]byte("b-v1"), nil,
+				[]byte("c-v1"), nil, []byte("c-v2"),
+			},
+			wantKeys: []string{"a", "c"},
+			wantVals: []string{"a-live", "c-v2"},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			inner := newTombstoneIter(tc.keys, tc.values)
+			it := NewMVCCIterator(inner)
+			defer it.Close()
+
+			var gotKeys, gotVals []string
+			for it.Next() {
+				gotKeys = append(gotKeys, string(it.Key()))
+				gotVals = append(gotVals, string(it.Value()))
+			}
+			if err := it.Err(); err != nil {
+				t.Fatalf("unexpected iterator error: %v", err)
+			}
+
+			if len(gotKeys) != len(tc.wantKeys) {
+				t.Fatalf("got %d keys %v, want %d keys %v",
+					len(gotKeys), gotKeys, len(tc.wantKeys), tc.wantKeys)
+			}
+			for i := range gotKeys {
+				if gotKeys[i] != tc.wantKeys[i] {
+					t.Errorf("key[%d]=%q, want %q", i, gotKeys[i], tc.wantKeys[i])
+				}
+				if gotVals[i] != tc.wantVals[i] {
+					t.Errorf("val[%d]=%q, want %q", i, gotVals[i], tc.wantVals[i])
+				}
+			}
+		})
+	}
+}
+
 // Ensure compile-time interface satisfaction
 var _ Iterator = (*testIter)(nil)
+var _ Iterator = (*tombstoneIter)(nil)

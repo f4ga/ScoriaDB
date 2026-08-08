@@ -575,7 +575,19 @@ func (r *Reader) Lookup(key mvcc.MVCCKey) ([]byte, bool) {
 		defer ReleaseBlock(blockData)
 	}
 
-	// Search for the key in the block
+	// Search for the key in the block.
+	//
+	// Within a block, versions of the same user key are stored oldest-first
+	// (ascending commitTS). For a snapshot we must return the NEWEST version
+	// with commitTS <= snapshotTS, so we scan the whole group and keep the
+	// last (newest) qualifying entry. If that newest visible version is a
+	// tombstone, the key is deleted for this snapshot.
+	snapshotTS := key.CommitTS()
+
+	var bestVal []byte
+	bestFound := false
+	bestTombstone := false
+
 	pos := 0
 	for pos < len(blockData) {
 		if pos+8 > len(blockData) {
@@ -602,34 +614,38 @@ func (r *Reader) Lookup(key mvcc.MVCCKey) ([]byte, bool) {
 
 		// Key found
 		if cmp == 0 {
-			// Check version visibility
-			if mvccKey.Timestamp >= key.Timestamp {
-				// A tombstone is either an empty value (legacy) or a single
-				// TypeTombstone tag byte (v0.4+). See DEF-02 / DEF-04.
-				if len(entryVal) == 0 {
-					return nil, false // tombstone
-				}
-				if len(entryVal) == 1 && entryVal[0] == tagTombstone {
-					return nil, false // tombstone (tagged)
-				}
+			commitTS := mvccKey.CommitTS()
+			if commitTS > snapshotTS {
+				// Version committed after the snapshot — not visible. Continue
+				// scanning for older versions of the same key.
+				continue
+			}
+			// A tombstone is either an empty value (legacy) or a single
+			// TypeTombstone tag byte (v0.4+).
+			isTomb := len(entryVal) == 0 || (len(entryVal) == 1 && entryVal[0] == tagTombstone)
+			val := entryVal
+			if !isTomb && isValidValueTag(entryVal[0]) {
 				// Strip the leading type tag (v0.4+). Legacy values have no tag
 				// and are returned as-is. The tag is not part of the user value.
-				// Zero-allocation: returned slice points into the mmap region.
-				if isValidValueTag(entryVal[0]) {
-					entryVal = entryVal[1:]
-				}
-				// Zero-allocation return: entryVal is a slice of the mmap region.
-				// The value is valid only until the Reader is closed.
-				// Callers must copy if they need the value beyond the Reader lifetime.
-				return entryVal, true
+				val = entryVal[1:]
 			}
+			// Later entries in the group are newer; keep the newest visible.
+			bestVal = val
+			bestFound = true
+			bestTombstone = isTomb
 		} else if cmp > 0 {
 			// Since the block is sorted, if we've passed the key, it's not here
 			break
 		}
 	}
 
-	return nil, false
+	if !bestFound || bestTombstone {
+		return nil, false
+	}
+	// Zero-allocation return: bestVal is a slice of the mmap region.
+	// The value is valid only until the Reader is closed.
+	// Callers must copy if they need the value beyond the Reader lifetime.
+	return bestVal, true
 }
 
 // Close closes the SSTable reader and releases the mmap region.

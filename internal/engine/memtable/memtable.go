@@ -104,7 +104,7 @@ func (m *MemTable) NewIterator() *SkipListIterator {
 // (nil, tombstoneTS, false). If the key is entirely absent, it returns (nil, 0, false).
 func (m *MemTable) GetLatest(key []byte) ([]byte, uint64, bool) {
 	// Hold an EBR epoch for the ENTIRE read so the arena is not reset while we
-	// traverse the version chain and dereference nodes. See DEF-02, Глава IV.3.
+	// traverse the version chain and dereference nodes.
 	m.sl.epoch.EnterEpoch()
 	defer m.sl.epoch.ExitEpoch()
 
@@ -130,7 +130,7 @@ func (m *MemTable) GetLatest(key []byte) ([]byte, uint64, bool) {
 		}
 		ts := nk.CommitTS()
 		// Atomic read: writers store `deleted` via atomic.StoreUint32 while
-		// readers run concurrently (DEF-03, Глава VII).
+		// readers run concurrently.
 		if atomic.LoadUint32(&node.deleted) == 0 {
 			latestVal = node.Value()
 			latestTS = ts
@@ -139,7 +139,7 @@ func (m *MemTable) GetLatest(key []byte) ([]byte, uint64, bool) {
 			hasTombstone = true
 			tombstoneTS = ts
 		}
-		// Atomic read of next[0] for the same reason (DEF-03).
+		// Atomic read of next[0] for the same reason.
 		idx = atomic.LoadUint32(&node.next[0])
 	}
 

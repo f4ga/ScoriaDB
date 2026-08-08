@@ -57,7 +57,7 @@ var ErrCorrupted = errors.New("corrupted SSTable data")
 // Type tags for stored values, mirroring the engine-level tags. The sstable
 // package cannot import the engine package (import cycle), so the byte values
 // are duplicated here and must stay in sync with engine.TypeInline /
-// TypeValuePointer / TypeTombstone. See DEF-02 / DEF-04.
+// TypeValuePointer / TypeTombstone.
 const (
 	tagInline    = 0x00
 	tagValuePtr  = 0x01

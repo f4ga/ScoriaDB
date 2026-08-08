@@ -299,10 +299,17 @@ func TestLSMEngineSnapshot(t *testing.T) {
 		t.Errorf("expected minActiveSnapshotTS 50, got %d", min)
 	}
 
-	// Unregister snapshot
+	// Unregister the lower snapshot. With reference counting the 100
+	// snapshot is still active, so the min must move to 100, not to 0.
 	eng.UnregisterSnapshot(50)
+	if min := eng.GetMinActiveSnapshotTS(); min != 100 {
+		t.Errorf("expected minActiveSnapshotTS 100 after unregister, got %d", min)
+	}
+
+	// Unregister the last remaining snapshot: min must reset to 0.
+	eng.UnregisterSnapshot(100)
 	if min := eng.GetMinActiveSnapshotTS(); min != 0 {
-		t.Errorf("expected minActiveSnapshotTS 0 after unregister, got %d", min)
+		t.Errorf("expected minActiveSnapshotTS 0 after last unregister, got %d", min)
 	}
 }
 
@@ -1175,11 +1182,85 @@ func TestRegisterSnapshotEdgeCases(t *testing.T) {
 	// Unregister non-existent snapshot should not panic
 	eng.UnregisterSnapshot(999)
 
-	// Unregister 50, min should become 0 (simple implementation resets to 0)
+	// Unregister 50. With reference counting snapshots 100 and 200
+	// remain active, so the min must move to 100, not to 0.
 	eng.UnregisterSnapshot(50)
-	if min := eng.GetMinActiveSnapshotTS(); min != 0 {
-		t.Errorf("expected min 0 after unregister, got %d", min)
+	if min := eng.GetMinActiveSnapshotTS(); min != 100 {
+		t.Errorf("expected min 100 after unregister, got %d", min)
 	}
+
+	// Unregister 100, min must become 200.
+	eng.UnregisterSnapshot(100)
+	if min := eng.GetMinActiveSnapshotTS(); min != 200 {
+		t.Errorf("expected min 200 after unregister, got %d", min)
+	}
+
+	// Unregister the last snapshot, min must reset to 0.
+	eng.UnregisterSnapshot(200)
+	if min := eng.GetMinActiveSnapshotTS(); min != 0 {
+		t.Errorf("expected min 0 after last unregister, got %d", min)
+	}
+}
+
+// TestSnapshotRefCounting verifies that closing one snapshot must not reset
+// the minimum when other snapshots remain active. Reference counting per TS
+// guarantees the watermark always equals the smallest still-active snapshot TS.
+func TestSnapshotRefCounting(t *testing.T) {
+	dir := t.TempDir()
+	eng, err := NewLSMEngine(dir)
+	if err != nil {
+		t.Fatalf("failed to create engine: %v", err)
+	}
+	defer errors.CloseWithFatal(eng, "engine")
+
+	check := func(want uint64, msg string) {
+		t.Helper()
+		if got := eng.GetMinActiveSnapshotTS(); got != want {
+			t.Errorf("%s: expected min %d, got %d", msg, want, got)
+		}
+	}
+
+	// Initially no active snapshots.
+	check(0, "initial")
+
+	// 1. Register TS=5 -> min 5.
+	eng.RegisterSnapshot(5)
+	check(5, "after register 5")
+
+	// 2. Register TS=10 -> min stays 5.
+	eng.RegisterSnapshot(10)
+	check(5, "after register 10")
+
+	// 3. Close TS=5 -> min becomes 10.
+	eng.UnregisterSnapshot(5)
+	check(10, "after unregister 5")
+
+	// 4. Close TS=10 -> min becomes 0.
+	eng.UnregisterSnapshot(10)
+	check(0, "after unregister 10")
+
+	// 5. Two snapshots with different TS: register 5 and 7, close 5 -> min 7 (not 0).
+	eng.RegisterSnapshot(5)
+	eng.RegisterSnapshot(7)
+	eng.UnregisterSnapshot(5)
+	check(7, "two snapshots, closed non-min 5")
+	eng.UnregisterSnapshot(7)
+	check(0, "after unregister 7")
+
+	// 6. Register 3 then 5, close 3 -> min 5.
+	eng.RegisterSnapshot(3)
+	eng.RegisterSnapshot(5)
+	eng.UnregisterSnapshot(3)
+	check(5, "register 3 then 5, close 3")
+	eng.UnregisterSnapshot(5)
+	check(0, "after unregister 5")
+
+	// 7. Unregister a non-existent snapshot must not panic and must not change min.
+	eng.RegisterSnapshot(20)
+	eng.UnregisterSnapshot(999) // no-op, defensive
+	check(20, "unregister non-existent leaves min unchanged")
+	eng.UnregisterSnapshot(20)
+	check(0, "after unregister 20")
 }
 
 func TestMemTableIteratorKeyValue(t *testing.T) {

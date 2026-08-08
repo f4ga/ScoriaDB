@@ -72,7 +72,7 @@ type mergeIterator struct {
 // NewMergeIterator creates a merge iterator from all available sources.
 // Allocations: O(number_of_sources), not O(number_of_entries).
 //
-// DEF-B5 INVARIANT: e.levels and e.shards are mutated by flushMemTable /
+// Invariant: e.levels and e.shards are mutated by flushMemTable /
 // compactLevel0 under e.mu.Lock. This function snapshots them under RLock so
 // reads are never racing a concurrent write. Prefer NewMergeIteratorWithSnapshot
 // (via Scan) for hot paths that must not hold the engine lock while iterating.
@@ -234,7 +234,7 @@ func (mi *mergeIterator) Key() []byte { return mi.key }
 // Resolves ValuePointer from either Unified MMap (new) or VLog (legacy).
 // Reads the leading type tag (v0.4+) to disambiguate a real ValuePointer from a
 // user value of exactly 12 bytes; legacy data without a tag uses the length
-// heuristic. See DEF-02 / DEF-04.
+// heuristic.
 func (mi *mergeIterator) Value() []byte {
 	if mi.value == nil {
 		return nil

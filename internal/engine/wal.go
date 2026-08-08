@@ -215,7 +215,7 @@ func (w *WAL) Close() error {
 //	[end-4:end] CRC32 (4 bytes)
 //
 // The IsLarge flag disambiguates a user value of exactly ValuePointerSize (12)
-// bytes from a real ValuePointer. See DEF-02 / DEF-04.
+// bytes from a real ValuePointer.
 const walFlagIsLarge byte = 0x01
 
 // encodeWalEntryTo writes entry directly into dst buffer.
@@ -309,7 +309,7 @@ func decodeWalEntry(r io.Reader) (*WalEntry, error) {
 
 	// Use the on-disk IsLarge flag (bit 0) to disambiguate a real ValuePointer
 	// from a user value of exactly ValuePointerSize bytes. This flag is always
-	// written correctly for new data. See DEF-02 / DEF-04.
+	// written correctly for new data.
 	entry.IsLarge = flags&walFlagIsLarge != 0
 
 	return entry, nil

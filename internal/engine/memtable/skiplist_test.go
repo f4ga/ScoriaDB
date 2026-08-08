@@ -711,7 +711,7 @@ func TestSkipListConcurrentDelete(t *testing.T) {
 // TestEpochResetSafety verifies that Reset() (used by Close) does not cause a
 // use-after-free when readers are concurrently traversing the skip list.
 //
-// EBR SAFETY (DEF-02, Глава IV.3, Глава IX):
+// EBR SAFETY:
 // Readers enter an epoch via EnterEpoch/ExitEpoch. Reset() must quiesce (wait
 // for active readers == 0) before zeroing the arena. This test would previously
 // SIGSEGV or trigger a -race detection because Reset() zeroed the arena while

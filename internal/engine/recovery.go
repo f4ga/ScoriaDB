@@ -38,7 +38,6 @@ func recoverFromWAL(wal *WAL, memTable *memtable.MemTable, vlog *VLogImpl) (uint
 			mvccKey := mvcc.NewMVCCKey(entry.Key, entry.Timestamp)
 			// A value stored in the MemTable must carry a type tag so reads can
 			// disambiguate a real ValuePointer from a user value of exactly 12 bytes.
-			// See DEF-02 / DEF-04.
 			stored := tagStoredValue(entry.Value)
 			// Validate ValuePointer bounds before replaying. entry.IsLarge is read
 			// from the WAL flag (or, for legacy WALs, inferred from the length).

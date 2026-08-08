@@ -123,7 +123,7 @@ func (s *SkipList) findExact(key mvcc.MVCCKey) uint32 {
 // snapshot hides older versions. See: ARCH-07 (MVCC inverted timestamp).
 func (s *SkipList) Get(key mvcc.MVCCKey) ([]byte, bool) {
 	// Hold an EBR epoch for the ENTIRE read so the arena is not reset while we
-	// walk the version chain and dereference nodes. See DEF-02, Глава IV.3.
+	// walk the version chain and dereference nodes.
 	s.epoch.EnterEpoch()
 	defer s.epoch.ExitEpoch()
 
@@ -368,7 +368,7 @@ func (s *SkipList) updateLastActive(nodeIdx uint32) {
 // Reset clears the skip list, reinitializing the arena and head node.
 // All previously allocated nodes become invalid. Cold path (used by Close).
 //
-// EBR SAFETY (DEF-02, Глава IV.3, Глава IX):
+// EBR SAFETY:
 // Before zeroing the arena we must guarantee that no active reader still holds
 // a reference to any node. We quiesce the epoch manager (close the reader gate
 // and wait for activeReaders==0), then reset the arena, then reopen the gate.

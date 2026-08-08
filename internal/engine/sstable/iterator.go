@@ -93,8 +93,8 @@ func (it *SSTableIterator) Next() bool {
 				return false
 			}
 
-			// DEF-B6: decodeMVCCKey returns mvccKey.Key as a slice into entryKey,
-			// which itself is a slice into blockData. blockData may come from the
+			// decodeMVCCKey returns mvccKey.Key as a slice into entryKey, which
+			// itself is a slice into blockData. blockData may come from the
 			// sync.Pool (released in nextBlock/Close) or from the mmap region
 			// (unmapped when the Reader is closed). If the caller holds the key
 			// beyond the current block, it becomes a use-after-free. The value is
@@ -107,7 +107,7 @@ func (it *SSTableIterator) Next() bool {
 			val := make([]byte, len(entryVal))
 			copy(val, entryVal)
 			// Strip the leading type tag (v0.4+). Legacy values have no tag and
-			// are passed through as-is. See DEF-02 / DEF-04.
+			// are passed through as-is.
 			if len(val) > 0 && isValidValueTag(val[0]) {
 				val = val[1:]
 			}

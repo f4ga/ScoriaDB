@@ -155,7 +155,7 @@ func (a *Arena) grow(size int) unsafe.Pointer {
 	// SIGSEGVs the hot write path. Instead we always append a fresh block; the
 	// MemTable releases the whole arena via Close()/Reset() once flushed, so
 	// memory is reclaimed by the normal flush cycle. MaxArenaBlocks remains a
-	// soft guidance, not a hard reset trigger. See: DEF-12, SYMPTOM-03
+	// soft guidance, not a hard reset trigger.
 	newBlock := make([]byte, ArenaBlockSize)
 	a.blocks = append(a.blocks, newBlock)
 	a.blockIdx = len(a.blocks) - 1

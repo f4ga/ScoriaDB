@@ -48,17 +48,19 @@ type LSMEngine struct {
 	unifiedMmap *UnifiedMmap // unified mmap ring buffer (hot path)
 	manifest    *Manifest
 	vfs         vfs.VFS
-	// levels is the shared LSM SSTable level set. DEF-B5 INVARIANT: every read of
+	// levels is the shared LSM SSTable level set. Invariant: every read of
 	// e.levels must happen under e.mu.RLock, and every mutation (flushMemTable
 	// append, compactLevel0 clear/append) under e.mu.Lock. Readers must snapshot
 	// the slices under RLock (see Scan / NewMergeIterator) and never hold pointers
 	// into the live slices after releasing the lock.
-	levels              [][]*sstable.Reader
-	LastTS              uint64
-	minActiveSnapshotTS uint64
-	closed              atomic.Bool
-	lastCommitCache     map[string]uint64
-	cacheMu             sync.RWMutex
+	levels [][]*sstable.Reader
+	LastTS uint64
+	// snapshotRegistry tracks active MVCC snapshots with reference counting.
+	// Replaces the previous single-value minActiveSnapshotTS field.
+	snapshotRegistry *snapshotRegistry
+	closed           atomic.Bool
+	lastCommitCache  map[string]uint64
+	cacheMu          sync.RWMutex
 
 	// Background tasks
 	flushCh     chan struct{}
@@ -154,15 +156,16 @@ func NewLSMEngine(dataDir string, opts ...WALOptions) (*LSMEngine, error) {
 	}
 
 	engine := &LSMEngine{
-		dataDir:         dataDir,
-		shards:          make([]*Shard, shardCount),
-		vlog:            vlog,
-		unifiedMmap:     unifiedMmap,
-		manifest:        manifest,
-		vfs:             vfs,
-		levels:          levels,
-		LastTS:          lastTS,
-		lastCommitCache: make(map[string]uint64),
+		dataDir:          dataDir,
+		shards:           make([]*Shard, shardCount),
+		vlog:             vlog,
+		unifiedMmap:      unifiedMmap,
+		manifest:         manifest,
+		vfs:              vfs,
+		levels:           levels,
+		LastTS:           lastTS,
+		lastCommitCache:  make(map[string]uint64),
+		snapshotRegistry: newSnapshotRegistry(),
 	}
 
 	// Create one shard per core. Each shard owns an independent MemTable (and
@@ -348,7 +351,6 @@ func (e *LSMEngine) PutWithTS(key, value []byte, commitTS uint64) error {
 
 	// Encode stored value with a leading type tag (v0.4+). The tag byte
 	// disambiguates a real ValuePointer from a user value of exactly 12 bytes.
-	// See DEF-02 / DEF-04.
 	//
 	// Large values carry tag TypeValuePointer + 12-byte ValuePointer.
 	// Inline values carry tag TypeInline + raw bytes.
@@ -367,7 +369,7 @@ func (e *LSMEngine) PutWithTS(key, value []byte, commitTS uint64) error {
 		// Small inline value (<= MaxInlineSize, default 64). Tag on a stack
 		// buffer so the hot path stays allocation-free. MaxInlineSize is a var
 		// (raised temporarily in benchmarks); fall back to a heap slice only if
-		// it grows beyond this fixed stack budget. See DEF-02 / DEF-04.
+		// it grows beyond this fixed stack budget.
 		const maxInlineStack = 1 + 64
 		if len(inlineValue) <= maxInlineStack-1 {
 			var tagged [maxInlineStack]byte
@@ -395,7 +397,7 @@ func (e *LSMEngine) PutWithTS(key, value []byte, commitTS uint64) error {
 		walEntry.Op = OpPut
 		walEntry.Key = key
 		// WAL stores the raw (untagged) user value. Recovery re-tags it on replay,
-		// so the WAL never double-tags. See DEF-02 / DEF-04.
+		// so the WAL never double-tags.
 		walEntry.Value = inlineValue
 		walEntry.Timestamp = commitTS
 		walEntry.IsLarge = false
@@ -683,9 +685,12 @@ func (e *LSMEngine) FrozenMemTable() *memtable.MemTable {
 	return e.shards[0].frozenMemTable
 }
 
-// SetMinActiveSnapshotTS sets the minimum active snapshot timestamp.
+// SetMinActiveSnapshotTS sets the minimum active snapshot timestamp directly.
+//
+// This is a low-level accessor used primarily by tests. It registers a snapshot
+// at the given TS so the reference-counted registry yields it as the minimum.
 func (e *LSMEngine) SetMinActiveSnapshotTS(ts uint64) {
-	atomic.StoreUint64(&e.minActiveSnapshotTS, ts)
+	e.snapshotRegistry.RegisterSnapshot(ts)
 }
 
 // Shutdown gracefully shuts down the engine with a timeout for VLog view release.
@@ -738,7 +743,7 @@ func (e *LSMEngine) Shutdown() error {
 		}
 	}
 
-	// Close all shard WALs (DEF-12). Each shard owns an independent WAL file;
+	// Close all shard WALs. Each shard owns an independent WAL file;
 	// closing only e.wal (the shard 0 handle) leaks the rest and prevents their
 	// group-commit goroutines from stopping cleanly.
 	for _, shard := range e.shards {
@@ -802,7 +807,7 @@ func (e *LSMEngine) Close() error {
 		}
 	}
 
-	// Close all shard WALs (DEF-12). Each shard owns an independent WAL file;
+	// Close all shard WALs. Each shard owns an independent WAL file;
 	// closing only e.wal (the shard 0 handle) leaks the rest and prevents their
 	// group-commit goroutines from stopping cleanly.
 	for _, shard := range e.shards {
@@ -828,7 +833,7 @@ func (e *LSMEngine) Close() error {
 // copyValue copies src into a fresh heap slice. It is used when a value slice
 // references mmap memory that may be unmapped concurrently (extendMmap / Close).
 // One allocation — large values are rare and not on the hot path (small values
-// are stored inline in the MemTable arena). See: DEF-18, Глава II, Глава VI.
+// are stored inline in the MemTable arena).
 func copyValue(src []byte) []byte {
 	if len(src) == 0 {
 		if src == nil {
@@ -843,7 +848,7 @@ func copyValue(src []byte) []byte {
 
 // decodeStoredValue decodes a stored value (inline, VLog pointer, or unified mmap pointer).
 // It reads the leading type tag (v0.4+) to disambiguate a real ValuePointer from
-// a user value of exactly 12 bytes. See DEF-02 / DEF-04.
+// a user value of exactly 12 bytes.
 //
 // Checks unified mmap first, then falls back to VLog.
 // Uses ReadDirect for zero-copy internal reads.
@@ -891,9 +896,9 @@ func (e *LSMEngine) decodeStoredValue(stored []byte, fromSSTable bool) ([]byte, 
 		}
 		// Check unified mmap first (v0.3.1+ hot path)
 		if e.unifiedMmap != nil && vp.Offset < e.unifiedMmap.Size() {
-			// DEF-18 (use-after-munmap): ReadValue now returns a heap copy made
-			// under um.mu, so the returned slice is safe even if extendMmap()
-			// remaps the region after the lock is released. No further copy here.
+			// ReadValue returns a heap copy made under um.mu, so the returned
+			// slice is safe even if extendMmap() remaps the region after the
+			// lock is released. No further copy here.
 			val, err := e.unifiedMmap.ReadValue(uint64(vp.Offset), vp.Size)
 			if err != nil {
 				return nil, err
@@ -906,7 +911,7 @@ func (e *LSMEngine) decodeStoredValue(stored []byte, fromSSTable bool) ([]byte, 
 			if err != nil {
 				return nil, err
 			}
-			// DEF-18: same copy for VLog mmap (extendMmap unmaps the old region).
+			// Same copy for VLog mmap (extendMmap unmaps the old region).
 			return copyValue(val), nil
 		}
 		return payload, nil

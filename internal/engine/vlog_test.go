@@ -943,10 +943,10 @@ func TestVLogShutdownRejectsNewViews(t *testing.T) {
 // TestVLogReadAfterExtend verifies that reading a large value from VLog/unified-mmap
 // does not read from freed memory when the mmap is concurrently extended.
 //
-// DEF-18 (use-after-munmap, Глава II, Глава VI): decodeStoredValue returned a direct
-// slice into the mmap region. A concurrent extendMmap() unmaps the old region, so a
-// slice read after extension would point to freed memory (SIGBUS/panic). The fix
-// copies the value before returning it to the caller.
+// decodeStoredValue returned a direct slice into the mmap region. A concurrent
+// extendMmap() unmaps the old region, so a slice read after extension would point
+// to freed memory (SIGBUS/panic). The fix copies the value before returning it to
+// the caller.
 func TestVLogReadAfterExtend(t *testing.T) {
 	dir := t.TempDir()
 	eng, err := NewLSMEngine(dir)

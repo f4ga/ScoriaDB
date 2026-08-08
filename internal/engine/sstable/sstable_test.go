@@ -1528,3 +1528,92 @@ func TestMmapDataAfterClose(t *testing.T) {
 		t.Error("expected Lookup to return false after Close")
 	}
 }
+
+// TestSSTableLookupVersion verifies that Lookup returns the NEWEST version with
+// commitTS <= snapshotTS for a snapshot, correctly handling live versions and
+// tombstones in mixed order.
+func TestSSTableLookupVersion(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "lookup_version.sst")
+
+	writer, err := NewWriter(path, 16)
+	if err != nil {
+		t.Fatalf("failed to create writer: %v", err)
+	}
+
+	// Single key with several versions, written oldest-first (ascending commitTS).
+	// key1: v1@100, v2@200 (no tombstone) — newest visible for snapshots.
+	// key2: v1@100, tombstone@200, live@300 — newest visible live is @300.
+	// key3: v1@100, tombstone@200 — newest visible is a tombstone.
+	// key4: tombstone@100, live@200, tombstone@300 — newest visible is tombstone.
+	entries := []struct {
+		key   string
+		ts    uint64
+		value []byte // nil == tombstone
+	}{
+		{"key1", 100, []byte("v1")},
+		{"key1", 200, []byte("v2")},
+		{"key2", 100, []byte("a")},
+		{"key2", 200, nil},
+		{"key2", 300, []byte("b")},
+		{"key3", 100, []byte("x")},
+		{"key3", 200, nil},
+		{"key4", 100, nil},
+		{"key4", 200, []byte("y")},
+		{"key4", 300, nil},
+	}
+	for _, e := range entries {
+		if err := writer.Append(mvcc.NewMVCCKey([]byte(e.key), e.ts), e.value); err != nil {
+			t.Fatalf("failed to append %s@%d: %v", e.key, e.ts, err)
+		}
+	}
+	if err := writer.Finish(); err != nil {
+		t.Fatalf("failed to finish: %v", err)
+	}
+
+	reader, err := Open(path)
+	if err != nil {
+		t.Fatalf("failed to open reader: %v", err)
+	}
+	defer reader.Close()
+
+	check := func(key string, snapshotTS uint64, wantVal string, wantFound bool) {
+		t.Helper()
+		val, found := reader.Lookup(mvcc.NewMVCCKey([]byte(key), snapshotTS))
+		if found != wantFound {
+			t.Fatalf("%s@snapshot=%d: found=%v, want %v", key, snapshotTS, found, wantFound)
+		}
+		if wantFound {
+			if string(val) != wantVal {
+				t.Fatalf("%s@snapshot=%d: value=%q, want %q", key, snapshotTS, val, wantVal)
+			}
+		}
+	}
+
+	// key1: single version @100 before snapshot; snapshot 50 → not visible.
+	check("key1", 50, "", false)
+	// snapshot 100 → v1.
+	check("key1", 100, "v1", true)
+	// snapshot 200 → v2 (newest).
+	check("key1", 200, "v2", true)
+	// snapshot 500 → v2 (newest visible).
+	check("key1", 500, "v2", true)
+
+	// key2: tombstone between live versions. snapshot 100 → "a".
+	check("key2", 100, "a", true)
+	// snapshot 200 → tombstone is newest visible → not found.
+	check("key2", 200, "", false)
+	// snapshot 300 → "b" (live after tombstone).
+	check("key2", 300, "b", true)
+
+	// key3: live then tombstone. snapshot 200 → tombstone newest → not found.
+	check("key3", 150, "x", true)
+	check("key3", 200, "", false)
+	check("key3", 500, "", false)
+
+	// key4: tombstone, live, tombstone. newest visible is tombstone → not found.
+	check("key4", 100, "", false)
+	check("key4", 200, "y", true)
+	check("key4", 300, "", false)
+	check("key4", 500, "", false)
+}

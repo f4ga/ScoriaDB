@@ -46,7 +46,13 @@ type Transaction struct {
 
 // Begin starts a new transaction on the given engine.
 // startTS defines the isolation snapshot (all reads see data as of this timestamp).
+//
+// The snapshot is registered with the engine so that compaction does not
+// discard MVCC versions that the active transaction may still read. The snapshot
+// is unregistered on Commit or Rollback (see Commit / Rollback).
 func Begin(db Engine, startTS uint64) *Transaction {
+	// Register the snapshot before any read so compaction respects this TS.
+	db.RegisterSnapshot(startTS)
 	return &Transaction{
 		db:      db,
 		startTS: startTS,

@@ -38,7 +38,7 @@
 //   [end-4:end] CRC32 (4 bytes)
 //
 // The Flags.IsLarge bit disambiguates a real ValuePointer from a user value of
-// exactly 12 bytes. See DEF-02 / DEF-04.
+// exactly 12 bytes.
 //
 // Recovery reads this file sequentially, same as WAL recovery.
 // ============================================================
@@ -172,7 +172,7 @@ func (um *UnifiedMmap) WriteEntry(op OpType, key, value []byte, timestamp uint64
 
 	// Flags (1 byte) — bit 0 = IsLarge. Large values (>MaxInlineSize) are
 	// always ValuePointers here, so the flag is set whenever the caller stores
-	// a pointer. See DEF-02 / DEF-04.
+	// a pointer.
 	var flags byte
 	if valLen == ValuePointerSize {
 		flags |= walFlagIsLarge
@@ -194,11 +194,11 @@ func (um *UnifiedMmap) WriteEntry(op OpType, key, value []byte, timestamp uint64
 
 	// Key (variable) — standard copy (runtime memmove is safe on all platforms,
 	// including ARM64 where unaligned word reads in memcpyWordAligned could
-	// trigger SIGBUS). See DEF-B4.
+	// trigger SIGBUS).
 	copy(um.data[offset+uint64(pos):offset+uint64(pos)+uint64(keyLen)], key)
 	pos += uintptr(keyLen)
 
-	// Value (variable) — standard copy. See DEF-B4.
+	// Value (variable) — standard copy.
 	copy(um.data[offset+uint64(pos):offset+uint64(pos)+uint64(valLen)], value)
 	pos += uintptr(valLen)
 
@@ -215,8 +215,8 @@ func (um *UnifiedMmap) WriteEntry(op OpType, key, value []byte, timestamp uint64
 // Returns a direct slice into the mmap — zero copy.
 // The caller must ensure the mmap is not closed during use.
 //
-// DEF-18 (Глава II, Глава VI): extendMmap() may concurrently unmap the old mmap
-// region and install a new one. um.data / um.mmapSize are guarded by um.mu, so
+// extendMmap() may concurrently unmap the old mmap region and install a new one.
+// um.data / um.mmapSize are guarded by um.mu, so
 // this read takes the lock to avoid a data race (detected by -race) and to
 // ensure the returned slice points into a region that is not being unmapped.
 // The returned slice is copied by the caller (decodeStoredValue) before it can
@@ -228,7 +228,7 @@ func (um *UnifiedMmap) ReadValue(valueOffset uint64, valueSize int32) ([]byte, e
 	if int64(valueOffset)+int64(valueSize) > um.mmapSize {
 		return nil, fmt.Errorf("unified mmap: value at offset %d out of range", valueOffset)
 	}
-	// DEF-18: return a COPY of the value while still holding um.mu. The old
+	// Return a COPY of the value while still holding um.mu. The old
 	// comment claimed the caller (decodeStoredValue) copies before the slice
 	// outlives the lock, but extendMmap() may munmap this region the moment the
 	// lock is released — the copy in decodeStoredValue happens AFTER the lock,
@@ -293,7 +293,7 @@ func (um *UnifiedMmap) ReadEntry(offset uint64) (*WalEntry, error) {
 	entry.Value = value
 	entry.Timestamp = timestamp
 	// Read the persisted IsLarge flag (bit 0) to disambiguate a real ValuePointer
-	// from a user value of exactly 12 bytes. See DEF-02 / DEF-04.
+	// from a user value of exactly 12 bytes.
 	entry.IsLarge = flags&walFlagIsLarge != 0
 
 	return entry, nil
@@ -368,7 +368,7 @@ func (um *UnifiedMmap) extendMmap(neededSize int64) error {
 	return nil
 }
 
-// memcpyWordAligned was removed in DEF-B4. It performed unaligned 64-bit reads
+// memcpyWordAligned was removed because it performed unaligned 64-bit reads
 // which trigger SIGBUS on ARM64 when the source offset is not 8-byte aligned.
 // The callers now use the standard copy() (runtime memmove), which is safe on
 // all platforms and handles alignment internally.

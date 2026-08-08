@@ -28,7 +28,7 @@ const ValuePointerSize = int(unsafe.Sizeof(int64(0)) + unsafe.Sizeof(int32(0))) 
 
 // Type tags distinguish how a stored value is encoded. The tag is a single
 // leading byte prepended to every value written in the NEW format (v0.4+).
-// It resolves the DEF-02 / DEF-04 ambiguity where a user value of exactly
+// It resolves the ambiguity where a user value of exactly
 // ValuePointerSize (12) bytes was indistinguishable from a ValuePointer.
 //
 // Backward compatibility: a stored value whose first byte is NOT a valid tag
@@ -75,7 +75,7 @@ func EncodeTaggedValue(value []byte, dst []byte) int {
 
 // IsStoredValuePointer reports whether a stored value is a ValuePointer.
 // It respects the leading type tag (new format); values without a valid tag
-// fall back to the legacy length heuristic. See DEF-02 / DEF-04.
+// fall back to the legacy length heuristic.
 func IsStoredValuePointer(stored []byte) bool {
 	if len(stored) == 0 {
 		return false

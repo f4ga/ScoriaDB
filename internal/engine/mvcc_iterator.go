@@ -87,15 +87,18 @@ func (it *MVCCIterator) Next() bool {
 		for {
 			versionCount++
 			if it.inner.IsDeleted() {
+				// Tombstone for this user key. Note it but keep scanning: a
+				// newer live version after an older tombstone must still be
+				// returned (the key was re-inserted after deletion).
 				hasTombstone = true
-				bestValue = nil
-				found = false
 			} else {
-				// Non-deleted version — update best value.
-				// Since we iterate from oldest to newest, this overwrites
-				// with the newest non-deleted version.
+				// Non-deleted version — update best value and reset the
+				// tombstone flag. Since we iterate from oldest to newest,
+				// this keeps the newest live version; a live version newer
+				// than any tombstone means the key is live.
 				bestValue = it.inner.Value()
 				found = true
+				hasTombstone = false
 			}
 
 			if !it.inner.Next() {

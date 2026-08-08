@@ -715,8 +715,8 @@ func TestMemTableConcurrentReadWrite(t *testing.T) {
 // TestDataRaceDeletedNext verifies that concurrent writers (Put/Delete) and
 // readers (GetLatest) do not cause a data race on node.deleted / node.next.
 //
-// DEF-03, Глава VII: readers must use atomic.LoadUint32 for `deleted` and
-// `next` because writers store them via atomic.StoreUint32. Non-atomic reads
+// Readers must use atomic.LoadUint32 for `deleted` and `next` because writers
+// store them via atomic.StoreUint32. Non-atomic reads
 // are flagged by the -race detector. This test exercises that path with 5
 // writers and 10 readers for ~1 second.
 func TestDataRaceDeletedNext(t *testing.T) {

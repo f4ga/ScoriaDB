@@ -309,7 +309,7 @@ func (w *Writer) writeFooter(
 // The value is stored with a leading type tag (v0.4+), except legacy nil
 // tombstones which are written as a single TypeTombstone byte. Tagging here
 // disambiguates a real ValuePointer from a user value of exactly 12 bytes and
-// survives flush/compaction rewrites (gradual migration). See DEF-02 / DEF-04.
+// survives flush/compaction rewrites (gradual migration).
 func encodeEntry(key, value []byte) []byte {
 	kl := len(key)
 	// Value storage: 1 tag byte + payload (nil → 1-byte tombstone).

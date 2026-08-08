@@ -32,7 +32,7 @@ func (e *LSMEngine) CollectLiveValuePointers() (map[ValuePointer]struct{}, error
 	livePointers := make(map[ValuePointer]struct{})
 	processValue := func(value []byte) {
 		// Respect the type tag (new format); fall back to length heuristic for
-		// legacy data without a tag. See DEF-02 / DEF-04.
+		// legacy data without a tag.
 		if !IsStoredValuePointer(value) {
 			return
 		}
@@ -93,7 +93,6 @@ func (e *LSMEngine) InvalidateVLogPointers() {
 			val := iter.Value()
 			// Only invalidate genuine ValuePointers (via tag, or legacy length
 			// heuristic). A user value of exactly 12 bytes is NOT invalidated.
-			// See DEF-02 / DEF-04.
 			if IsStoredValuePointer(val) {
 				toDelete = append(toDelete, iter.Key())
 			}
