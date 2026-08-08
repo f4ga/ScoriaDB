@@ -1074,7 +1074,7 @@ func TestNewLSMEngineManifestError(t *testing.T) {
 
 func TestNewManifestError(t *testing.T) {
 	// NewManifest with non-writable path should fail
-	_, err := NewManifest(vfs.Default, "/nonexistent/path/MANIFEST")
+	_, err := NewManifest("/nonexistent/path/MANIFEST")
 	if err == nil {
 		t.Error("expected error for non-writable path")
 	}
@@ -1237,4 +1237,87 @@ func encodeTestBatch(ops ...testBatchOp) []byte {
 		buf = append(buf, []byte(op.value)...)
 	}
 	return buf
+}
+
+// TestLastCommitCacheKeyStability verifies that the lastCommitCache stores a
+// stable (copied) key, so that mutating the caller's []byte after a cache
+// write does NOT corrupt the map key.
+func TestLastCommitCacheKeyStability(t *testing.T) {
+	dir := t.TempDir()
+	eng, err := NewLSMEngine(dir)
+	if err != nil {
+		t.Fatalf("failed to create engine: %v", err)
+	}
+	defer errors.CloseWithFatal(eng, "engine")
+
+	key := []byte("user:alice")
+	const commitTS = uint64(100)
+
+	// Populate the cache via the same path used by CheckConflict.
+	eng.updateLastCommitCache(key, commitTS)
+
+	// Mutate the original slice after the cache write. Under the old
+	// unsafeToString implementation this would corrupt the map key and cause
+	// the lookup below to miss.
+	for i := range key {
+		key[i] = 'X'
+	}
+
+	got, ok := eng.getLastCommitCache([]byte("user:alice"))
+	if !ok {
+		t.Fatalf("expected cache hit for key, got miss after mutating source slice")
+	}
+	if got != commitTS {
+		t.Fatalf("expected commitTS %d, got %d", commitTS, got)
+	}
+
+	// The mutated key must NOT match the original cache entry.
+	if _, ok := eng.getLastCommitCache([]byte("XXXXXXXXXX")); ok {
+		t.Fatalf("cache lookup for mutated key should miss, but it matched the original entry")
+	}
+}
+
+// TestTimestampRecovery verifies that transaction timestamps continue to be
+// monotonic and unique after a restart.
+func TestTimestampRecovery(t *testing.T) {
+	dir := t.TempDir()
+
+	// Phase 1: create a DB and commit keys with high timestamps.
+	{
+		eng, err := NewLSMEngine(dir)
+		if err != nil {
+			t.Fatalf("failed to create engine: %v", err)
+		}
+
+		if err := eng.PutWithTS([]byte("k1"), []byte("v1"), 100); err != nil {
+			t.Fatalf("PutWithTS(100) failed: %v", err)
+		}
+		if err := eng.PutWithTS([]byte("k2"), []byte("v2"), 200); err != nil {
+			t.Fatalf("PutWithTS(200) failed: %v", err)
+		}
+
+		if err := eng.Close(); err != nil {
+			t.Fatalf("failed to close engine: %v", err)
+		}
+	}
+
+	// Phase 2: reopen and verify timestamps continue above the recovered max.
+	{
+		eng, err := NewLSMEngine(dir)
+		if err != nil {
+			t.Fatalf("failed to reopen engine: %v", err)
+		}
+		defer errors.CloseWithFatal(eng, "engine")
+
+		next := eng.NextTimestamp()
+		if next <= 200 {
+			t.Fatalf("NextTimestamp after restart = %d, want > 200", next)
+		}
+
+		// A subsequent timestamp must still be monotonic.
+		next2 := eng.NextTimestamp()
+		if next2 <= next {
+			t.Fatalf("NextTimestamp not monotonic after restart: %d then %d", next, next2)
+		}
+	}
 }
