@@ -29,12 +29,16 @@
 //
 // Layout per entry (variable length):
 //   [0:1]    Op (1 byte)
-//   [1:9]    Timestamp (8 bytes)
-//   [2:4]    KeyLen (2 bytes)
-//   [4:8]    ValueLen (4 bytes)
-//   [8:8+KL] Key (variable)
-//   [8+KL:8+KL+VL] Value (variable)
+//   [1:2]    Flags (1 byte) — bit 0 = IsLarge
+//   [2:10]   Timestamp (8 bytes)
+//   [10:12]  KeyLen (2 bytes)
+//   [12:16]  ValueLen (4 bytes)
+//   [16:16+KL] Key (variable)
+//   [16+KL:16+KL+VL] Value (variable)
 //   [end-4:end] CRC32 (4 bytes)
+//
+// The Flags.IsLarge bit disambiguates a real ValuePointer from a user value of
+// exactly 12 bytes. See DEF-02 / DEF-04.
 //
 // Recovery reads this file sequentially, same as WAL recovery.
 // ============================================================
@@ -141,7 +145,8 @@ func (um *UnifiedMmap) WriteEntry(op OpType, key, value []byte, timestamp uint64
 
 	keyLen := len(key)
 	valLen := len(value)
-	totalSize := 1 + 8 + 2 + 4 + keyLen + valLen + 4 // + CRC
+	// Header grew from 15 to 16 bytes (1 op + 1 flags + 8 ts + 2 klen + 4 vlen).
+	totalSize := 1 + 1 + 8 + 2 + 4 + keyLen + valLen + 4 // + CRC
 
 	// Reserve space
 	offset := um.head
@@ -154,7 +159,10 @@ func (um *UnifiedMmap) WriteEntry(op OpType, key, value []byte, timestamp uint64
 		}
 	}
 
-	// Write directly into mmap using unsafe — zero bounds checking
+	// Write directly into mmap using unsafe — zero bounds checking.
+	// Multi-byte fields are written in BigEndian to match ReadEntry, which
+	// decodes with binary.BigEndian. Writing native-endian here made recovery
+	// read garbage on little-endian platforms. CRC is order-independent.
 	dst := unsafe.Pointer(&um.data[offset])
 	pos := uintptr(0)
 
@@ -162,16 +170,26 @@ func (um *UnifiedMmap) WriteEntry(op OpType, key, value []byte, timestamp uint64
 	*(*byte)(unsafe.Add(dst, pos)) = byte(op)
 	pos++
 
-	// Timestamp (8 bytes)
-	*(*uint64)(unsafe.Add(dst, pos)) = timestamp
+	// Flags (1 byte) — bit 0 = IsLarge. Large values (>MaxInlineSize) are
+	// always ValuePointers here, so the flag is set whenever the caller stores
+	// a pointer. See DEF-02 / DEF-04.
+	var flags byte
+	if valLen == ValuePointerSize {
+		flags |= walFlagIsLarge
+	}
+	*(*byte)(unsafe.Add(dst, pos)) = flags
+	pos++
+
+	// Timestamp (8 bytes) — BigEndian to match ReadEntry.
+	binary.BigEndian.PutUint64(um.data[offset+uint64(pos):offset+uint64(pos)+8], timestamp)
 	pos += 8
 
-	// KeyLen (2 bytes)
-	*(*uint16)(unsafe.Add(dst, pos)) = uint16(keyLen)
+	// KeyLen (2 bytes) — BigEndian to match ReadEntry.
+	binary.BigEndian.PutUint16(um.data[offset+uint64(pos):offset+uint64(pos)+2], uint16(keyLen))
 	pos += 2
 
-	// ValueLen (4 bytes)
-	*(*uint32)(unsafe.Add(dst, pos)) = uint32(valLen)
+	// ValueLen (4 bytes) — BigEndian to match ReadEntry.
+	binary.BigEndian.PutUint32(um.data[offset+uint64(pos):offset+uint64(pos)+4], uint32(valLen))
 	pos += 4
 
 	// Key (variable) — word-aligned copy
@@ -182,13 +200,13 @@ func (um *UnifiedMmap) WriteEntry(op OpType, key, value []byte, timestamp uint64
 	memcpyWordAligned(unsafe.Add(dst, pos), unsafe.Pointer(unsafe.SliceData(value)), valLen)
 	pos += uintptr(valLen)
 
-	// CRC32 (4 bytes) — computed on the written data
+	// CRC32 (4 bytes) — computed on the written data; order-independent.
 	crc := crc32.ChecksumIEEE(um.data[offset : offset+uint64(pos)])
-	*(*uint32)(unsafe.Add(dst, pos)) = crc
+	binary.BigEndian.PutUint32(um.data[offset+uint64(pos):offset+uint64(pos)+4], crc)
 
 	// Return the offset of the value data (after header + key)
 	// This allows direct reading via ReadValue without knowing keyLen
-	return offset + uint64(1+8+2+4+keyLen), nil
+	return offset + uint64(1+1+8+2+4+keyLen), nil
 }
 
 // ReadValue reads the value data at the given value offset (returned by WriteEntry).
@@ -224,7 +242,7 @@ func (um *UnifiedMmap) ReadValue(valueOffset uint64, valueSize int32) ([]byte, e
 // ReadEntry reads and decodes an entry at the given offset.
 // Used during recovery — NOT in hot path.
 func (um *UnifiedMmap) ReadEntry(offset uint64) (*WalEntry, error) {
-	if int64(offset+15) > um.mmapSize {
+	if int64(offset+16) > um.mmapSize {
 		return nil, fmt.Errorf("unified mmap: offset %d out of range", offset)
 	}
 
@@ -232,6 +250,9 @@ func (um *UnifiedMmap) ReadEntry(offset uint64) (*WalEntry, error) {
 	pos := 0
 
 	op := OpType(data[pos])
+	pos++
+
+	flags := data[pos]
 	pos++
 
 	timestamp := binary.BigEndian.Uint64(data[pos : pos+8])
@@ -269,9 +290,9 @@ func (um *UnifiedMmap) ReadEntry(offset uint64) (*WalEntry, error) {
 	entry.Key = key
 	entry.Value = value
 	entry.Timestamp = timestamp
-	if op == OpPut && len(value) == ValuePointerSize {
-		entry.IsLarge = true
-	}
+	// Read the persisted IsLarge flag (bit 0) to disambiguate a real ValuePointer
+	// from a user value of exactly 12 bytes. See DEF-02 / DEF-04.
+	entry.IsLarge = flags&walFlagIsLarge != 0
 
 	return entry, nil
 }
