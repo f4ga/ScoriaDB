@@ -27,8 +27,7 @@ func TestNewManifest(t *testing.T) {
 	tmpDir := t.TempDir()
 	path := filepath.Join(tmpDir, "MANIFEST")
 
-	vfs := vfs.NewDefaultVFS()
-	m, err := NewManifest(vfs, path)
+	m, err := NewManifest(path)
 	if err != nil {
 		t.Fatalf("failed to create manifest: %v", err)
 	}
@@ -52,8 +51,7 @@ func TestManifestApply(t *testing.T) {
 	tmpDir := t.TempDir()
 	path := filepath.Join(tmpDir, "MANIFEST")
 
-	vfs := vfs.NewDefaultVFS()
-	m, err := NewManifest(vfs, path)
+	m, err := NewManifest(path)
 	if err != nil {
 		t.Fatalf("failed to create manifest: %v", err)
 	}
@@ -87,7 +85,10 @@ func TestManifestApply(t *testing.T) {
 	}
 
 	edit2 := &VersionEdit{
-		DeletedFiles: []SSTableInfo{
+		DeletedFiles: []struct {
+			FileNum uint64
+			Level   int
+		}{
 			{
 				FileNum: 1,
 				Level:   0,
@@ -111,8 +112,7 @@ func TestManifestRecover(t *testing.T) {
 	tmpDir := t.TempDir()
 	path := filepath.Join(tmpDir, "MANIFEST")
 
-	vfs := vfs.NewDefaultVFS()
-	m1, err := NewManifest(vfs, path)
+	m1, err := NewManifest(path)
 	if err != nil {
 		t.Fatalf("failed to create manifest: %v", err)
 	}
@@ -149,7 +149,7 @@ func TestManifestRecover(t *testing.T) {
 	}
 	errors.CloseWithFatal(m1, "manifest1")
 
-	m2, err := NewManifest(vfs, path)
+	m2, err := NewManifest(path)
 	if err != nil {
 		t.Fatalf("failed to reopen manifest: %v", err)
 	}
@@ -171,8 +171,7 @@ func TestManifestGetLevels(t *testing.T) {
 	tmpDir := t.TempDir()
 	path := filepath.Join(tmpDir, "MANIFEST")
 
-	vfs := vfs.NewDefaultVFS()
-	m, err := NewManifest(vfs, path)
+	m, err := NewManifest(path)
 	if err != nil {
 		t.Fatalf("failed to create manifest: %v", err)
 	}
@@ -216,7 +215,7 @@ func TestManifestEmptyFile(t *testing.T) {
 	}
 	errors.CloseWithFatal(file, "manifest-file")
 
-	m, err := NewManifest(vfs, path)
+	m, err := NewManifest(path)
 	if err != nil {
 		t.Fatalf("failed to open empty manifest: %v", err)
 	}
@@ -242,7 +241,7 @@ func TestManifestCorruptedFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	m, err := NewManifest(vfs, path)
+	m, err := NewManifest(path)
 	if err != nil {
 		t.Fatalf("failed to open corrupted manifest: %v", err)
 	}
@@ -258,8 +257,7 @@ func TestManifestFsync(t *testing.T) {
 	tmpDir := t.TempDir()
 	path := filepath.Join(tmpDir, "MANIFEST")
 
-	vfs := vfs.NewDefaultVFS()
-	m, err := NewManifest(vfs, path)
+	m, err := NewManifest(path)
 	if err != nil {
 		t.Fatalf("failed to create manifest: %v", err)
 	}
@@ -288,7 +286,7 @@ func TestManifestFsync(t *testing.T) {
 	// НЕ ЗАКРЫВАЕМ ЗДЕСЬ — defer сделает это в конце
 
 	// Открываем заново (симулируем восстановление после краха)
-	m2, err := NewManifest(vfs, path)
+	m2, err := NewManifest(path)
 	if err != nil {
 		t.Fatalf("failed to reopen manifest: %v", err)
 	}
@@ -303,5 +301,98 @@ func TestManifestFsync(t *testing.T) {
 	}
 	if m2.NextFileNum() != 3 {
 		t.Errorf("expected next file num 3 after recovery, got %d", m2.NextFileNum())
+	}
+}
+
+// TestManifestRecoverCorruption verifies that recover() restores valid records
+// up to the last intact record when a trailing record is truncated (crash
+// mid-write), and returns an error when a record is corrupted in the middle of
+// the file with valid data following it.
+func TestManifestRecoverCorruption(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "MANIFEST")
+
+	writeTwo := func() {
+		m, err := NewManifest(path)
+		if err != nil {
+			t.Fatalf("failed to create manifest: %v", err)
+		}
+		if err := m.Apply(&VersionEdit{
+			NewFiles:    []SSTableInfo{{FileNum: 1, Level: 0, MinKey: []byte("a"), MaxKey: []byte("b"), Size: 100}},
+			NextFileNum: 2,
+		}); err != nil {
+			t.Fatalf("failed to apply edit1: %v", err)
+		}
+		if err := m.Apply(&VersionEdit{
+			NewFiles:    []SSTableInfo{{FileNum: 2, Level: 1, MinKey: []byte("c"), MaxKey: []byte("d"), Size: 200}},
+			NextFileNum: 3,
+		}); err != nil {
+			t.Fatalf("failed to apply edit2: %v", err)
+		}
+		if err := m.Close(); err != nil {
+			t.Fatalf("failed to close manifest: %v", err)
+		}
+	}
+
+	// Case 1: corrupt a byte in the FIRST record's payload, leaving the SECOND
+	// (valid) record intact after it. recover() must return an error because a
+	// fully-read record that fails to parse while valid data follows is genuine
+	// mid-file corruption — silently dropping it would lose the later SSTable
+	// metadata.
+	{
+		os.Remove(path)
+		writeTwo()
+
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("failed to read manifest: %v", err)
+		}
+		// Header is 8 bytes; record 1 payload starts at 8+4=12. Corrupt the
+		// first JSON byte of record 1 ('{'), guaranteeing Unmarshal fails.
+		data[12] = 0xFF
+		if err := os.WriteFile(path, data, 0644); err != nil {
+			t.Fatalf("failed to write corrupted manifest: %v", err)
+		}
+
+		if _, err := NewManifest(path); err == nil {
+			t.Fatalf("corrupted-middle manifest should have returned an error")
+		}
+	}
+
+	// Case 2: truncate the file in the middle of the SECOND record (simulating
+	// a crash mid-write). recover() must restore the first record without error
+	// and must not report a failure.
+	{
+		os.Remove(path)
+		writeTwo()
+
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("failed to read manifest: %v", err)
+		}
+		rec1Len := uint32(data[8]) | uint32(data[9])<<8 | uint32(data[10])<<16 | uint32(data[11])<<24
+		rec2Start := int(8 + 4 + rec1Len)
+		// Keep header + record 1 fully intact, then cut into record 2.
+		keep := rec2Start + 2 // a couple bytes of record 2's length prefix
+		if keep < 8 || keep >= len(data) {
+			t.Fatalf("invalid truncation boundary %d (len %d)", keep, len(data))
+		}
+		if err := os.Truncate(path, int64(keep)); err != nil {
+			t.Fatalf("failed to truncate manifest: %v", err)
+		}
+
+		m2, err := NewManifest(path)
+		if err != nil {
+			t.Fatalf("truncated manifest recovery failed: %v", err)
+		}
+		defer errors.CloseWithFatal(m2, "manifest-truncated")
+
+		levels := m2.GetLevels()
+		if len(levels[0]) != 1 || levels[0][0].FileNum != 1 {
+			t.Errorf("truncated: expected file 1 in level 0, got %v", levels[0])
+		}
+		if m2.NextFileNum() != 2 {
+			t.Errorf("truncated: expected next file num 2, got %d", m2.NextFileNum())
+		}
 	}
 }
