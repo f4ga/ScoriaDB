@@ -194,11 +194,31 @@ func (um *UnifiedMmap) WriteEntry(op OpType, key, value []byte, timestamp uint64
 // ReadValue reads the value data at the given value offset (returned by WriteEntry).
 // Returns a direct slice into the mmap — zero copy.
 // The caller must ensure the mmap is not closed during use.
+//
+// DEF-18 (Глава II, Глава VI): extendMmap() may concurrently unmap the old mmap
+// region and install a new one. um.data / um.mmapSize are guarded by um.mu, so
+// this read takes the lock to avoid a data race (detected by -race) and to
+// ensure the returned slice points into a region that is not being unmapped.
+// The returned slice is copied by the caller (decodeStoredValue) before it can
+// outlive this critical section.
 func (um *UnifiedMmap) ReadValue(valueOffset uint64, valueSize int32) ([]byte, error) {
+	um.mu.Lock()
+	defer um.mu.Unlock()
+
 	if int64(valueOffset)+int64(valueSize) > um.mmapSize {
 		return nil, fmt.Errorf("unified mmap: value at offset %d out of range", valueOffset)
 	}
-	return um.data[valueOffset : valueOffset+uint64(valueSize)], nil
+	// DEF-18: return a COPY of the value while still holding um.mu. The old
+	// comment claimed the caller (decodeStoredValue) copies before the slice
+	// outlives the lock, but extendMmap() may munmap this region the moment the
+	// lock is released — the copy in decodeStoredValue happens AFTER the lock,
+	// so it can read freed memory (SIGSEGV). Copying here guarantees the returned
+	// slice is never backed by a region that can be concurrently unmapped.
+	// One allocation — large values are not on the hot path.
+	src := um.data[valueOffset : valueOffset+uint64(valueSize)]
+	dst := make([]byte, len(src))
+	copy(dst, src)
+	return dst, nil
 }
 
 // ReadEntry reads and decodes an entry at the given offset.
