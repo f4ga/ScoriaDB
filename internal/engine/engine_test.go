@@ -24,6 +24,7 @@ import (
 	"github.com/f4ga/ScoriaDB/internal/engine/memtable"
 	"github.com/f4ga/ScoriaDB/internal/engine/vfs"
 	"github.com/f4ga/ScoriaDB/internal/errors"
+	"github.com/f4ga/ScoriaDB/internal/logger"
 	"github.com/f4ga/ScoriaDB/internal/mvcc"
 )
 
@@ -1400,5 +1401,91 @@ func TestTimestampRecovery(t *testing.T) {
 		if next2 <= next {
 			t.Fatalf("NextTimestamp not monotonic after restart: %d then %d", next, next2)
 		}
+	}
+}
+
+// TestCompactionSnapshotSafe verifies that a snapshot opened AFTER compaction
+// starts (with a smaller commitTS than the watermark fixed at compaction start)
+// can still read its historical versions. Compaction must re-read the current
+// minimum active snapshot timestamp for every version it writes, rather than
+// relying on a single value captured when compaction began.
+//
+// The compaction is paused deterministically at the start of its version
+// loop via the compactionTestHook seam, at which point the test registers a
+// new snapshot. This avoids any timing dependency and makes the race between
+// "compaction reads the watermark" and "snapshot registers" reproducible.
+func TestCompactionSnapshotSafe(t *testing.T) {
+	logger.SetLevel(logger.ERROR)
+	dir := t.TempDir()
+	eng, err := NewLSMEngine(dir)
+	if err != nil {
+		t.Fatalf("failed to create engine: %v", err)
+	}
+	defer errors.CloseWithFatal(eng, "engine")
+
+	key := []byte("key")
+	// Write three MVCC versions of the same key.
+	if err := eng.PutWithTS(key, []byte("v10"), 10); err != nil {
+		t.Fatalf("PutWithTS(10) failed: %v", err)
+	}
+	if err := eng.PutWithTS(key, []byte("v20"), 20); err != nil {
+		t.Fatalf("PutWithTS(20) failed: %v", err)
+	}
+	if err := eng.PutWithTS(key, []byte("v30"), 30); err != nil {
+		t.Fatalf("PutWithTS(30) failed: %v", err)
+	}
+
+	// Flush the MemTable so all versions land in a Level-0 SSTable that
+	// compaction can process.
+	if err := eng.flushMemTable(); err != nil {
+		t.Fatalf("flushMemTable failed: %v", err)
+	}
+	if len(eng.levels[0]) == 0 {
+		t.Fatalf("expected at least one level-0 SSTable after flush")
+	}
+
+	// Pause compaction at the start of its version-processing loop and open a
+	// NEW snapshot at TS=15 from the hook, before compaction writes any version.
+	// A watermark captured at compaction start would be 0 (no active snapshots),
+	// which would discard v10; the mid-flight snapshot must prevent that.
+	snapshotOpened := make(chan struct{})
+	origHook := compactionTestHook
+	compactionTestHook = func() {
+		compactionTestHook = nil // fire only once
+		eng.RegisterSnapshot(15)
+		close(snapshotOpened)
+	}
+	defer func() { compactionTestHook = origHook }()
+
+	compactDone := make(chan error, 1)
+	go func() {
+		compactDone <- eng.compactLevel0()
+	}()
+
+	// Wait until the snapshot was registered mid-compaction, then await the
+	// compaction result.
+	<-snapshotOpened
+	if err := <-compactDone; err != nil {
+		t.Fatalf("compactLevel0 failed: %v", err)
+	}
+	eng.UnregisterSnapshot(15)
+
+	// The snapshot at TS=15 must observe v10: the newest committed version
+	// with commitTS <= 15.
+	got, err := eng.GetWithTS(key, 15)
+	if err != nil {
+		t.Fatalf("GetWithTS(key,15) failed: %v", err)
+	}
+	if string(got) != "v10" {
+		t.Errorf("snapshot at 15: expected v10, got %q", got)
+	}
+
+	// Reading with no snapshot (MaxUint64) must return the newest version v30.
+	got, err = eng.GetWithTS(key, ^uint64(0))
+	if err != nil {
+		t.Fatalf("GetWithTS(key,MaxUint64) failed: %v", err)
+	}
+	if string(got) != "v30" {
+		t.Errorf("latest read: expected v30, got %q", got)
 	}
 }

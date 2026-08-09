@@ -43,6 +43,7 @@ type Iterator interface {
 type heapIter struct {
 	iter Iterator
 	key  []byte
+	ts   uint64 // commitTS of this entry
 }
 
 type iterHeap []*heapIter
@@ -64,6 +65,7 @@ type mergeIterator struct {
 	heap   iterHeap
 	err    error
 	key    []byte
+	ts     uint64 // commitTS of current entry
 	value  []byte
 	engine *LSMEngine  // for VLog resolution in Value()
 	views  []*VLogView // active VLog views, released in Close()
@@ -167,6 +169,18 @@ func NewMergeIteratorWithSnapshot(e *LSMEngine, prefix []byte, mtList []*memtabl
 	return mi
 }
 
+// iterTimestamp returns the commit timestamp of the entry currently exposed by
+// iter. If the iterator does not expose MVCC timestamps (e.g. a plain test
+// iterator), it returns 0, in which case only the user key is compared during
+// deduplication — identical user keys collapse, preserving legacy behavior.
+func iterTimestamp(iter Iterator) uint64 {
+	type tsAware interface{ CommitTS() uint64 }
+	if m, ok := iter.(tsAware); ok {
+		return m.CommitTS()
+	}
+	return 0
+}
+
 func (mi *mergeIterator) addSource(iter Iterator) {
 	if iter == nil {
 		return
@@ -182,6 +196,7 @@ func (mi *mergeIterator) addSource(iter Iterator) {
 	mi.heap = append(mi.heap, &heapIter{
 		iter: iter,
 		key:  key,
+		ts:   iterTimestamp(iter),
 	})
 }
 
@@ -192,10 +207,12 @@ func (mi *mergeIterator) Next() bool {
 
 	hi := heap.Pop(&mi.heap).(*heapIter)
 	mi.key = hi.key
+	mi.ts = hi.ts
 	mi.value = hi.iter.Value()
 
 	if hi.iter.Next() {
 		hi.key = hi.iter.Key()
+		hi.ts = iterTimestamp(hi.iter)
 		heap.Push(&mi.heap, hi)
 	} else {
 		if err := hi.iter.Err(); err != nil {
@@ -206,13 +223,18 @@ func (mi *mergeIterator) Next() bool {
 		hi.iter.Close()
 	}
 
-	// Deduplicate: skip same keys from lower-priority sources
-	skipped := 0
-	for len(mi.heap) > 0 && bytes.Equal(mi.heap[0].key, mi.key) {
+	// Deduplicate by FULL MVCC key (userKey + timestamp). Different MVCC
+	// versions of the same user key must all be emitted so that scans observe
+	// every historical version. Only an exact (userKey, timestamp) duplicate is
+	// dropped. When sources do not expose timestamps (ts == 0 for all), this
+	// degrades to user-key deduplication for backward compatibility.
+	for len(mi.heap) > 0 &&
+		bytes.Equal(mi.heap[0].key, mi.key) &&
+		mi.heap[0].ts == mi.ts {
 		hi := heap.Pop(&mi.heap).(*heapIter)
-		skipped++
 		if hi.iter.Next() {
 			hi.key = hi.iter.Key()
+			hi.ts = iterTimestamp(hi.iter)
 			heap.Push(&mi.heap, hi)
 		} else {
 			if err := hi.iter.Err(); err != nil {
@@ -223,7 +245,6 @@ func (mi *mergeIterator) Next() bool {
 			hi.iter.Close()
 		}
 	}
-	_ = skipped
 
 	return true
 }
@@ -399,6 +420,12 @@ func (it *memtableIter) Value() []byte   { return it.value }
 func (it *memtableIter) Err() error      { return it.err }
 func (it *memtableIter) IsDeleted() bool { return it.isDel }
 
+// CommitTS returns the commit timestamp of the current entry, exposing the
+// full MVCC key to the merge iterator so it can deduplicate by (userKey, ts).
+func (it *memtableIter) CommitTS() uint64 {
+	return it.inner.Key().CommitTS()
+}
+
 func (it *memtableIter) Close() error {
 	it.inner.Close()
 	it.ended = true
@@ -455,6 +482,14 @@ func (it *sstableIter) Key() []byte     { return it.key }
 func (it *sstableIter) Value() []byte   { return it.value }
 func (it *sstableIter) Err() error      { return it.err }
 func (it *sstableIter) IsDeleted() bool { return false }
+
+// CommitTS returns the commit timestamp of the current entry, exposing the
+// full MVCC key to the merge iterator so it can deduplicate by (userKey, ts).
+// The SSTable iterator internally tracks the current mvcc.MVCCKey; the stored
+// timestamp is inverted, so it must be reverted to yield the commit TS.
+func (it *sstableIter) CommitTS() uint64 {
+	return it.inner.Key().CommitTS()
+}
 
 func (it *sstableIter) Close() error {
 	it.inner.Close()

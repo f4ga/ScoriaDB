@@ -647,6 +647,49 @@ func TestMVCCIteratorTombstoneOrder(t *testing.T) {
 	}
 }
 
+// TestMergeIteratorMVCCVersions verifies that mergeIterator emits ALL MVCC
+// versions of a key across sources, deduplicating only exact (userKey,
+// timestamp) duplicates. Two versions of the same user key in different
+// sources (e.g. MemTable and SSTable) must both be surfaced in sorted order.
+func TestMergeIteratorMVCCVersions(t *testing.T) {
+	// Source 1 exposes MVCC timestamps (e.g. MemTable): key K at commitTS 10.
+	mt := memtable.NewMemTable()
+	mt.Put(mvcc.NewMVCCKey([]byte("K"), 10), []byte("v10"))
+
+	// Source 2 exposes MVCC timestamps (e.g. SSTable): key K at commitTS 20.
+	mt2 := memtable.NewMemTable()
+	mt2.Put(mvcc.NewMVCCKey([]byte("K"), 20), []byte("v20"))
+
+	mi := &mergeIterator{
+		heap:   make(iterHeap, 0, 2),
+		engine: nil, // not needed: both values are inline in the MemTables
+	}
+	mi.addSource(newMemtableIter(mt, nil))
+	mi.addSource(newMemtableIter(mt2, nil))
+
+	var gotKeys, gotVals [][]byte
+	for mi.Next() {
+		gotKeys = append(gotKeys, copyBytes(mi.Key()))
+		gotVals = append(gotVals, copyBytes(mi.Value()))
+	}
+	if err := mi.Err(); err != nil {
+		t.Fatalf("unexpected merge iterator error: %v", err)
+	}
+	mi.Close()
+
+	// Both MVCC versions must be present (no user-key-only deduplication).
+	if len(gotKeys) != 2 {
+		t.Fatalf("expected 2 MVCC versions of K, got %d", len(gotKeys))
+	}
+	// Ordering is by user key, then by commit timestamp.
+	if string(gotKeys[0]) != "K" || string(gotVals[0]) != "v10" {
+		t.Errorf("first entry: expected (K,v10), got (%s,%s)", gotKeys[0], gotVals[0])
+	}
+	if string(gotKeys[1]) != "K" || string(gotVals[1]) != "v20" {
+		t.Errorf("second entry: expected (K,v20), got (%s,%s)", gotKeys[1], gotVals[1])
+	}
+}
+
 // Ensure compile-time interface satisfaction
 var _ Iterator = (*testIter)(nil)
 var _ Iterator = (*tombstoneIter)(nil)

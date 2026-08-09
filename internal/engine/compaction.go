@@ -27,6 +27,13 @@ import (
 	"github.com/f4ga/ScoriaDB/internal/mvcc"
 )
 
+// compactionTestHook is invoked once at the start of the version-processing loop
+// inside compactLevel0 when non-nil. It is used by tests to deterministically
+// open a new snapshot while compaction is in progress. Never set in production.
+// This is the only accepted seam for deterministic compaction-concurrency tests;
+// production code never assigns it, so the hot path pays a single nil check.
+var compactionTestHook func()
+
 // compactLevel0 performs compaction from level 0 to level 1.
 // Real implementation: merges all level-0 SSTables into a single new level-1 SSTable
 // using multi-way merge with deduplication and tombstone removal.
@@ -60,9 +67,6 @@ func (e *LSMEngine) compactLevel0() error {
 		}
 		iterators = append(iterators, iter)
 	}
-
-	// Get minimum active snapshot timestamp
-	minActiveSnapshotTS := e.GetMinActiveSnapshotTS()
 
 	// Collect all key-value pairs from all iterators.
 	// IMPORTANT: data from SSTable iterators may reference the mmap region.
@@ -100,8 +104,11 @@ func (e *LSMEngine) compactLevel0() error {
 		if cmp > 0 {
 			return false
 		}
-		// Same user key: higher timestamp (newer) comes first
-		return ki.Timestamp > kj.Timestamp
+		// Same user key: the MVCCKey.Timestamp is INVERTED (MaxUint64 - commitTS),
+		// so a SMALLER Timestamp means a LARGER commitTS = NEWER version. Sorting
+		// by ascending Timestamp places the newest version first, which is what
+		// the compaction loop below treats as versions[0] (always kept).
+		return ki.Timestamp < kj.Timestamp
 	})
 
 	// Get next file number
@@ -129,6 +136,13 @@ func (e *LSMEngine) compactLevel0() error {
 
 	// Process grouped by user key
 	for i := 0; i < len(allKVs); {
+		// Test-only seam: invoked once at the start of the version-processing
+		// loop so a test can open a new snapshot mid-compaction deterministically.
+		// Nil in production — a single nil check is negligible here.
+		if compactionTestHook != nil {
+			compactionTestHook()
+		}
+
 		userKey := allKVs[i].key.Key
 
 		// Collect all versions for this user key
@@ -138,11 +152,17 @@ func (e *LSMEngine) compactLevel0() error {
 			i++
 		}
 
-		// Determine which versions to keep
-		// Always keep the newest version (first in slice due to sorting)
-		// For older versions, keep if commitTS <= minActiveSnapshotTS
+		// Determine which versions to keep.
+		// Always keep the newest version (first in slice due to sorting).
+		// For older versions, keep if commitTS <= the current minimum active
+		// snapshot timestamp. The minimum is re-read on every version so that a
+		// snapshot opened AFTER compaction started (with a smaller commitTS) is
+		// respected: such a snapshot must still observe its historical versions.
+		// GetMinActiveSnapshotTS is an atomic read-only registry lookup, so this
+		// adds no meaningful overhead and needs no snapshot-blocking lock.
 		for j, kv := range versions {
 			commitTS := kv.key.CommitTS()
+			curMin := e.GetMinActiveSnapshotTS()
 			if j == 0 {
 				// Newest version: always keep (unless it's a tombstone)
 				if len(kv.value) == 0 {
@@ -150,8 +170,8 @@ func (e *LSMEngine) compactLevel0() error {
 					continue
 				}
 			} else {
-				// Older version: keep only if needed by active snapshots
-				if minActiveSnapshotTS == 0 || commitTS > minActiveSnapshotTS {
+				// Older version: keep only if needed by an active snapshot
+				if curMin == 0 || commitTS > curMin {
 					// This version is not visible to any active snapshot (or no snapshots)
 					// Skip it
 					continue
