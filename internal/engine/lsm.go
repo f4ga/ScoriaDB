@@ -549,46 +549,44 @@ func (e *LSMEngine) GetLatestInfo(key []byte) ([]byte, uint64, bool, error) {
 	// A key may live in any shard's active or frozen MemTable, so we scan all.
 	// See: SYMPTOM-04, HOT-01
 	e.mu.RLock()
+	mtList := make([]*memtable.MemTable, 0, len(e.shards)*2)
 	for _, shard := range e.shards {
-		if shard.memTable == nil {
-			continue
-		}
-		val, ts, found := shard.memTable.GetLatest(key)
-		if ts > 0 {
-			e.mu.RUnlock()
-			// Key found in memtable (either live or deleted).
-			// If found=true, it's a live value. If found=false, it's a tombstone.
-			if found {
-				decoded, err := e.decodeStoredValue(val, false)
-				return decoded, ts, true, err
-			}
-			// Tombstone — key is deleted, return nil with the tombstone TS.
-			return nil, ts, false, nil
+		if shard.memTable != nil {
+			mtList = append(mtList, shard.memTable)
 		}
 		if shard.frozenMemTable != nil {
-			val, ts, found = shard.frozenMemTable.GetLatest(key)
-			if ts > 0 {
-				e.mu.RUnlock()
-				if found {
-					decoded, err := e.decodeStoredValue(val, false)
-					return decoded, ts, true, err
-				}
-				return nil, ts, false, nil
-			}
+			mtList = append(mtList, shard.frozenMemTable)
 		}
+	}
+	levels := make([][]*sstable.Reader, len(e.levels))
+	for i, level := range e.levels {
+		levels[i] = append([]*sstable.Reader(nil), level...)
 	}
 	e.mu.RUnlock()
 
-	// Search SSTables (already O(log N) via block index)
-	e.mu.RLock()
-	defer e.mu.RUnlock()
-	for _, level := range e.levels {
+	// A key may live in any shard's active or frozen MemTable, so we scan all.
+	for _, mt := range mtList {
+		val, ts, found := mt.GetLatest(key)
+		if ts == 0 {
+			continue
+		}
+		// Key found in memtable (either live or deleted).
+		// If found=true, it's a live value. If found=false, it's a tombstone.
+		if found {
+			decoded, err := e.decodeStoredValue(val, false)
+			return decoded, ts, true, err
+		}
+		// Tombstone — key is deleted, return nil with the tombstone TS.
+		return nil, ts, false, nil
+	}
+
+	// Search SSTables (already O(log N) via block index).
+	for _, level := range levels {
 		for _, sst := range level {
 			iter, err := sst.NewIterator()
 			if err != nil {
 				continue
 			}
-			defer iter.Close()
 			var bestValue []byte
 			var bestTS uint64
 			for iter.Next() {
@@ -601,6 +599,7 @@ func (e *LSMEngine) GetLatestInfo(key []byte) ([]byte, uint64, bool, error) {
 					}
 				}
 			}
+			iter.Close()
 			if bestTS > 0 {
 				// Tombstones in SSTables have empty value (valLen=0).
 				// If the newest version has an empty value, it's a tombstone.

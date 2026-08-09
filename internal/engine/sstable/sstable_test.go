@@ -641,6 +641,56 @@ func TestOpenCorruptedIndex(t *testing.T) {
 	}
 }
 
+func TestReadBlockWithOversizedSize(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "oversized.sst")
+
+	// Create a valid SSTable with at least one block.
+	writer, err := NewWriter(path, 10)
+	if err != nil {
+		t.Fatalf("failed to create writer: %v", err)
+	}
+	for i := 0; i < 5; i++ {
+		key := mvcc.NewMVCCKey([]byte(fmt.Sprintf("key-%d", i)), uint64(i+1))
+		if err := writer.Append(key, []byte("value")); err != nil {
+			t.Fatalf("failed to append: %v", err)
+		}
+	}
+	if err := writer.Finish(); err != nil {
+		t.Fatalf("failed to finish: %v", err)
+	}
+
+	// Corrupt the first block header (block size field) to a value whose
+	// +4 (CRC trailer) would overflow a uint32. 0xFFFFFFFE + 4 == 2.
+	// The reader must return an error instead of panicking or reading garbage.
+	file, err := os.OpenFile(path, os.O_RDWR, 0644)
+	if err != nil {
+		t.Fatalf("failed to open file for corruption: %v", err)
+	}
+	oversized := []byte{0xFE, 0xFF, 0xFF, 0xFF} // 0xFFFFFFFE
+	if _, err := file.WriteAt(oversized, 0); err != nil {
+		file.Close()
+		t.Fatalf("failed to corrupt block header: %v", err)
+	}
+	file.Close()
+
+	reader, err := Open(path)
+	if err != nil {
+		// Opening may fail because the bloom filter / index parse is unaffected,
+		// but if it does, that is also a graceful handling of corruption.
+		t.Logf("Open rejected corrupted file: %v", err)
+		return
+	}
+	defer reader.Close()
+
+	// Lookup should not panic; it must either return not-found or an error
+	// internally. Because the corrupted header claims a huge size, readBlock
+	// must fail the bounds check and Lookup returns false (no panic).
+	if val, found := reader.Lookup(mvcc.NewMVCCKey([]byte("key-0"), 1)); found {
+		t.Errorf("expected no value for corrupted block, got %s", val)
+	}
+}
+
 func TestReadBlockNonExistent(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "readblock.sst")

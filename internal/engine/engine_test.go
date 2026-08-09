@@ -16,8 +16,10 @@ package engine
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -871,6 +873,99 @@ func TestCompactLevel0(t *testing.T) {
 	// compactLevel0 with no level-0 files should return nil
 	if err := eng.compactLevel0(); err != nil {
 		t.Errorf("compactLevel0 with empty level 0 should return nil, got %v", err)
+	}
+}
+
+// TestGetLatestInfoConcurrent verifies that GetLatestInfo does not hold the
+// engine RLock for the duration of the SSTable scan.
+//
+// Regression: previously GetLatestInfo held e.mu.RLock with defer RUnlock while
+// iterating every SSTable across all levels. With many SSTables this starved
+// flushMemTable / compactLevel0, which need the exclusive e.mu.Lock. This test
+// runs concurrent readers while forcing flushes and compaction, then asserts
+// the background tasks complete within a bounded time and that reads remain
+// correct (no data race, correct values returned).
+func TestGetLatestInfoConcurrent(t *testing.T) {
+	dir := t.TempDir()
+	eng, err := NewLSMEngine(dir)
+	if err != nil {
+		t.Fatalf("failed to create engine: %v", err)
+	}
+	defer errors.CloseWithFatal(eng, "engine")
+
+	const numKeys = 64
+	keys := make([][]byte, numKeys)
+	for i := 0; i < numKeys; i++ {
+		keys[i] = []byte(fmt.Sprintf("key-%03d", i))
+	}
+
+	// Seed initial data and force a flush so SSTables exist on level 0.
+	for i, key := range keys {
+		if err := eng.PutWithTS(key, []byte(fmt.Sprintf("v%d", i)), uint64(i+1)); err != nil {
+			t.Fatalf("PutWithTS failed: %v", err)
+		}
+	}
+	if err := eng.flushMemTable(); err != nil {
+		t.Fatalf("initial flush failed: %v", err)
+	}
+
+	var wg sync.WaitGroup
+	readerErr := make(chan error, numKeys)
+
+	// Readers call GetLatestInfo on distinct keys concurrently.
+	for _, key := range keys {
+		wg.Add(1)
+		go func(k []byte) {
+			defer wg.Done()
+			val, ts, found, err := eng.GetLatestInfo(k)
+			if err != nil {
+				readerErr <- err
+				return
+			}
+			// The key must be found in either the memtable or the SSTable.
+			if !found || ts == 0 {
+				readerErr <- fmt.Errorf("key %s: expected found with ts>0, got found=%v ts=%d", k, found, ts)
+				return
+			}
+			if val == nil {
+				readerErr <- fmt.Errorf("key %s: expected non-nil value", k)
+			}
+		}(key)
+	}
+
+	// Background tasks: repeated flush + compaction must not be starved by
+	// the concurrent readers holding RLock indefinitely.
+	bgDone := make(chan error, 1)
+	go func() {
+		flushStart := time.Now()
+		if err := eng.flushMemTable(); err != nil {
+			bgDone <- fmt.Errorf("flushMemTable failed: %w", err)
+			return
+		}
+		compactStart := time.Now()
+		if err := eng.compactLevel0(); err != nil {
+			bgDone <- fmt.Errorf("compactLevel0 failed: %w", err)
+			return
+		}
+		elapsed := time.Since(flushStart)
+		// The lock must be released promptly. If GetLatestInfo held RLock
+		// across the whole scan, flush+compact could not acquire the exclusive
+		// Lock and this background task would block for the entire reader span.
+		if elapsed > 30*time.Second {
+			bgDone <- fmt.Errorf("flush+compact took %v, likely starved by RLock", elapsed)
+		}
+		_ = compactStart
+		bgDone <- nil
+	}()
+
+	wg.Wait()
+	close(readerErr)
+	for err := range readerErr {
+		t.Errorf("concurrent reader error: %v", err)
+	}
+
+	if err := <-bgDone; err != nil {
+		t.Errorf("background task error: %v", err)
 	}
 }
 

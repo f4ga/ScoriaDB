@@ -441,7 +441,18 @@ func (r *Reader) readBlockFromMmap(data []byte, offset uint64) ([]byte, error) {
 }
 
 // readBlockFromFile reads a block using file I/O (fallback for non-mmap platforms).
+//
+// The block size is read as a uint32 from the file header. Because the on-disk
+// block includes a 4-byte CRC32 trailer, the true total size is blockSize+4.
+// Computing that in uint32 could overflow for a corrupt/truncated header
+// (e.g. blockSize=0xFFFFFFFE wraps totalSize to 2), silently allocating a tiny
+// buffer and reading garbage. We therefore widen to uint64 and validate the
+// total against the actual file size before any allocation or read.
+//
+// See: CRASH-DATA-01, SAFE-MMAP-02
 func (r *Reader) readBlockFromFile(offset uint64) ([]byte, error) {
+	fileSize := r.mmapFile.Size()
+
 	var blockSize uint32
 	sizeBuf := make([]byte, 4)
 	if _, err := r.mmapFile.ReadAt(sizeBuf, int64(offset)); err != nil {
@@ -449,12 +460,24 @@ func (r *Reader) readBlockFromFile(offset uint64) ([]byte, error) {
 	}
 	blockSize = binary.LittleEndian.Uint32(sizeBuf)
 
-	// Block on disk includes CRC32 trailer (4 bytes), so total = blockSize + 4
-	totalSize := blockSize + 4
+	// Block on disk includes CRC32 trailer (4 bytes), so total = blockSize + 4.
+	// Widening to uint64 prevents overflow for oversized/corrupt block headers.
+	totalSize := uint64(blockSize) + 4
+
+	// Validate the declared block fits entirely within the file. A corrupt
+	// header claiming a huge size (e.g. 0xFFFFFFFF) must yield an error, not a
+	// tiny buffer or an out-of-range read.
+	if offset+4+totalSize > uint64(fileSize) {
+		return nil, fmt.Errorf("block at offset %d (size %d) exceeds file size %d",
+			offset, totalSize, fileSize)
+	}
+
+	// Convert to int once, after the bounds check guarantees it fits.
+	n := int(totalSize)
 
 	bufPtr, ok := blockPool.Get().(*[]byte)
 	if !ok {
-		buf := make([]byte, totalSize)
+		buf := make([]byte, n)
 		if _, err := r.mmapFile.ReadAt(buf, int64(offset+4)); err != nil {
 			return nil, fmt.Errorf("failed to read block data: %w", err)
 		}
@@ -465,10 +488,10 @@ func (r *Reader) readBlockFromFile(offset uint64) ([]byte, error) {
 		return buf[:blockSize], nil
 	}
 	buf := *bufPtr
-	if cap(buf) < int(totalSize) {
-		buf = make([]byte, totalSize)
+	if cap(buf) < n {
+		buf = make([]byte, n)
 	} else {
-		buf = buf[:totalSize]
+		buf = buf[:n]
 	}
 
 	if _, err := r.mmapFile.ReadAt(buf, int64(offset+4)); err != nil {
