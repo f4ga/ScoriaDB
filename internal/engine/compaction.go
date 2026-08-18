@@ -40,6 +40,13 @@ var compactionTestHook func()
 //
 //nolint:unused // triggered by maybeCompact
 func (e *LSMEngine) compactLevel0() error {
+	if e.manifest == nil {
+		return fmt.Errorf("compactLevel0: engine manifest is nil")
+	}
+	if e.closed.Load() {
+		return fmt.Errorf("compactLevel0: engine is closed")
+	}
+
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
@@ -305,28 +312,49 @@ func (e *LSMEngine) compactLevel0() error {
 	// Add new reader to level 1
 	e.levels[1] = append(e.levels[1], reader)
 
+	// Keep every shard's reader view consistent with the engine-global level set.
+	// Readers (Shard.Get) read the shard's OWN levels slice, never e.levels. The
+	// engine-level flush publishes each flushed reader to BOTH e.levels[0] and the
+	// owning shard's s.levels[0]; compaction must mirror the same transition on
+	// every shard, otherwise flushed data becomes invisible after the level-0
+	// readers are closed. The merged level-1 SSTable is engine-global, so append
+	// it to every shard's level 1. See: LSM-02, ARCH-01, DEF-D2.
+	for _, shard := range e.shards {
+		shard.levelsMu.Lock()
+		shard.levels[0] = nil
+		shard.levels[1] = append(shard.levels[1], reader)
+		shard.levelsMu.Unlock()
+	}
+
 	// Success, do not close reader
 	return nil
 }
 
 // maybeCompact checks conditions and triggers compaction if needed.
 //
+// The implementation NEVER holds e.mu.Lock while notifying the worker and NEVER
+// launches a goroutine under the lock. Instead it signals the buffered compactCh
+// (non-blocking) and returns immediately; the dedicated compactionWorker re-checks
+// the actual level-0 condition under a short lock before compacting. This makes
+// maybeCompact fully non-blocking for the hot path. See: DEF-D2, Глава XIII.
+//
 //nolint:unused // scheduled compaction entry point
 func (e *LSMEngine) maybeCompact() {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-
-	// Simple condition: if Level0 has more than MaxLevel0Files files, start compaction
-	if len(e.levels[0]) > MaxLevel0Files {
-		go func() {
-			defer func() {
-				if r := recover(); r != nil {
-					logger.WarnComponent(logger.ComponentCompaction, "compaction panic: %v", r)
-				}
-			}()
-			if err := e.compactLevel0(); err != nil {
-				logger.WarnComponent(logger.ComponentCompaction, "compaction failed: %v", err)
-			}
-		}()
+	if e.closed.Load() || e.manifest == nil {
+		return
+	}
+	// Peek the condition under a SHORT read lock (no I/O, no goroutine spawn).
+	// The signal is coalesced by the buffered channel (cap 1); if the channel is
+	// already full a worker is already scheduled, so we can drop the signal.
+	e.mu.RLock()
+	needCompact := len(e.levels[0]) > MaxLevel0Files
+	e.mu.RUnlock()
+	if !needCompact {
+		return
+	}
+	select {
+	case e.compactCh <- struct{}{}:
+	default:
+		// A signal is already pending; the worker will re-check the condition.
 	}
 }
