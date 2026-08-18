@@ -33,9 +33,20 @@ func NewTimestampGenerator() *TimestampGenerator {
 	return &TimestampGenerator{counter: 1} // начинаем с 1, 0 может быть специальным значением
 }
 
-// Next возвращает следующий timestamp.
-func (tg *TimestampGenerator) Next() uint64 {
+// Current возвращает текущее значение счётчика БЕЗ инкремента. Метод read-only;
+// выделение нового уникального timestamp выполняется через Increment().
+// See: DEF-D1, Глава VII (атомарные операции не должны скрывать поведение за
+// вводящим в заблуждение именем).
+func (tg *TimestampGenerator) Current() uint64 {
 	return atomic.LoadUint64(&tg.counter)
+}
+
+// Next устарел и вводит в заблуждение: он возвращает текущее значение, а НЕ
+// следующий timestamp. Оставлен как совместимая обёртка над Current() для
+// обратной совместимости. Новый код должен использовать Current() (read-only)
+// или Increment() (выделение нового значения). See: DEF-D1.
+func (tg *TimestampGenerator) Next() uint64 {
+	return tg.Current()
 }
 
 // Increment увеличивает счетчик и возвращает новый timestamp.

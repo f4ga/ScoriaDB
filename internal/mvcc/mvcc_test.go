@@ -259,3 +259,90 @@ func TestTimestampGeneratorSetConcurrent(t *testing.T) {
 		t.Errorf("expected at least 950 after concurrent Set calls, got %d", v)
 	}
 }
+
+// TestTimestampCurrent verifies that Current() returns the current counter value
+// WITHOUT changing it (read-only). See: DEF-D1, Глава VII.
+func TestTimestampCurrent(t *testing.T) {
+	tg := NewTimestampGenerator()
+	// Initial value is 1.
+	if v := tg.Current(); v != 1 {
+		t.Fatalf("expected initial Current() = 1, got %d", v)
+	}
+	// Increment twice, then Current must reflect the incremented value but
+	// must NOT advance it further.
+	tg.Increment() // 2
+	tg.Increment() // 3
+	if v := tg.Current(); v != 3 {
+		t.Fatalf("expected Current() = 3 after two increments, got %d", v)
+	}
+	// Calling Current() again must return the SAME value (no mutation).
+	if v := tg.Current(); v != 3 {
+		t.Fatalf("Current() mutated the counter: expected 3, got %d", v)
+	}
+}
+
+// TestTimestampIncrement verifies that Increment() allocates strictly increasing
+// timestamps. See: DEF-D1.
+func TestTimestampIncrement(t *testing.T) {
+	tg := NewTimestampGenerator()
+	prev := tg.Current()
+	for i := 0; i < 1000; i++ {
+		next := tg.Increment()
+		if next <= prev {
+			t.Fatalf("Increment not monotonic: prev=%d, next=%d", prev, next)
+		}
+		prev = next
+	}
+}
+
+// TestTimestampNoDuplicates verifies that 100 goroutines × 1000 calls each
+// produce 100,000 unique timestamps. See: DEF-D1.
+func TestTimestampNoDuplicates(t *testing.T) {
+	tg := NewTimestampGenerator()
+	const goroutines = 100
+	const callsPerGoroutine = 1000
+
+	var wg sync.WaitGroup
+	results := make(chan uint64, goroutines*callsPerGoroutine)
+	wg.Add(goroutines)
+	for g := 0; g < goroutines; g++ {
+		go func() {
+			defer wg.Done()
+			for i := 0; i < callsPerGoroutine; i++ {
+				results <- tg.Increment()
+			}
+		}()
+	}
+	wg.Wait()
+	close(results)
+
+	seen := make(map[uint64]struct{}, goroutines*callsPerGoroutine)
+	for ts := range results {
+		if _, dup := seen[ts]; dup {
+			t.Fatalf("duplicate timestamp %d", ts)
+		}
+		seen[ts] = struct{}{}
+	}
+	if len(seen) != goroutines*callsPerGoroutine {
+		t.Fatalf("expected %d unique timestamps, got %d", goroutines*callsPerGoroutine, len(seen))
+	}
+}
+
+// TestTimestampRace runs many goroutines calling Increment and Current
+// concurrently to verify there are no data races (run with -race).
+// See: DEF-D1.
+func TestTimestampRace(t *testing.T) {
+	tg := NewTimestampGenerator()
+	var wg sync.WaitGroup
+	for i := 0; i < 16; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 5000; j++ {
+				_ = tg.Increment()
+				_ = tg.Current()
+			}
+		}()
+	}
+	wg.Wait()
+}
