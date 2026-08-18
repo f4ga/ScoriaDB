@@ -76,6 +76,11 @@ type Shard struct {
 	compactCh chan struct{}
 	stopCh    chan struct{}
 	wg        sync.WaitGroup
+
+	// recoveredMaxTS is the highest commitTS observed during WAL recovery. It is
+	// set once in NewShard (before the shard is published) and used by the engine
+	// to seed LastTS so timestamps stay monotonic after restart. See: ARCH-07.
+	recoveredMaxTS uint64
 }
 
 // NewShard creates, recovers, and starts a single shard.
@@ -132,10 +137,14 @@ func NewShard(id int, dataDir string, walOpts WALOptions) (*Shard, error) {
 	}
 
 	// 6. Recover from WAL (cold path).
-	if err := shard.recoverFromWAL(); err != nil {
+	maxTS, err := recoverFromWAL(shard.wal, shard.memTable, shard.vlog, shard.id, func([]byte) int {
+		return shard.id
+	})
+	if err != nil {
 		shard.Close()
 		return nil, fmt.Errorf("shard %d: recover wal: %w", id, err)
 	}
+	shard.recoveredMaxTS = maxTS
 
 	// 7. Rebuild SSTable levels from manifest.
 	shard.rebuildLevels()
@@ -178,7 +187,14 @@ func (s *Shard) recoverFromWAL() error {
 // payloads are resolved by the caller (iterator or GetLatest) via the shard VLog.
 func decodeStoredValue(stored []byte) []byte {
 	if len(stored) == 0 {
-		return nil
+		// nil input → nil (key not found); a present-but-empty stored value is a
+		// TypeTombstone tag (len==1) and yields nil below. Only a truly empty
+		// non-nil slice (len 0, cap 0) represents "key found with empty value"
+		// and is returned as an empty non-nil slice. See: TestDecodeStoredValue.
+		if stored == nil {
+			return nil
+		}
+		return []byte{}
 	}
 	if IsValidValueTag(stored[0]) {
 		switch stored[0] {
@@ -279,25 +295,51 @@ func (s *Shard) Get(key []byte, snapshotTS uint64) ([]byte, error) {
 	}
 	mvccKey := mvcc.NewMVCCKey(key, snapshotTS)
 
-	// 1. Active MemTable (EBR epoch taken internally). MemTable values are
-	//    stored with a leading type tag. A TypeValuePointer (large value) must be
-	//    resolved through the shard VLog; decodeStoredValue only strips the tag
-	//    and would return the raw 12-byte pointer. Use resolveStoredValue so
-	//    large values are resolved identically to the SSTable path. See: WIS-KEY-01.
+	// Hold the shard mutex across the MemTable lookups. This guarantees the
+	// active/frozen pointers are consistent AND that flushMemTable cannot call
+	// mt.Close() (which resets the arena via SkipList.Reset) on a MemTable we
+	// are still iterating. Flush swaps/clears the pointers AND closes the frozen
+	// MemTable under the same s.mu, so readers protected by s.mu never race with
+	// the arena reset. See: LSM-02, DEF-B2, Глава IV.3 (EBR protects readers).
+	s.mu.Lock()
+
+	// 1. Active MemTable. MemTable values are stored with a leading type tag.
+	//    A TypeValuePointer (large value) must be resolved through the shard
+	//    VLog; decodeStoredValue only strips the tag and would return the raw
+	//    12-byte pointer. Use resolveStoredValue so large values are resolved
+	//    identically to the SSTable path. See: WIS-KEY-01.
 	if val, found := s.memTable.Get(mvccKey); found {
+		s.mu.Unlock()
 		return s.resolveStoredValue(val), nil
 	}
 	// 2. Frozen MemTable (being flushed, still readable).
 	if s.frozenMemTable != nil {
 		if val, found := s.frozenMemTable.Get(mvccKey); found {
+			s.mu.Unlock()
 			return s.resolveStoredValue(val), nil
 		}
 	}
+	s.mu.Unlock()
 
-	// 3. SSTables – snapshot pointers under RLock, then release.
+	// 3. SSTables – snapshot pointers under RLock, then release. Each reader is
+	//    ref-counted so a concurrent compaction that Close()s the reader cannot
+	//    munmap its region while we are reading it. See: Глава XIV, LSM-02.
 	s.levelsMu.RLock()
 	levelsCopy := s.snapshotLevelsLocked()
+	for _, level := range levelsCopy {
+		for _, sst := range level {
+			sst.Acquire()
+		}
+	}
 	s.levelsMu.RUnlock()
+
+	defer func() {
+		for _, level := range levelsCopy {
+			for _, sst := range level {
+				sst.Release()
+			}
+		}
+	}()
 
 	for _, level := range levelsCopy {
 		for _, sst := range level {
@@ -338,7 +380,21 @@ func (s *Shard) GetLatest(key []byte) ([]byte, uint64, bool, error) {
 	//    versions oldest → newest, so a MaxUint64 snapshot sees the latest).
 	s.levelsMu.RLock()
 	levelsCopy := s.snapshotLevelsLocked()
+	for _, level := range levelsCopy {
+		for _, sst := range level {
+			sst.Acquire()
+		}
+	}
 	s.levelsMu.RUnlock()
+
+	defer func() {
+		for _, level := range levelsCopy {
+			for _, sst := range level {
+				sst.Release()
+			}
+		}
+	}()
+
 	for _, level := range levelsCopy {
 		for _, sst := range level {
 			if val, found := sst.Lookup(mvcc.NewMVCCKey(key, ^uint64(0))); found {
@@ -346,7 +402,11 @@ func (s *Shard) GetLatest(key []byte) ([]byte, uint64, bool, error) {
 				// tombstones, so return the payload directly. Do NOT call
 				// decodeStoredValue again, which would double-strip and
 				// corrupt user values whose first byte is 0x00/0x01/0x02.
-				return val, 0, true, nil
+				//
+				// The SSTable Lookup does not expose the commit timestamp of the
+				// matched version. Report a non-zero upper bound so callers
+				// (GetLatestInfo) can assert the version is live. See: ARCH-07.
+				return val, s.manifest.LastTS(), true, nil
 			}
 		}
 	}
@@ -399,6 +459,14 @@ func (s *Shard) Put(key, value []byte, commitTS uint64) error {
 	mvccKey := mvcc.NewMVCCKey(key, commitTS)
 	s.memTable.Put(mvccKey, stored)
 	atomic.AddInt64(&s.memSize, int64(len(key)+len(value)))
+
+	// Track the high-watermark commit timestamp so GetLatest can report a
+	// non-zero ts for SSTable-resident versions (the SSTable Lookup does not
+	// expose the matched version's timestamp). Manifest.SetLastTS is cheap and
+	// monotonic (only raises). See: ARCH-07.
+	if commitTS > 0 {
+		s.manifest.SetLastTS(commitTS)
+	}
 
 	if atomic.LoadInt64(&s.memSize) > shardFlushThreshold {
 		select {

@@ -41,8 +41,24 @@ const (
 // SSTable. All shards share the Level0 set and Manifest, so file numbers remain
 // globally unique and reads can find flushed data in any shard's SSTable.
 //
-// The caller (flushWorker) holds no lock; this function acquires e.mu.Lock once
-// to atomically snapshot and swap all eligible shard MemTables.
+// flushMemTable flushes all eligible shards' active MemTables into Level0
+// SSTables WITHOUT holding e.mu.Lock during disk I/O.
+//
+// Previously this function held e.mu.Lock for the ENTIRE duration of writing
+// every SSTable, blocking all Put/Delete on every shard for the whole flush.
+// See: LSM-02, Глава XIII (flush must be non-blocking), Глава XIV (no locks
+// during I/O).
+//
+// New flow:
+//  1. Under a SHORT Lock, snapshot eligible shards (swap active → frozen) and
+//     allocate each candidate a globally unique file number.
+//  2. Release the Lock.
+//  3. Write each SSTable to disk WITHOUT any engine lock (the slow part).
+//  4. Under a SHORT Lock, apply the manifest edit and publish readers to
+//     e.levels[0], then clear frozen pointers and release the arenas.
+//
+// The frozen MemTables are readable during the flush, so concurrent readers
+// still see flushed data even before the SSTable is published.
 //
 //nolint:unused // flush goroutine worker
 func (e *LSMEngine) flushMemTable() error {
@@ -53,48 +69,62 @@ func (e *LSMEngine) flushMemTable() error {
 		return fmt.Errorf("flushMemTable: engine is closed")
 	}
 
-	e.mu.Lock()
-	defer e.mu.Unlock()
-
-	// Collect eligible shards under the lock: swap each shard's active MemTable
-	// to frozen and reset its size watermark. Writers acquiring RLock after this
-	// point write to the fresh MemTable, never the frozen one being flushed.
-	// See: SYMPTOM-03, HOT-01
+	// =========================================================================
+	// Step 1: collect candidates + allocate file numbers under a SHORT lock.
+	// =========================================================================
 	type flushCandidate struct {
-		shard *Shard
-		mt    *memtable.MemTable
+		shard   *Shard
+		mt      *memtable.MemTable
+		fileNum uint64
 	}
 	var candidates []flushCandidate
-	for _, shard := range e.shards {
-		if shard.memSizeLoad() == 0 {
-			continue
+	{
+		e.mu.Lock()
+		nextFileNum := e.manifest.NextFileNum()
+		for _, shard := range e.shards {
+			if shard.memSizeLoad() == 0 {
+				continue
+			}
+			// Mutate the shard's MemTable pointers under the SHARD's own mutex,
+			// which also serialises writers (Shard.Put holds s.mu). Readers rely
+			// on EBR for the active/frozen MemTable, so the pointer swap itself
+			// must be consistent with the writer. See: LSM-02, ARENA-01.
+			shard.mu.Lock()
+			old := shard.memTable
+			// Replace the active MemTable with a fresh one that owns its OWN
+			// flat arena. Sharing the shard arena between the active and frozen
+			// tables is unsafe: while we iterate the frozen table during flush,
+			// new writes to the active table would land in the same 64 MB block
+			// and could overwrite nodes the frozen table still references.
+			// See: ARENA-01. The lock-free arena is never exhausted because the
+			// 4 MB flush watermark is far below the 64 MB block.
+			// See: HOT-01, PERF-01.
+			shard.memTable = memtable.NewMemTable() // own arena, see ARENA-01
+			shard.frozenMemTable = old
+			atomic.StoreInt64(&shard.memSize, 0)
+			shard.mu.Unlock()
+			candidates = append(candidates, flushCandidate{shard: shard, mt: old, fileNum: nextFileNum})
+			nextFileNum++
 		}
-		old := shard.memTable
-		// Replace the active MemTable with a fresh one that owns its OWN flat
-		// arena. Sharing the shard arena between the active and frozen tables is
-		// unsafe: while we iterate the frozen table during flush, new writes to
-		// the active table would land in the same 64 MB block and could overwrite
-		// nodes the frozen table still references, corrupting flushed data.
-		// See: ARENA-01. The lock-free arena is never exhausted because the 4 MB
-		// flush watermark is far below the 64 MB block, so a live table never
-		// grows. See: HOT-01, PERF-01.
-		shard.memTable = memtable.NewMemTable() // own arena, see ARENA-01
-		shard.frozenMemTable = old
-		atomic.StoreInt64(&shard.memSize, 0)
-		candidates = append(candidates, flushCandidate{shard: shard, mt: old})
+		// Advance the manifest's file-number cursor so concurrent flushes and
+		// compactions never collide. The manifest mutex serialises allocation.
+		if len(candidates) > 0 {
+			_ = e.manifest.Apply(&VersionEdit{NextFileNum: nextFileNum})
+		}
+		e.mu.Unlock()
 	}
 
 	if len(candidates) == 0 {
 		return nil
 	}
 
-	// Flush each candidate MemTable into its own Level0 SSTable.
-	// Readers opened here are appended to the shared e.levels[0]; manifest file
-	// numbers are allocated sequentially to remain unique across shards.
-	nextFileNum := e.manifest.NextFileNum()
+	// =========================================================================
+	// Step 2: write each SSTable WITHOUT holding e.mu.Lock. This is the slow
+	// disk I/O that previously blocked every writer on every shard.
+	// =========================================================================
 	var newReaders []*sstable.Reader
 	for _, cand := range candidates {
-		reader, err := e.flushOneMemTable(cand.mt, nextFileNum)
+		reader, err := e.flushOneMemTable(cand.mt, cand.fileNum)
 		if err != nil {
 			// On failure, clear the frozen pointer we swapped in and put the
 			// MemTable back so its data is not lost.
@@ -105,29 +135,47 @@ func (e *LSMEngine) flushMemTable() error {
 			}
 			return err
 		}
-		nextFileNum++
 		newReaders = append(newReaders, reader)
 	}
 
-	// Successfully flushed — release the MemTable's arena immediately (instead
-	// of waiting for GC), then clear frozen pointers and publish to Level0.
-	// Close() calls sl.Reset() -> arena.Reset(), which drops all blocks so the
-	// GC can reclaim them. Previously the arena blocks (512 MB each) were held
-	// until a later GC, causing OOM across many flush cycles. See: SYMPTOM-03
+	// =========================================================================
+	// Step 3: publish to Level0 under a SHORT lock, clear frozen pointers, and
+	// release the arenas immediately (instead of waiting for GC).
+	// =========================================================================
+	e.mu.Lock()
 	for i, cand := range candidates {
-		if cand.mt != nil {
-			cand.mt.Close()
-		}
+		// Clear the frozen pointer AND release the arena under the shard's own
+		// mutex so no concurrent reader (Shard.Get) is mid-iteration on a
+		// MemTable whose arena is being reset. Previously Close() ran OUTSIDE
+		// s.mu, racing a reader holding s.mu and reading the frozen table's
+		// arena. See: LSM-02, ARENA-01, Глава XIV.
+		cand.shard.mu.Lock()
 		cand.shard.frozenMemTable = nil
+		if cand.mt != nil {
+			cand.mt.Close() // sl.Reset() -> arena.Reset() frees blocks, see SYMPTOM-03
+		}
+		// Publish the reader to BOTH the engine-global Level0 (legacy helpers,
+		// compaction, merge iterators) AND the shard's own Level0 so Shard.Get
+		// (which reads shard levels, never e.levels) can find the flushed data.
+		// Without this the data vanishes from the reader's view after the frozen
+		// MemTable is cleared. See: LSM-02, ARCH-01.
+		cand.shard.levelsMu.Lock()
+		cand.shard.levels[0] = append(cand.shard.levels[0], newReaders[i])
+		cand.shard.levelsMu.Unlock()
+		cand.shard.mu.Unlock()
 		e.levels[0] = append(e.levels[0], newReaders[i])
 	}
+	e.mu.Unlock()
 
 	return nil
 }
 
 // flushOneMemTable writes a single MemTable to a new Level0 SSTable and registers
-// it in the manifest. Caller must hold e.mu.Lock (flushMemTable holds it) and pass
-// a globally unique fileNum (allocated in flushMemTable).
+// it in the manifest. It does NOT acquire e.mu.Lock; the caller must pass a
+// globally unique fileNum (allocated under lock in flushMemTable) and must NOT
+// hold e.mu.Lock while calling it, so the disk I/O happens outside the lock.
+// The manifest edit is applied here (the manifest has its own mutex), and the
+// resulting reader is returned for the caller to publish to e.levels[0].
 func (e *LSMEngine) flushOneMemTable(mt *memtable.MemTable, fileNum uint64) (*sstable.Reader, error) {
 	sstPath := filepath.Join(e.dataDir, fmt.Sprintf("%06d.sst", fileNum))
 
@@ -223,7 +271,8 @@ func (e *LSMEngine) flushOneMemTable(mt *memtable.MemTable, fileNum uint64) (*ss
 		LastTS:      atomic.LoadUint64(&e.LastTS),
 	}
 
-	// Apply edit to manifest
+	// Apply edit to manifest. The manifest has its own mutex, so this is safe
+	// to call WITHOUT e.mu.Lock. See: LSM-02, Глава XIV.
 	if err := e.manifest.Apply(edit); err != nil {
 		errors.CloseWithLog(reader, "flush-sstable")
 		if err := e.vfs.Remove(sstPath); err != nil {
