@@ -24,6 +24,7 @@ import (
 	"sync/atomic"
 
 	"github.com/f4ga/ScoriaDB/internal/keys"
+	"github.com/f4ga/ScoriaDB/internal/logger"
 	"github.com/f4ga/ScoriaDB/internal/mvcc"
 )
 
@@ -154,6 +155,11 @@ func Open(path string) (*Reader, error) {
 	// Parse min/max keys from mmap region
 	minKey := parseKey(data, footer.MinKeyOffset, footer.MinKeyLength)
 	maxKey := parseKey(data, footer.MaxKeyOffset, footer.MaxKeyLength)
+
+	// Diagnostic: report the opened SSTable's key count so mismatches between
+	// the number of entries the writer wrote and what readers observe can be
+	// detected early. See: SST-03.
+	logger.Info("SSTable opened: %s, numKeys=%d, fileSize=%d", path, footer.NumKeys, fileSize)
 
 	return &Reader{
 		mmapFile:     mmapFile,
@@ -569,18 +575,31 @@ func (r *Reader) Lookup(key mvcc.MVCCKey) ([]byte, bool) {
 		return nil, false
 	}
 
-	// Find block using binary search on index.
-	// The index stores raw user keys (first key of each block, without timestamp).
-	// We compare the lookup user key directly against index keys using bytes.Compare.
-	//
-	// sort.Search finds the first index where indexKey > userKey.
-	// The target block is the one before that (where indexKey <= userKey).
-	blockIdx := sort.Search(len(r.indexEntries), func(i int) bool {
-		return bytes.Compare(r.indexEntries[i].key, userKey) > 0
+	// ----------------------------------------------------------------
+	// FIXED: Binary search on index using lower_bound (>=) instead of upper_bound (>).
+	// This correctly handles the case where userKey is less than the first index key.
+	// ----------------------------------------------------------------
+	idx := sort.Search(len(r.indexEntries), func(i int) bool {
+		return bytes.Compare(r.indexEntries[i].key, userKey) >= 0
 	})
-	blockIdx-- // previous block is the one where indexKey <= userKey
-	if blockIdx < 0 {
-		return nil, false // key is before the first block
+
+	var blockIdx int
+	if idx == len(r.indexEntries) {
+		// userKey > all index keys → check the last block.
+		blockIdx = len(r.indexEntries) - 1
+	} else {
+		// If the found key is > userKey, the target block is the previous one.
+		// If it's == userKey, the key may be in this block (as the first key).
+		if idx > 0 && bytes.Compare(r.indexEntries[idx].key, userKey) != 0 {
+			blockIdx = idx - 1
+		} else {
+			blockIdx = idx
+		}
+	}
+
+	// Safety check.
+	if blockIdx < 0 || blockIdx >= len(r.indexEntries) {
+		return nil, false
 	}
 
 	// Read the block
