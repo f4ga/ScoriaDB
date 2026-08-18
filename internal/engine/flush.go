@@ -109,7 +109,9 @@ func (e *LSMEngine) flushMemTable() error {
 		// Advance the manifest's file-number cursor so concurrent flushes and
 		// compactions never collide. The manifest mutex serialises allocation.
 		if len(candidates) > 0 {
-			_ = e.manifest.Apply(&VersionEdit{NextFileNum: nextFileNum})
+			if err := e.manifest.Apply(&VersionEdit{NextFileNum: nextFileNum}); err != nil {
+				logger.WarnComponent(logger.ComponentFlush, "flush: failed to advance manifest file-number cursor: %v", err)
+			}
 		}
 		e.mu.Unlock()
 	}

@@ -12,7 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// internal/engine/shard.go
+// Package engine implements the shard-per-core LSM key-value storage engine.
+// It provides MVCC, WAL/VLog durability, non-blocking flush, and compaction.
 package engine
 
 import (
@@ -172,14 +173,6 @@ func (s *Shard) rebuildLevels() {
 			s.levels[lvl] = append(s.levels[lvl], reader)
 		}
 	}
-}
-
-// recoverFromWAL replays the shard's WAL into its MemTable.
-func (s *Shard) recoverFromWAL() error {
-	_, err := recoverFromWAL(s.wal, s.memTable, s.vlog, s.id, func([]byte) int {
-		return s.id
-	})
-	return err
 }
 
 // decodeStoredValue decodes a tagged stored value into its logical payload.

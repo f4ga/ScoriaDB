@@ -37,6 +37,7 @@ import (
 // Reset replaces the whole block under mu (cold path, used only by flush/Close)
 // and reuses the same region, so the GC reclaims nothing but the arena remains
 // immediately usable. See: HOT-01, PERF-01.
+//
 // FlatArenaSize is the size of each shard's flat arena block.
 //   - Production: 64 MB. The 4 MB flush watermark is far below this, so a live
 //     MemTable is never exhausted; the arena is Reset (released) by flush long
