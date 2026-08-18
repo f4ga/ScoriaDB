@@ -17,6 +17,21 @@
 // and background flush/compaction workers.
 package engine
 
+// maxLastCommitCacheEntries limits the number of keys tracked in the
+// lastCommitCache. Without a limit, a workload with many unique keys
+// would grow the map without bound and eventually cause OOM.
+//
+// 10_000 is enough to cover hot working sets while keeping memory bounded.
+// This is a defensive limit, not a performance tuning knob.
+const maxLastCommitCacheEntries = 10_000
+
+// lastCommitCacheEntry is stored in the LRU list and maps back to the key
+// so we can delete it from the map when it is evicted.
+type lastCommitCacheEntry struct {
+	key string
+	ts  uint64
+}
+
 // lastCommitCacheKey returns a stable copy of key suitable for use as a map key.
 //
 // The key is explicitly copied so the returned string does NOT share memory
@@ -33,17 +48,62 @@ func lastCommitCacheKey(key []byte) string {
 // updateLastCommitCache updates the last commit timestamp cache for a key.
 // Uses lastCommitCacheKey to store a stable (copied) string key, so the cache
 // entry is immune to later mutation of the caller's key slice.
+//
+// The cache is bounded by maxLastCommitCacheEntries. When the cache grows
+// past that limit, the least recently used entries are evicted. This trades
+// a tiny amount of cache-miss overhead for a hard guarantee that the map
+// cannot grow without bound.
 func (e *LSMEngine) updateLastCommitCache(key []byte, commitTS uint64) {
+	stableKey := lastCommitCacheKey(key)
+
 	e.cacheMu.Lock()
-	e.lastCommitCache[lastCommitCacheKey(key)] = commitTS
-	e.cacheMu.Unlock()
+	defer e.cacheMu.Unlock()
+
+	// If the key already exists, move it to the front of the LRU list.
+	if elem, ok := e.lastCommitCacheMap[stableKey]; ok {
+		elem.Value.(*lastCommitCacheEntry).ts = commitTS
+		e.lastCommitCacheLRU.MoveToFront(elem)
+		return
+	}
+
+	// New key: insert into map and front of LRU list.
+	entry := &lastCommitCacheEntry{key: stableKey, ts: commitTS}
+	elem := e.lastCommitCacheLRU.PushFront(entry)
+	e.lastCommitCacheMap[stableKey] = elem
+
+	// Evict oldest entries while the cache is over the limit.
+	for e.lastCommitCacheLRU.Len() > maxLastCommitCacheEntries {
+		oldest := e.lastCommitCacheLRU.Back()
+		if oldest == nil {
+			break
+		}
+		evict := oldest.Value.(*lastCommitCacheEntry)
+		delete(e.lastCommitCacheMap, evict.key)
+		e.lastCommitCacheLRU.Remove(oldest)
+	}
 }
 
 // getLastCommitCache returns the last commit timestamp for a key from cache.
 // Uses lastCommitCacheKey so lookups match keys written with a stable copy.
+//
+// Successful lookups are promoted to the front of the LRU list, so the cache
+// behaves as a true LRU: hot keys stay, cold keys get evicted.
 func (e *LSMEngine) getLastCommitCache(key []byte) (uint64, bool) {
+	stableKey := lastCommitCacheKey(key)
+
 	e.cacheMu.RLock()
-	defer e.cacheMu.RUnlock()
-	ts, ok := e.lastCommitCache[lastCommitCacheKey(key)]
-	return ts, ok
+	elem, ok := e.lastCommitCacheMap[stableKey]
+	e.cacheMu.RUnlock()
+	if !ok {
+		return 0, false
+	}
+
+	e.cacheMu.Lock()
+	if elem, stillExists := e.lastCommitCacheMap[stableKey]; stillExists {
+		e.lastCommitCacheLRU.MoveToFront(elem)
+	}
+	ts := elem.Value.(*lastCommitCacheEntry).ts
+	e.cacheMu.Unlock()
+
+	return ts, true
 }

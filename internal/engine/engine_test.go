@@ -476,38 +476,21 @@ func TestDecodeBatchLocal(t *testing.T) {
 }
 
 func TestDecodeStoredValue(t *testing.T) {
-	dir := t.TempDir()
-	eng, err := NewLSMEngine(dir)
-	if err != nil {
-		t.Fatalf("failed to create engine: %v", err)
-	}
-	defer errors.CloseWithFatal(eng, "engine")
-
-	// Test nil value
-	val, err := eng.decodeStoredValue(nil, false)
-	if err != nil {
-		t.Fatalf("decodeStoredValue(nil) failed: %v", err)
-	}
-	if val != nil {
+	// Test nil value — no engine needed; decodeStoredValue is a pure helper.
+	if val := decodeStoredValue(nil); val != nil {
 		t.Errorf("expected nil for nil input, got %v", val)
 	}
 
 	// Test inline value (not a VLog pointer)
 	inlineVal := []byte("inline_value")
-	val, err = eng.decodeStoredValue(inlineVal, false)
-	if err != nil {
-		t.Fatalf("decodeStoredValue(inline) failed: %v", err)
-	}
+	val := decodeStoredValue(inlineVal)
 	if !bytes.Equal(val, inlineVal) {
 		t.Errorf("expected %s, got %s", inlineVal, val)
 	}
 
 	// Test empty value — should return empty slice (not nil)
 	// to distinguish "key found with empty value" from "key not found".
-	val, err = eng.decodeStoredValue([]byte{}, false)
-	if err != nil {
-		t.Fatalf("decodeStoredValue(empty) failed: %v", err)
-	}
+	val = decodeStoredValue([]byte{})
 	if val == nil {
 		t.Errorf("expected empty slice for empty stored value, got nil")
 	}
@@ -630,10 +613,11 @@ func TestLSMEngineSetMinActiveSnapshotTS(t *testing.T) {
 	}
 	defer errors.CloseWithFatal(eng, "engine")
 
-	eng.SetMinActiveSnapshotTS(42)
+	eng.RegisterSnapshot(42)
 	if min := eng.GetMinActiveSnapshotTS(); min != 42 {
 		t.Errorf("expected 42, got %d", min)
 	}
+	eng.UnregisterSnapshot(42)
 }
 
 func TestActiveFrozenMemTable(t *testing.T) {
@@ -644,14 +628,14 @@ func TestActiveFrozenMemTable(t *testing.T) {
 	}
 	defer errors.CloseWithFatal(eng, "engine")
 
-	// Active memtable should not be nil
-	if mt := eng.ActiveMemTable(); mt == nil {
-		t.Error("ActiveMemTable should not be nil")
+	// With shard-per-core, each shard owns its MemTable. Shard 0 always exists
+	// and has a non-nil active MemTable; its frozen MemTable is nil initially.
+	shard := eng.shards[0]
+	if shard.memTable == nil {
+		t.Error("active MemTable should not be nil")
 	}
-
-	// Frozen memtable should be nil initially
-	if mt := eng.FrozenMemTable(); mt != nil {
-		t.Error("FrozenMemTable should be nil initially")
+	if shard.frozenMemTable != nil {
+		t.Error("frozen MemTable should be nil initially")
 	}
 }
 
@@ -831,6 +815,89 @@ func TestRecoverFromWAL(t *testing.T) {
 	}
 	if string(got) != "batch_val" {
 		t.Errorf("expected 'batch_val', got %s", got)
+	}
+}
+
+// TestBatchRecoveryNoDuplication verifies that a WriteAtomicBatch whose keys
+// route to different shards is recovered into exactly the correct shards, not
+// duplicated into every shard. Without the A7 fix, each shard replays the whole
+// batch during recovery, so the same key is written into multiple shards'
+// MemTables (violating the routing invariant). See: A7, REC-01.
+func TestBatchRecoveryNoDuplication(t *testing.T) {
+	dir := t.TempDir()
+
+	// Create engine, write a multi-key batch, then close WITHOUT a graceful
+	// Shutdown so we simulate a crash where only the WAL (not MemTable state)
+	// is durable. This exercises the recovery path.
+	eng1, err := NewLSMEngine(dir)
+	if err != nil {
+		t.Fatalf("failed to create engine1: %v", err)
+	}
+
+	// Build a batch with several distinct keys. With more than one shard, these
+	// keys will hash to different shards (some may share, but the batch write
+	// path and recovery must agree on routing regardless).
+	batchData := encodeTestBatch(
+		testBatchOp{isDelete: false, key: "aa-batch-key-1", value: "val-1"},
+		testBatchOp{isDelete: false, key: "bb-batch-key-2", value: "val-2"},
+		testBatchOp{isDelete: false, key: "cc-batch-key-3", value: "val-3"},
+		testBatchOp{isDelete: true, key: "dd-batch-del-4", value: ""},
+	)
+	if err := eng1.WriteAtomicBatch(batchData, 77); err != nil {
+		t.Fatalf("WriteAtomicBatch failed: %v", err)
+	}
+
+	// Close engine1. Close() performs a final flush+sync via the WAL, so the
+	// batch is durable and will be recovered on reopen.
+	errors.CloseWithFatal(eng1, "engine1")
+
+	// Reopen — recovery must replay the batch, but route each op to the correct
+	// shard only.
+	eng2, err := NewLSMEngine(dir)
+	if err != nil {
+		t.Fatalf("failed to create engine2: %v", err)
+	}
+	defer errors.CloseWithFatal(eng2, "engine2")
+
+	// Each key must be readable exactly once with the correct value, proving it
+	// was not duplicated across shards (a duplicated key would still read
+	// correctly via GetWithTS because it scans all shards, but the routing
+	// invariant check below makes the duplication observable).
+	checks := []struct {
+		key   string
+		value string
+	}{
+		{"aa-batch-key-1", "val-1"},
+		{"bb-batch-key-2", "val-2"},
+		{"cc-batch-key-3", "val-3"},
+	}
+	for _, c := range checks {
+		got, err := eng2.GetWithTS([]byte(c.key), 77)
+		if err != nil {
+			t.Fatalf("GetWithTS %s failed: %v", c.key, err)
+		}
+		if string(got) != c.value {
+			t.Errorf("key %s: expected %q, got %q", c.key, c.value, got)
+		}
+	}
+
+	// Verify the routing invariant: each key must appear in exactly ONE shard's
+	// MemTable. If the A7 bug is present, the key appears in EVERY shard.
+	for _, c := range checks {
+		mvccKey := mvcc.NewMVCCKey([]byte(c.key), 77)
+		var shardCount int
+		for _, shard := range eng2.shards {
+			if shard.memTable == nil {
+				continue
+			}
+			if _, found := shard.memTable.Get(mvccKey); found {
+				shardCount++
+			}
+		}
+		if shardCount != 1 {
+			t.Errorf("key %s: expected exactly 1 shard to contain it, got %d (A7 duplication)",
+				c.key, shardCount)
+		}
 	}
 }
 
@@ -1451,6 +1518,68 @@ func TestLastCommitCacheKeyStability(t *testing.T) {
 	// The mutated key must NOT match the original cache entry.
 	if _, ok := eng.getLastCommitCache([]byte("XXXXXXXXXX")); ok {
 		t.Fatalf("cache lookup for mutated key should miss, but it matched the original entry")
+	}
+}
+
+// TestLastCommitCacheLimit verifies that the lastCommitCache is bounded by
+// maxLastCommitCacheEntries: when more keys than the limit are written, the
+// oldest (least recently used) entries are evicted, so the map cannot grow
+// without bound. See: DEF-D3.
+func TestLastCommitCacheLimit(t *testing.T) {
+	dir := t.TempDir()
+	eng, err := NewLSMEngine(dir)
+	if err != nil {
+		t.Fatalf("failed to create engine: %v", err)
+	}
+	defer errors.CloseWithFatal(eng, "engine")
+
+	// Write more keys than the cache limit.
+	const overLimit = maxLastCommitCacheEntries + 100
+	for i := 0; i < overLimit; i++ {
+		eng.updateLastCommitCache([]byte(fmt.Sprintf("key-%05d", i)), uint64(i))
+	}
+
+	eng.cacheMu.RLock()
+	size := eng.lastCommitCacheLRU.Len()
+	eng.cacheMu.RUnlock()
+	if size > maxLastCommitCacheEntries {
+		t.Fatalf("cache grew to %d entries, want <= %d", size, maxLastCommitCacheEntries)
+	}
+
+	// The newest keys must still be present (they were most recently used).
+	newest := []byte(fmt.Sprintf("key-%05d", overLimit-1))
+	if ts, ok := eng.getLastCommitCache(newest); !ok || ts != uint64(overLimit-1) {
+		t.Fatalf("expected newest key present with ts %d, got ok=%v ts=%d", overLimit-1, ok, ts)
+	}
+
+	// The oldest keys (written first) must have been evicted.
+	oldest := []byte("key-00000")
+	if _, ok := eng.getLastCommitCache(oldest); ok {
+		t.Fatalf("expected oldest key to be evicted from bounded cache")
+	}
+}
+
+// BenchmarkLastCommitCache measures the read/write throughput of the bounded
+// lastCommitCache. See: DEF-D3.
+func BenchmarkLastCommitCache(b *testing.B) {
+	dir := b.TempDir()
+	eng, err := NewLSMEngine(dir)
+	if err != nil {
+		b.Fatalf("failed to create engine: %v", err)
+	}
+	defer errors.CloseWithFatal(eng, "engine")
+
+	keys := make([][]byte, b.N)
+	for i := range keys {
+		keys[i] = []byte(fmt.Sprintf("bench-key-%d", i))
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		eng.updateLastCommitCache(keys[i], uint64(i))
+		if _, ok := eng.getLastCommitCache(keys[i]); !ok {
+			b.Fatalf("cache miss for just-written key %d", i)
+		}
 	}
 }
 
