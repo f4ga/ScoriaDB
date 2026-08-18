@@ -25,7 +25,7 @@ import (
 // monotonicity after a restart: LastTS must be seeded from the maximum commitTS
 // found in the WAL (and the manifest), otherwise new transactions could reuse
 // already-committed timestamps. See: ARCH-07.
-func recoverFromWAL(wal *WAL, memTable *memtable.MemTable, vlog *VLogImpl) (uint64, error) {
+func recoverFromWAL(wal *WAL, memTable *memtable.MemTable, vlog *VLogImpl, shardID int, shardIndexFunc func(key []byte) int) (uint64, error) {
 	var maxTS uint64
 	err := wal.Recover(func(entry *WalEntry) error {
 		// Track the maximum committed timestamp seen in the WAL so the engine
@@ -63,6 +63,14 @@ func recoverFromWAL(wal *WAL, memTable *memtable.MemTable, vlog *VLogImpl) (uint
 				return nil
 			}
 			for _, op := range ops {
+				// A batch is written to every affected shard's WAL, so on
+				// recovery each shard must replay ONLY the operations whose
+				// keys route to it. Otherwise a single-key batch would be
+				// duplicated into every shard, violating the routing invariant.
+				// See: A7, REC-01.
+				if shardIndexFunc(op.Key) != shardID {
+					continue
+				}
 				mvccKey := mvcc.NewMVCCKey(op.Key, entry.Timestamp)
 				if op.IsDelete {
 					// CRITICAL: Batch delete recovery must use DeleteWithTS.

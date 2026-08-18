@@ -37,11 +37,13 @@ func NewMemTable() *MemTable {
 	return &MemTable{sl: NewSkipList()}
 }
 
-// NewMemTableWithArena creates a new MemTable backed by the given flat arena.
+// NewMemTableWithArena creates a new MemTable backed by the given arena.
 // The caller is responsible for ensuring the arena is not shared between an
 // active and a concurrently-flushed frozen MemTable. See: ARENA-01.
-func NewMemTableWithArena(arena *FlatArena) *MemTable {
-	return &MemTable{sl: NewSkipListWithArena(arena)}
+func NewMemTableWithArena(arena *Arena) *MemTable {
+	sl := NewSkipList()
+	sl.arena = arena
+	return &MemTable{sl: sl}
 }
 
 // Put inserts a key-value pair.

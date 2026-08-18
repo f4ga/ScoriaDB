@@ -1,0 +1,12 @@
+# github.com/f4ga/ScoriaDB/internal/engine
+internal/engine/lsm.go:84:21: method LSMEngine.Scan already declared at internal/engine/iterator.go:519:21
+internal/engine/cache.go:37:4: e.cacheMu undefined (type *LSMEngine has no field or method cacheMu)
+internal/engine/cache.go:38:4: e.lastCommitCache undefined (type *LSMEngine has no field or method lastCommitCache)
+internal/engine/cache.go:39:4: e.cacheMu undefined (type *LSMEngine has no field or method cacheMu)
+internal/engine/cache.go:45:4: e.cacheMu undefined (type *LSMEngine has no field or method cacheMu)
+internal/engine/cache.go:46:10: e.cacheMu undefined (type *LSMEngine has no field or method cacheMu)
+internal/engine/cache.go:47:14: e.lastCommitCache undefined (type *LSMEngine has no field or method lastCommitCache)
+internal/engine/compaction.go:43:4: e.mu undefined (type *LSMEngine has no field or method mu)
+internal/engine/compaction.go:44:10: e.mu undefined (type *LSMEngine has no field or method mu)
+internal/engine/compaction.go:46:11: e.levels undefined (type *LSMEngine has no field or method levels)
+internal/engine/compaction.go:46:11: too many errors

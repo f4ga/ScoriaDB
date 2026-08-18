@@ -69,6 +69,12 @@ type Reader struct {
 	maxKey       []byte
 	path         string
 	closed       atomic.Bool
+
+	// refCount guards the mmap region lifetime. Acquire/Release are used by
+	// callers (Shard.Get/GetLatest) that read a snapshotted reader slice while a
+	// concurrent compaction may Close() the reader and munmap its region. The
+	// mmap data must stay valid until the last Release(). See: Глава XIV, LSM-02.
+	refCount atomic.Int64
 }
 
 // IndexEntry represents a block index entry.
@@ -697,16 +703,50 @@ func (r *Reader) Lookup(key mvcc.MVCCKey) ([]byte, bool) {
 // On fallback platforms, this closes the underlying file.
 //
 // See: ARCH-MMAP-04
+// Acquire takes a reference on the reader so its mmap region stays valid while
+// a concurrent compaction may Close() it. The caller MUST pair every Acquire
+// with a Release. See: Глава XIV, LSM-02.
+func (r *Reader) Acquire() {
+	r.refCount.Add(1)
+}
+
+// Release drops a reference acquired by Acquire. When the last reference is
+// released after Close(), the mmap region is unmapped. See: Глава XIV, LSM-02.
+func (r *Reader) Release() {
+	if r.refCount.Add(-1) < 0 {
+		panic("sstable.Reader: unbalanced Release")
+	}
+	// If Close() already ran (closed flag set) and this was the last reader,
+	// the mmap was deferred — unmap it now.
+	if r.closed.Load() && r.refCount.Load() == 0 && r.mmapFile != nil {
+		if err := r.mmapFile.Close(); err != nil {
+			logger.WarnComponent(logger.ComponentEngine, "reader: munmap failed on final Release: %v", err)
+		}
+		r.mmapFile = nil
+	}
+}
+
+// Close closes the SSTable reader. The mmap region is only unmapped once both
+// Close() has been called and every outstanding Acquire() reference has been
+// released, so concurrent readers never access a freed mmap region.
+//
+// Safe to call multiple times (idempotent after first call).
+// See: ARCH-MMAP-04, Глава XIV, LSM-02.
 func (r *Reader) Close() error {
 	if r.closed.Load() {
 		return nil
 	}
 	r.closed.Store(true)
 
-	if r.mmapFile != nil {
-		return r.mmapFile.Close()
+	if r.mmapFile == nil {
+		return nil
 	}
-	return nil
+	// If readers still hold references, defer the actual munmap to the last
+	// Release(). Otherwise unmapped now.
+	if r.refCount.Load() > 0 {
+		return nil
+	}
+	return r.mmapFile.Close()
 }
 
 // Path returns the file path of the SSTable.

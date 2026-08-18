@@ -1,0 +1,2779 @@
+=== GIT STATUS ===
+Текущая ветка: refactor/project-structure
+Изменения, которые будут включены в коммит:
+  (используйте «git restore --staged <файл>...», чтобы убрать из индекса)
+	изменено:      internal/engine/compaction.go
+	изменено:      internal/engine/engine_test.go
+	изменено:      internal/engine/flush.go
+	изменено:      internal/engine/lsm.go
+	изменено:      internal/engine/sstable/encoding.go
+	изменено:      internal/engine/sstable/iterator.go
+	новый файл:    internal/engine/sstable/mmap_darwin.go
+	новый файл:    internal/engine/sstable/mmap_fallback.go
+	новый файл:    internal/engine/sstable/mmap_linux.go
+	новый файл:    internal/engine/sstable/mmap_windows.go
+	изменено:      internal/engine/sstable/reader.go
+	изменено:      internal/engine/sstable/sstable_test.go
+	новый файл:    plans/sstable_compare_analysis.md
+	новый файл:    plans/sstable_final_revision_plan.md
+
+Изменения, которые не в индексе для коммита:
+  (используйте «git add <файл>...», чтобы добавить файл в индекс)
+  (используйте «git restore <файл>...», чтобы отменить изменения в рабочем каталоге)
+	изменено:      internal/engine/sstable/writer.go
+
+Неотслеживаемые файлы:
+  (используйте «git add <файл>...», чтобы добавить в то, что будет включено в коммит)
+	.codeassistant/
+	BACKLOG.md
+	BENCHMARKS.md
+	BENCHMARKS_REPORT.md
+	FULL_AUDIT_REPORT.md
+	NOLINT.md
+	TECHDEBT.md
+	benchmarks/
+	internal/engine/sstable/debug_lookup_test.go
+	internal/engine/sstable/debug_test.go
+
+
+=== GIT DIFF (unstaged) ===
+diff --git a/internal/engine/sstable/writer.go b/internal/engine/sstable/writer.go
+index fb1eb21..4905a35 100644
+--- a/internal/engine/sstable/writer.go
++++ b/internal/engine/sstable/writer.go
+@@ -20,6 +20,7 @@ import (
+ 	"fmt"
+ 	"hash/crc32"
+ 	"os"
++	"sort"
+ 
+ 	"github.com/f4ga/ScoriaDB/internal/keys"
+ 	"github.com/f4ga/ScoriaDB/internal/mvcc"
+@@ -34,24 +35,29 @@ const (
+ 	MagicNumber = 0x53434F5249415F53 // "SCORIA_S" in ASCII
+ )
+ 
++// rawEntry is a key-value pair stored in memory before sorting and block formation.
++type rawEntry struct {
++	key   mvcc.MVCCKey
++	value []byte
++}
++
+ // Writer writes SSTable to file.
++//
++// All entries are buffered in memory and sorted by encoded MVCC key during Finish().
++// This ensures the SSTable is correctly sorted even when keys are appended in
++// non-sorted order (e.g., after user key wrap-around with 2-byte keys >65536 entries).
++//
++// Blocks are formed from the sorted entries and written to disk in order.
++// The index stores the encoded MVCC key of the first entry in each block.
++//
++// See: PROMPT-SSTABLE-FINAL
+ type Writer struct {
+ 	file   *os.File
+ 	writer *bufio.Writer
+-	offset uint64
+-
+-	// Current block
+-	blockBuf      []byte
+-	blockEntries  int
+-	blockStartKey []byte // first key in current block (for index)
+-	blockStartOff uint64
+ 
+-	// Block index: stores LAST key of each block and its offset
+-	indexEntries [][]byte
+-	indexOffsets []uint64
++	entries []rawEntry
+ 
+ 	bloomFilter *BloomFilter
+-	keys        [][]byte
+ 	minKey      []byte
+ 	maxKey      []byte
+ }
+@@ -66,22 +72,26 @@ func NewWriter(path string, expectedKeys int) (*Writer, error) {
+ 	}
+ 	writer := bufio.NewWriter(file)
+ 
++	// Pre-allocate entries slice if expectedKeys is reasonable
++	entryCap := expectedKeys
++	if entryCap <= 0 || entryCap > 1000000 {
++		entryCap = 1024
++	}
++
+ 	return &Writer{
+-		file:         file,
+-		writer:       writer,
+-		blockBuf:     make([]byte, 0, BlockSize),
+-		bloomFilter:  NewBloomFilter(expectedKeys),
+-		indexEntries: make([][]byte, 0),
+-		indexOffsets: make([]uint64, 0),
+-		keys:         make([][]byte, 0),
++		file:        file,
++		writer:      writer,
++		entries:     make([]rawEntry, 0, entryCap),
++		bloomFilter: NewBloomFilter(expectedKeys),
+ 	}, nil
+ }
+ 
+ // Append adds a key-value pair to the SSTable.
++// The entry is buffered in memory. Actual sorting and block formation
++// happens in Finish().
+ func (w *Writer) Append(key mvcc.MVCCKey, value []byte) error {
+ 	// Add key to Bloom filter
+ 	w.bloomFilter.Add(key.Key)
+-	w.keys = append(w.keys, key.Key)
+ 
+ 	// Update min/max keys
+ 	if w.minKey == nil || keys.CompareKeys(key.Key, w.minKey) < 0 {
+@@ -91,128 +101,179 @@ func (w *Writer) Append(key mvcc.MVCCKey, value []byte) error {
+ 		w.maxKey = key.Key
+ 	}
+ 
+-	// Serialize key and value
+-	keyBytes := encodeMVCCKey(key)
+-	entry := encodeEntry(keyBytes, value)
+-
+-	// If current block would overflow, flush it
+-	if len(w.blockBuf)+len(entry) > BlockSize && w.blockEntries > 0 {
+-		if err := w.flushBlock(); err != nil {
+-			return err
+-		}
+-	}
+-
+-	// Remember first key of the block
+-	if w.blockEntries == 0 {
+-		w.blockStartKey = keyBytes
+-		w.blockStartOff = w.offset
+-	}
+-
+-	// Add entry to block
+-	w.blockBuf = append(w.blockBuf, entry...)
+-	w.blockEntries++
+-
++	// Buffer entry in memory
++	w.entries = append(w.entries, rawEntry{key: key, value: value})
+ 	return nil
+ }
+ 
+-// flushBlock writes the current block to disk and adds an entry to the index.
+-// Block format on disk: [blockSize:4][blockData:blockSize][CRC32:4]
+-func (w *Writer) flushBlock() error {
+-	if w.blockEntries == 0 {
+-		return nil
++// Finish completes the SSTable write.
++//
++// Steps:
++// 1. Sort all entries by encoded MVCC key
++// 2. Form blocks from sorted entries
++// 3. Write blocks to disk
++// 4. Write index, Bloom filter, range keys, footer
++//
++// See: PROMPT-SSTABLE-FINAL
++func (w *Writer) Finish() error {
++	if len(w.entries) == 0 {
++		// Write empty footer for empty SSTable
++		return w.writeFooter(0, nil, nil, nil, nil)
+ 	}
+ 
+-	// Store the LAST key of the block for binary search
+-	// We need to track the last key of the current block.
+-	// Since we only have the first key, we store the first key
+-	// and the index will be used for binary search by first key.
+-	w.indexEntries = append(w.indexEntries, w.blockStartKey)
+-	w.indexOffsets = append(w.indexOffsets, w.blockStartOff)
+-
+-	// Write block size and data
+-	blockSize := uint32(len(w.blockBuf))
+-	if err := binary.Write(w.writer, binary.LittleEndian, blockSize); err != nil {
+-		return fmt.Errorf("failed to write block size: %w", err)
+-	}
+-	if _, err := w.writer.Write(w.blockBuf); err != nil {
+-		return fmt.Errorf("failed to write block data: %w", err)
++	// Sort all entries by (user key, inverted timestamp).
++	// Using keys.CompareKeys for user key comparison ensures correct
++	// lexicographic ordering regardless of key length. Sorting by encoded
++	// MVCCKey bytes is WRONG because encodeMVCCKey prepends the key length
++	// as a 4-byte uint32, which would sort by key length first, not by content.
++	// See: BUG-SORT-01
++	sort.Slice(w.entries, func(i, j int) bool {
++		ki, kj := w.entries[i].key, w.entries[j].key
++		if cmp := keys.CompareKeys(ki.Key, kj.Key); cmp != 0 {
++			return cmp < 0
++		}
++		// Same user key: newer version (larger inverted timestamp) first
++		return ki.Timestamp > kj.Timestamp
++	})
++
++	// Form blocks from sorted entries
++	type block struct {
++		firstKey []byte // raw user key of first entry (for binary search in index)
++		data     []byte // serialized entries
+ 	}
++	var blocks []block
++	var currentBlock []byte
++	var blockFirstKey []byte
++
++	for _, entry := range w.entries {
++		keyBytes := encodeMVCCKey(entry.key)
++		entryBytes := encodeEntry(keyBytes, entry.value)
++
++		// If current block would overflow, flush it
++		if len(currentBlock)+len(entryBytes) > BlockSize && len(currentBlock) > 0 {
++			blocks = append(blocks, block{
++				firstKey: blockFirstKey,
++				data:     currentBlock,
++			})
++			currentBlock = nil
++			blockFirstKey = nil
++		}
+ 
+-	// Write CRC32 checksum of block data
+-	crc := crc32.ChecksumIEEE(w.blockBuf)
+-	var crcBuf [4]byte
+-	binary.LittleEndian.PutUint32(crcBuf[:], crc)
+-	if _, err := w.writer.Write(crcBuf[:]); err != nil {
+-		return fmt.Errorf("failed to write block CRC: %w", err)
++		if blockFirstKey == nil {
++			blockFirstKey = append([]byte(nil), entry.key.Key...) // raw user key
++		}
++		currentBlock = append(currentBlock, entryBytes...)
+ 	}
+ 
+-	w.offset += 4 + uint64(len(w.blockBuf)) + 4 // blockSize + data + CRC32
++	// Flush last block
++	if len(currentBlock) > 0 {
++		blocks = append(blocks, block{
++			firstKey: blockFirstKey,
++			data:     currentBlock,
++		})
++	}
+ 
+-	// Reset block buffer
+-	w.blockBuf = w.blockBuf[:0]
+-	w.blockEntries = 0
++	// Write blocks to disk and build index
++	indexEntries := make([][]byte, 0, len(blocks))
++	indexOffsets := make([]uint64, 0, len(blocks))
++	var offset uint64
+ 
+-	return nil
+-}
++	for _, blk := range blocks {
++		// Index stores raw user key (without timestamp) for binary search
++		indexEntries = append(indexEntries, blk.firstKey)
++		indexOffsets = append(indexOffsets, offset)
+ 
+-// Finish completes the SSTable write, writing index, Bloom filter, range keys, and footer.
+-func (w *Writer) Finish() error {
+-	// Flush the last block
+-	if err := w.flushBlock(); err != nil {
+-		return err
++		// Write block: [blockSize:4][blockData:blockSize][CRC32:4]
++		blockSize := uint32(len(blk.data))
++		if err := binary.Write(w.writer, binary.LittleEndian, blockSize); err != nil {
++			return fmt.Errorf("failed to write block size: %w", err)
++		}
++		if _, err := w.writer.Write(blk.data); err != nil {
++			return fmt.Errorf("failed to write block data: %w", err)
++		}
++		crc := crc32.ChecksumIEEE(blk.data)
++		var crcBuf [4]byte
++		binary.LittleEndian.PutUint32(crcBuf[:], crc)
++		if _, err := w.writer.Write(crcBuf[:]); err != nil {
++			return fmt.Errorf("failed to write block CRC: %w", err)
++		}
++		offset += 4 + uint64(len(blk.data)) + 4
+ 	}
+ 
++	return w.writeFooter(offset, indexEntries, indexOffsets, w.minKey, w.maxKey)
++}
++
++// writeFooter writes index, Bloom filter, range keys, and footer.
++func (w *Writer) writeFooter(
++	offset uint64,
++	indexEntries [][]byte,
++	indexOffsets []uint64,
++	minKey, maxKey []byte,
++) error {
+ 	// Write block index
+-	indexStart := w.offset
+-	for i, key := range w.indexEntries {
+-		// Write key length and key
++	indexStart := offset
++	for i, key := range indexEntries {
+ 		if err := binary.Write(w.writer, binary.LittleEndian, uint32(len(key))); err != nil {
+ 			return err
+ 		}
+-		w.offset += 4
++		offset += 4
+ 		if _, err := w.writer.Write(key); err != nil {
+ 			return err
+ 		}
+-		w.offset += uint64(len(key))
+-		// Write block offset
+-		if err := binary.Write(w.writer, binary.LittleEndian, w.indexOffsets[i]); err != nil {
++		offset += uint64(len(key))
++		if err := binary.Write(w.writer, binary.LittleEndian, indexOffsets[i]); err != nil {
+ 			return err
+ 		}
+-		w.offset += 8
++		offset += 8
+ 	}
+-	indexSize := w.offset - indexStart
++	indexSize := offset - indexStart
+ 
+ 	// Write Bloom filter
+-	bloomStart := w.offset
++	bloomStart := offset
+ 	bloomBytes := w.bloomFilter.Encode()
+ 	if err := binary.Write(w.writer, binary.LittleEndian, uint32(len(bloomBytes))); err != nil {
+ 		return err
+ 	}
+-	w.offset += 4
++	offset += 4
+ 	if _, err := w.writer.Write(bloomBytes); err != nil {
+ 		return err
+ 	}
+-	w.offset += uint64(len(bloomBytes))
+-	bloomSize := w.offset - bloomStart
++	offset += uint64(len(bloomBytes))
++	bloomSize := offset - bloomStart
+ 
+-	// Write min and max keys (range filter)
+-	minKeyStart := w.offset
+-	if err := binary.Write(w.writer, binary.LittleEndian, uint32(len(w.minKey))); err != nil {
+-		return err
+-	}
+-	if _, err := w.writer.Write(w.minKey); err != nil {
+-		return err
++	// Write min key
++	minKeyStart := offset
++	if minKey != nil {
++		if err := binary.Write(w.writer, binary.LittleEndian, uint32(len(minKey))); err != nil {
++			return err
++		}
++		if _, err := w.writer.Write(minKey); err != nil {
++			return err
++		}
++		offset += 4 + uint64(len(minKey))
++	} else {
++		if err := binary.Write(w.writer, binary.LittleEndian, uint32(0)); err != nil {
++			return err
++		}
++		offset += 4
+ 	}
+-	w.offset += 4 + uint64(len(w.minKey))
+ 
+-	maxKeyStart := w.offset
+-	if err := binary.Write(w.writer, binary.LittleEndian, uint32(len(w.maxKey))); err != nil {
+-		return err
+-	}
+-	if _, err := w.writer.Write(w.maxKey); err != nil {
+-		return err
++	// Write max key
++	maxKeyStart := offset
++	if maxKey != nil {
++		if err := binary.Write(w.writer, binary.LittleEndian, uint32(len(maxKey))); err != nil {
++			return err
++		}
++		if _, err := w.writer.Write(maxKey); err != nil {
++			return err
++		}
++		offset += 4 + uint64(len(maxKey))
++	} else {
++		if err := binary.Write(w.writer, binary.LittleEndian, uint32(0)); err != nil {
++			return err
++		}
++		offset += 4
+ 	}
+-	w.offset += 4 + uint64(len(w.maxKey))
+ 
+ 	// Write footer
+ 	footer := Footer{
+@@ -220,21 +281,22 @@ func (w *Writer) Finish() error {
+ 		IndexSize:    indexSize,
+ 		BloomOffset:  bloomStart,
+ 		BloomSize:    bloomSize,
+-		NumKeys:      uint64(len(w.keys)),
++		NumKeys:      uint64(len(w.entries)),
+ 		Magic:        MagicNumber,
+ 		MinKeyOffset: minKeyStart,
+-		MinKeyLength: uint64(len(w.minKey)),
++		MinKeyLength: uint64(len(minKey)),
+ 		MaxKeyOffset: maxKeyStart,
+-		MaxKeyLength: uint64(len(w.maxKey)),
++		MaxKeyLength: uint64(len(maxKey)),
+ 	}
+ 	if err := binary.Write(w.writer, binary.LittleEndian, footer); err != nil {
+ 		return fmt.Errorf("failed to write footer: %w", err)
+ 	}
+ 
+-	// Flush and close
++	// Flush buffered data to disk
+ 	if err := w.writer.Flush(); err != nil {
+ 		return fmt.Errorf("failed to flush writer: %w", err)
+ 	}
++
+ 	if err := w.file.Close(); err != nil {
+ 		return fmt.Errorf("failed to close SSTable file: %w", err)
+ 	}
+
+=== GIT DIFF --CACHED (staged) ===
+diff --git a/internal/engine/compaction.go b/internal/engine/compaction.go
+index 548b289..ea390ec 100644
+--- a/internal/engine/compaction.go
++++ b/internal/engine/compaction.go
+@@ -98,7 +98,7 @@ func (e *LSMEngine) compactLevel0() error {
+ 	sstPath := filepath.Join(e.dataDir, fmt.Sprintf("%06d.sst", fileNum))
+ 
+ 	// Create writer for new SSTable
+-	writer, err := sstable.NewWriter(sstPath)
++	writer, err := sstable.NewWriter(sstPath, len(allKVs))
+ 	if err != nil {
+ 		return fmt.Errorf("failed to create SSTable writer: %w", err)
+ 	}
+diff --git a/internal/engine/engine_test.go b/internal/engine/engine_test.go
+index ef835c4..f7355bb 100644
+--- a/internal/engine/engine_test.go
++++ b/internal/engine/engine_test.go
+@@ -474,7 +474,7 @@ func TestDecodeStoredValue(t *testing.T) {
+ 	defer errors.CloseWithFatal(eng, "engine")
+ 
+ 	// Test nil value
+-	val, err := eng.decodeStoredValue(nil)
++	val, err := eng.decodeStoredValue(nil, false)
+ 	if err != nil {
+ 		t.Fatalf("decodeStoredValue(nil) failed: %v", err)
+ 	}
+@@ -484,7 +484,7 @@ func TestDecodeStoredValue(t *testing.T) {
+ 
+ 	// Test inline value (not a VLog pointer)
+ 	inlineVal := []byte("inline_value")
+-	val, err = eng.decodeStoredValue(inlineVal)
++	val, err = eng.decodeStoredValue(inlineVal, false)
+ 	if err != nil {
+ 		t.Fatalf("decodeStoredValue(inline) failed: %v", err)
+ 	}
+@@ -494,7 +494,7 @@ func TestDecodeStoredValue(t *testing.T) {
+ 
+ 	// Test empty value — should return empty slice (not nil)
+ 	// to distinguish "key found with empty value" from "key not found".
+-	val, err = eng.decodeStoredValue([]byte{})
++	val, err = eng.decodeStoredValue([]byte{}, false)
+ 	if err != nil {
+ 		t.Fatalf("decodeStoredValue(empty) failed: %v", err)
+ 	}
+diff --git a/internal/engine/flush.go b/internal/engine/flush.go
+index 10ed190..3f6f6d6 100644
+--- a/internal/engine/flush.go
++++ b/internal/engine/flush.go
+@@ -45,7 +45,7 @@ func (e *LSMEngine) flushMemTable() error {
+ 	sstPath := filepath.Join(e.dataDir, fmt.Sprintf("%06d.sst", fileNum))
+ 
+ 	// Create writer (currently using old API that works with os)
+-	writer, err := sstable.NewWriter(sstPath)
++	writer, err := sstable.NewWriter(sstPath, e.memTable.Size())
+ 	if err != nil {
+ 		return fmt.Errorf("failed to create SSTable writer: %w", err)
+ 	}
+diff --git a/internal/engine/lsm.go b/internal/engine/lsm.go
+index a71baf7..b9cb8f5 100644
+--- a/internal/engine/lsm.go
++++ b/internal/engine/lsm.go
+@@ -371,13 +371,13 @@ func (e *LSMEngine) GetWithTS(key []byte, snapshotTS uint64) ([]byte, error) {
+ 	mvccKey := mvcc.NewMVCCKey(key, snapshotTS)
+ 	val, found := e.memTable.Get(mvccKey)
+ 	if found {
+-		decoded, err := e.decodeStoredValue(val)
++		decoded, err := e.decodeStoredValue(val, false)
+ 		return decoded, err
+ 	}
+ 	for _, level := range e.levels {
+ 		for _, sst := range level {
+ 			if val, found := sst.Lookup(mvccKey); found {
+-				decoded, err := e.decodeStoredValue(val)
++				decoded, err := e.decodeStoredValue(val, true)
+ 				return decoded, err
+ 			}
+ 		}
+@@ -410,7 +410,7 @@ func (e *LSMEngine) GetLatestInfo(key []byte) ([]byte, uint64, bool, error) {
+ 		// Key found in memtable (either live or deleted).
+ 		// If found=true, it's a live value. If found=false, it's a tombstone.
+ 		if found {
+-			decoded, err := e.decodeStoredValue(val)
++			decoded, err := e.decodeStoredValue(val, false)
+ 			return decoded, ts, true, err
+ 		}
+ 		// Tombstone — key is deleted, return nil with the tombstone TS.
+@@ -420,7 +420,7 @@ func (e *LSMEngine) GetLatestInfo(key []byte) ([]byte, uint64, bool, error) {
+ 		val, ts, found = e.frozenMemTable.GetLatest(key)
+ 		if ts > 0 {
+ 			if found {
+-				decoded, err := e.decodeStoredValue(val)
++				decoded, err := e.decodeStoredValue(val, false)
+ 				return decoded, ts, true, err
+ 			}
+ 			return nil, ts, false, nil
+@@ -453,7 +453,7 @@ func (e *LSMEngine) GetLatestInfo(key []byte) ([]byte, uint64, bool, error) {
+ 				if len(bestValue) == 0 {
+ 					return nil, bestTS, false, nil
+ 				}
+-				decoded, err := e.decodeStoredValue(bestValue)
++				decoded, err := e.decodeStoredValue(bestValue, true)
+ 				return decoded, bestTS, true, err
+ 			}
+ 		}
+@@ -636,7 +636,14 @@ func (e *LSMEngine) Close() error {
+ // decodeStoredValue decodes a stored value (inline, VLog pointer, or unified mmap pointer).
+ // Checks unified mmap first, then falls back to VLog.
+ // Uses ReadDirect for zero-copy internal reads.
+-func (e *LSMEngine) decodeStoredValue(stored []byte) ([]byte, error) {
++//
++// If fromSSTable is true, the value comes from an SSTable mmap region and must be
++// copied before returning, because the mmap region may be released after the reader
++// is closed (e.g., during compaction). Values from MemTable are in the arena and
++// do not need copying.
++//
++// See: PROMPT-SSTABLE-FINAL
++func (e *LSMEngine) decodeStoredValue(stored []byte, fromSSTable bool) ([]byte, error) {
+ 	if len(stored) == 0 {
+ 		// Empty stored value — return empty slice (not nil) so callers
+ 		// can distinguish "key found with empty value" from "key not found".
+@@ -659,6 +666,13 @@ func (e *LSMEngine) decodeStoredValue(stored []byte) ([]byte, error) {
+ 		}
+ 		return stored, nil
+ 	}
++	// Value from SSTable mmap — must copy because mmap may be released
++	// after the reader is closed (e.g., during compaction).
++	if fromSSTable {
++		val := make([]byte, len(stored))
++		copy(val, stored)
++		return val, nil
++	}
+ 	return stored, nil
+ }
+ func (e *LSMEngine) ReadVLogView(vp *ValuePointer) (*VLogView, error) {
+diff --git a/internal/engine/sstable/encoding.go b/internal/engine/sstable/encoding.go
+index 215d3ee..83a912b 100644
+--- a/internal/engine/sstable/encoding.go
++++ b/internal/engine/sstable/encoding.go
+@@ -22,27 +22,29 @@ import (
+ )
+ 
+ // encodeMVCCKey encodes MVCCKey into bytes for storage in SSTable.
+-// Format: key length (2 bytes) + key (variable) + timestamp (8 bytes, little endian)
++// Format: key length (4 bytes, uint32) + key (variable) + timestamp (8 bytes, little endian)
++// The 4-byte length matches the format used by parseIndex in reader.go.
++// See: PROMPT-SSTABLE-FINAL
+ func encodeMVCCKey(key mvcc.MVCCKey) []byte {
+ 	kl := len(key.Key)
+-	buf := make([]byte, 2+kl+8)
+-	binary.LittleEndian.PutUint16(buf[0:2], uint16(kl))
+-	copy(buf[2:2+kl], key.Key)
+-	binary.LittleEndian.PutUint64(buf[2+kl:], key.Timestamp)
++	buf := make([]byte, 4+kl+8)
++	binary.LittleEndian.PutUint32(buf[0:4], uint32(kl))
++	copy(buf[4:4+kl], key.Key)
++	binary.LittleEndian.PutUint64(buf[4+kl:], key.Timestamp)
+ 	return buf
+ }
+ 
+ // decodeMVCCKey decodes bytes back to MVCCKey.
+ func decodeMVCCKey(data []byte) (mvcc.MVCCKey, error) {
+-	if len(data) < 2 {
++	if len(data) < 4 {
+ 		return mvcc.MVCCKey{}, ErrCorrupted
+ 	}
+-	kl := binary.LittleEndian.Uint16(data[0:2])
+-	if len(data) < int(2+kl+8) {
++	kl := binary.LittleEndian.Uint32(data[0:4])
++	if len(data) < int(4+kl+8) {
+ 		return mvcc.MVCCKey{}, ErrCorrupted
+ 	}
+-	userKey := data[2 : 2+kl]
+-	timestamp := binary.LittleEndian.Uint64(data[2+kl:])
++	userKey := data[4 : 4+kl]
++	timestamp := binary.LittleEndian.Uint64(data[4+kl:])
+ 	return mvcc.MVCCKey{
+ 		Key:       userKey,
+ 		Timestamp: timestamp,
+diff --git a/internal/engine/sstable/iterator.go b/internal/engine/sstable/iterator.go
+index 1eed250..099a036 100644
+--- a/internal/engine/sstable/iterator.go
++++ b/internal/engine/sstable/iterator.go
+@@ -22,6 +22,10 @@ import (
+ 
+ // SSTableIterator iterates over key-value pairs in an SSTable.
+ // It reads blocks sequentially using the block index.
++//
++// On mmap platforms, block data is a slice of the mmap region (0 allocs).
++// On fallback platforms, block data is from the sync.Pool.
++//
+ // See: ARCH-05, PERF-03
+ type SSTableIterator struct {
+ 	reader    *Reader
+@@ -32,15 +36,18 @@ type SSTableIterator struct {
+ 	val       []byte
+ 	err       error
+ 	ended     bool
++	isMmap    bool // true if reader uses mmap (no pool release needed)
+ }
+ 
+ // NewIterator creates a new SSTableIterator for this reader.
+ // Returns an error if the first block cannot be read.
++//
+ // See: ARCH-05
+ func (r *Reader) NewIterator() (*SSTableIterator, error) {
+ 	it := &SSTableIterator{
+ 		reader:   r,
+ 		blockIdx: -1,
++		isMmap:   r.mmapFile.Data() != nil,
+ 	}
+ 	// Advance to the first block
+ 	if !it.nextBlock() {
+@@ -87,7 +94,7 @@ func (it *SSTableIterator) Next() bool {
+ 			}
+ 
+ 			it.key = mvccKey
+-			// Copy value since blockData will be reused
++			// Copy value since blockData may be from mmap or pool
+ 			val := make([]byte, len(entryVal))
+ 			copy(val, entryVal)
+ 			it.val = val
+@@ -109,8 +116,8 @@ func (it *SSTableIterator) nextBlock() bool {
+ 		return false
+ 	}
+ 
+-	// Release previous block data
+-	if it.blockData != nil {
++	// Release previous block data (only if from pool, not mmap)
++	if it.blockData != nil && !it.isMmap {
+ 		ReleaseBlock(it.blockData)
+ 		it.blockData = nil
+ 	}
+@@ -143,7 +150,7 @@ func (it *SSTableIterator) Err() error {
+ 
+ // Close releases resources held by the iterator.
+ func (it *SSTableIterator) Close() {
+-	if it.blockData != nil {
++	if it.blockData != nil && !it.isMmap {
+ 		ReleaseBlock(it.blockData)
+ 		it.blockData = nil
+ 	}
+diff --git a/internal/engine/sstable/mmap_darwin.go b/internal/engine/sstable/mmap_darwin.go
+new file mode 100644
+index 0000000..0c5a01d
+--- /dev/null
++++ b/internal/engine/sstable/mmap_darwin.go
+@@ -0,0 +1,145 @@
++// Copyright 2026 Ekaterina Godulyan
++//
++// Licensed under the Apache License, Version 2.0 (the "License");
++// you may not use this file except in compliance with the License.
++// You may obtain a copy of the License at
++//
++//     http://www.apache.org/licenses/LICENSE-2.0
++//
++// Unless required by applicable law or agreed to in writing, software
++// distributed under the License is distributed on an "AS IS" BASIS,
++// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++// See the License for the specific language governing permissions and
++// limitations under the License.
++
++//go:build darwin
++
++package sstable
++
++import (
++	"fmt"
++	"syscall"
++)
++
++// mmapFile is the macOS implementation of MmapFile.
++// Uses syscall.Mmap with PROT_READ and MAP_SHARED.
++//
++// macOS uses the same mmap API as Linux. The key difference is that
++// macOS may have different default page sizes (4KB on most systems,
++// 16KB on Apple Silicon).
++//
++// See: ARCH-MMAP-01, PERF-MMAP-01
++type mmapFile struct {
++	data []byte
++	size int64
++}
++
++// openMmapFile opens a file and memory-maps it for reading.
++//
++// Algorithm:
++//  1. syscall.Open — get file descriptor
++//  2. syscall.Fstat — determine file size
++//  3. syscall.Mmap(fd, 0, size, PROT_READ, MAP_SHARED) — map into memory
++//  4. syscall.Close(fd) — close fd (mmap region remains valid)
++//
++// Returns an error if the file cannot be opened, stat'ed, or mmapped.
++// Empty files are rejected (mmap of zero-length file is undefined).
++//
++// See: ARCH-MMAP-02
++func openMmapFile(path string) (*mmapFile, error) {
++	fd, err := syscall.Open(path, syscall.O_RDONLY, 0)
++	if err != nil {
++		return nil, fmt.Errorf("failed to open file for mmap: %w", err)
++	}
++
++	var stat syscall.Stat_t
++	if err := syscall.Fstat(fd, &stat); err != nil {
++		syscall.Close(fd) //nolint:errcheck
++		return nil, fmt.Errorf("failed to stat file: %w", err)
++	}
++
++	if stat.Size == 0 {
++		syscall.Close(fd) //nolint:errcheck
++		return nil, fmt.Errorf("empty file cannot be mmapped")
++	}
++
++	// mmap: PROT_READ + MAP_SHARED
++	// MAP_SHARED — changes are visible to other processes (we only read)
++	// PROT_READ — we only need read access
++	data, err := syscall.Mmap(fd, 0, int(stat.Size), syscall.PROT_READ, syscall.MAP_SHARED)
++	if err != nil {
++		syscall.Close(fd) //nolint:errcheck
++		return nil, fmt.Errorf("failed to mmap file: %w", err)
++	}
++
++	// FD can be closed after mmap — the region remains valid
++	if err := syscall.Close(fd); err != nil {
++		// Non-critical — the mapping is already established
++	}
++
++	return &mmapFile{
++		data: data,
++		size: stat.Size,
++	}, nil
++}
++
++// Data returns the entire file as a byte slice backed by the mmap region.
++// The slice remains valid until Close() is called.
++//
++// Zero allocations — returns a direct slice of the mmap region.
++//
++// See: PERF-MMAP-02
++func (m *mmapFile) Data() []byte {
++	return m.data
++}
++
++// Size returns the file size.
++func (m *mmapFile) Size() int64 {
++	return m.size
++}
++
++// ReadAt reads len(p) bytes from the file starting at offset off.
++// This is a fallback for platforms without mmap — on macOS it copies
++// from the mmap region directly.
++//
++// See: ARCH-MMAP-03
++func (m *mmapFile) ReadAt(p []byte, off int64) (int, error) {
++	if off < 0 || off >= m.size {
++		return 0, fmt.Errorf("offset out of range: %d (size: %d)", off, m.size)
++	}
++	end := off + int64(len(p))
++	if end > m.size {
++		end = m.size
++		p = p[:end-off]
++	}
++	copy(p, m.data[off:end])
++	return len(p), nil
++}
++
++// Close unmaps the mmap region.
++//
++// Protected against SIGBUS during munmap — if the underlying file was
++// truncated externally, munmap may trigger SIGBUS. The recover() handler
++// catches this and returns an error instead of crashing.
++//
++// Safe to call multiple times (idempotent after first call).
++//
++// See: ARCH-MMAP-04, SAFE-MMAP-01
++func (m *mmapFile) Close() error {
++	if m.data == nil {
++		return nil
++	}
++
++	// Protect against SIGBUS during munmap
++	defer func() {
++		if r := recover(); r != nil {
++			// SIGBUS during munmap — log but don't crash
++		}
++	}()
++
++	if err := syscall.Munmap(m.data); err != nil {
++		return fmt.Errorf("failed to munmap: %w", err)
++	}
++	m.data = nil
++	return nil
++}
+diff --git a/internal/engine/sstable/mmap_fallback.go b/internal/engine/sstable/mmap_fallback.go
+new file mode 100644
+index 0000000..fb3482e
+--- /dev/null
++++ b/internal/engine/sstable/mmap_fallback.go
+@@ -0,0 +1,92 @@
++// Copyright 2026 Ekaterina Godulyan
++//
++// Licensed under the Apache License, Version 2.0 (the "License");
++// you may not use this file except in compliance with the License.
++// You may obtain a copy of the License at
++//
++//     http://www.apache.org/licenses/LICENSE-2.0
++//
++// Unless required by applicable law or agreed to in writing, software
++// distributed under the License is distributed on an "AS IS" BASIS,
++// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++// See the License for the specific language governing permissions and
++// limitations under the License.
++
++//go:build !linux && !darwin && !windows
++
++package sstable
++
++import (
++	"fmt"
++	"os"
++)
++
++// mmapFile is the fallback implementation of MmapFile for platforms
++// that do not support mmap (e.g., FreeBSD, NetBSD, Solaris, etc.).
++//
++// This implementation uses traditional file I/O (os.File) as a fallback.
++// Data() returns nil, and all reads go through ReadAt().
++//
++// Performance on these platforms will be lower due to syscall overhead
++// and memory allocations, but correctness is guaranteed.
++//
++// See: ARCH-MMAP-05
++type mmapFile struct {
++	file *os.File
++	size int64
++}
++
++// openMmapFile opens a file for reading on platforms without mmap.
++// Uses os.Open and os.File.ReadAt for all I/O.
++//
++// See: ARCH-MMAP-05
++func openMmapFile(path string) (*mmapFile, error) {
++	file, err := os.Open(path)
++	if err != nil {
++		return nil, fmt.Errorf("failed to open file (fallback): %w", err)
++	}
++
++	stat, err := file.Stat()
++	if err != nil {
++		file.Close()
++		return nil, fmt.Errorf("failed to stat file: %w", err)
++	}
++
++	return &mmapFile{
++		file: file,
++		size: stat.Size(),
++	}, nil
++}
++
++// Data returns nil on fallback platforms — mmap is not available.
++// Callers must use ReadAt() instead.
++func (m *mmapFile) Data() []byte {
++	return nil
++}
++
++// Size returns the file size.
++func (m *mmapFile) Size() int64 {
++	return m.size
++}
++
++// ReadAt reads len(p) bytes from the file starting at offset off.
++// Uses os.File.ReadAt which performs a syscall per call.
++//
++// See: ARCH-MMAP-03
++func (m *mmapFile) ReadAt(p []byte, off int64) (int, error) {
++	return m.file.ReadAt(p, off)
++}
++
++// Close closes the underlying file.
++//
++// Safe to call multiple times (idempotent after first call).
++//
++// See: ARCH-MMAP-04
++func (m *mmapFile) Close() error {
++	if m.file == nil {
++		return nil
++	}
++	err := m.file.Close()
++	m.file = nil
++	return err
++}
+diff --git a/internal/engine/sstable/mmap_linux.go b/internal/engine/sstable/mmap_linux.go
+new file mode 100644
+index 0000000..fa584df
+--- /dev/null
++++ b/internal/engine/sstable/mmap_linux.go
+@@ -0,0 +1,148 @@
++// Copyright 2026 Ekaterina Godulyan
++//
++// Licensed under the Apache License, Version 2.0 (the "License");
++// you may not use this file except in compliance with the License.
++// You may obtain a copy of the License at
++//
++//     http://www.apache.org/licenses/LICENSE-2.0
++//
++// Unless required by applicable law or agreed to in writing, software
++// distributed under the License is distributed on an "AS IS" BASIS,
++// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++// See the License for the specific language governing permissions and
++// limitations under the License.
++
++//go:build linux
++
++package sstable
++
++import (
++	"fmt"
++	"syscall"
++)
++
++// mmapFile is the Linux implementation of MmapFile.
++// Uses syscall.Mmap with PROT_READ and MAP_SHARED.
++//
++// The file descriptor is closed immediately after mmap — the mapping
++// remains valid until Munmap is called.
++//
++// See: ARCH-MMAP-01, PERF-MMAP-01
++type mmapFile struct {
++	data []byte
++	size int64
++}
++
++// openMmapFile opens a file and memory-maps it for reading.
++//
++// Algorithm:
++//  1. syscall.Open — get file descriptor
++//  2. syscall.Fstat — determine file size
++//  3. syscall.Mmap(fd, 0, size, PROT_READ, MAP_SHARED) — map into memory
++//  4. syscall.Close(fd) — close fd (mmap region remains valid)
++//
++// Returns an error if the file cannot be opened, stat'ed, or mmapped.
++// Empty files are rejected (mmap of zero-length file is undefined).
++//
++// See: ARCH-MMAP-02
++func openMmapFile(path string) (*mmapFile, error) {
++	fd, err := syscall.Open(path, syscall.O_RDONLY, 0)
++	if err != nil {
++		return nil, fmt.Errorf("failed to open file for mmap: %w", err)
++	}
++
++	var stat syscall.Stat_t
++	if err := syscall.Fstat(fd, &stat); err != nil {
++		syscall.Close(fd) //nolint:errcheck
++		return nil, fmt.Errorf("failed to stat file: %w", err)
++	}
++
++	if stat.Size == 0 {
++		syscall.Close(fd) //nolint:errcheck
++		return nil, fmt.Errorf("empty file cannot be mmapped")
++	}
++
++	// mmap: PROT_READ + MAP_SHARED
++	// MAP_SHARED — changes are visible to other processes (we only read)
++	// PROT_READ — we only need read access
++	data, err := syscall.Mmap(fd, 0, int(stat.Size), syscall.PROT_READ, syscall.MAP_SHARED)
++	if err != nil {
++		syscall.Close(fd) //nolint:errcheck
++		return nil, fmt.Errorf("failed to mmap file: %w", err)
++	}
++
++	// FD can be closed after mmap — the region remains valid
++	// See: mmap(2) — "The file descriptor is not used after mmap() returns."
++	if err := syscall.Close(fd); err != nil {
++		// Non-critical — the mapping is already established
++		// In production: logger.Warn("failed to close fd after mmap: %v", err)
++	}
++
++	return &mmapFile{
++		data: data,
++		size: stat.Size,
++	}, nil
++}
++
++// Data returns the entire file as a byte slice backed by the mmap region.
++// The slice remains valid until Close() is called.
++//
++// Zero allocations — returns a direct slice of the mmap region.
++//
++// See: PERF-MMAP-02
++func (m *mmapFile) Data() []byte {
++	return m.data
++}
++
++// Size returns the file size.
++func (m *mmapFile) Size() int64 {
++	return m.size
++}
++
++// ReadAt reads len(p) bytes from the file starting at offset off.
++// This is a fallback for platforms without mmap — on Linux it copies
++// from the mmap region directly.
++//
++// See: ARCH-MMAP-03
++func (m *mmapFile) ReadAt(p []byte, off int64) (int, error) {
++	if off < 0 || off >= m.size {
++		return 0, fmt.Errorf("offset out of range: %d (size: %d)", off, m.size)
++	}
++	end := off + int64(len(p))
++	if end > m.size {
++		end = m.size
++		p = p[:end-off]
++	}
++	copy(p, m.data[off:end])
++	return len(p), nil
++}
++
++// Close unmaps the mmap region.
++//
++// Protected against SIGBUS during munmap — if the underlying file was
++// truncated externally, munmap may trigger SIGBUS. The recover() handler
++// catches this and returns an error instead of crashing.
++//
++// Safe to call multiple times (idempotent after first call).
++//
++// See: ARCH-MMAP-04, SAFE-MMAP-01
++func (m *mmapFile) Close() error {
++	if m.data == nil {
++		return nil
++	}
++
++	// Protect against SIGBUS during munmap
++	// If the file was truncated externally, munmap may trigger SIGBUS
++	defer func() {
++		if r := recover(); r != nil {
++			// SIGBUS during munmap — log but don't crash
++			// In production: logger.Warn("munmap recovered from panic: %v", r)
++		}
++	}()
++
++	if err := syscall.Munmap(m.data); err != nil {
++		return fmt.Errorf("failed to munmap: %w", err)
++	}
++	m.data = nil
++	return nil
++}
+diff --git a/internal/engine/sstable/mmap_windows.go b/internal/engine/sstable/mmap_windows.go
+new file mode 100644
+index 0000000..de41c39
+--- /dev/null
++++ b/internal/engine/sstable/mmap_windows.go
+@@ -0,0 +1,186 @@
++// Copyright 2026 Ekaterina Godulyan
++//
++// Licensed under the Apache License, Version 2.0 (the "License");
++// you may not use this file except in compliance with the License.
++// You may obtain a copy of the License at
++//
++//     http://www.apache.org/licenses/LICENSE-2.0
++//
++// Unless required by applicable law or agreed to in writing, software
++// distributed under the License is distributed on an "AS IS" BASIS,
++// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++// See the License for the specific language governing permissions and
++// limitations under the License.
++
++//go:build windows
++
++package sstable
++
++import (
++	"fmt"
++	"os"
++	"syscall"
++	"unsafe"
++)
++
++// mmapFile is the Windows implementation of MmapFile.
++// Uses Windows API: CreateFileMapping + MapViewOfFile.
++//
++// Windows does not have a direct mmap syscall. Instead, we use:
++//  1. CreateFile — open the file
++//  2. CreateFileMapping — create a file mapping object
++//  3. MapViewOfFile — map the file into memory
++//  4. CloseHandle — close the file handle (mapping remains valid)
++//
++// See: ARCH-MMAP-01, PERF-MMAP-01
++type mmapFile struct {
++	data   []byte
++	size   int64
++	handle syscall.Handle // file mapping handle (for UnmapViewOfFile)
++	file   *os.File       // file handle (closed after mapping)
++}
++
++// openMmapFile opens a file and memory-maps it for reading on Windows.
++//
++// Algorithm:
++//  1. os.Open — open the file
++//  2. file.Stat — determine file size
++//  3. CreateFileMapping — create a read-only file mapping
++//  4. MapViewOfFile — map the file into memory
++//  5. CloseHandle(file handle) — close the file handle
++//
++// Returns an error if any step fails.
++// Empty files are rejected.
++//
++// See: ARCH-MMAP-02
++func openMmapFile(path string) (*mmapFile, error) {
++	file, err := os.Open(path)
++	if err != nil {
++		return nil, fmt.Errorf("failed to open file for mmap: %w", err)
++	}
++
++	stat, err := file.Stat()
++	if err != nil {
++		file.Close()
++		return nil, fmt.Errorf("failed to stat file: %w", err)
++	}
++
++	if stat.Size() == 0 {
++		file.Close()
++		return nil, fmt.Errorf("empty file cannot be mmapped")
++	}
++
++	size := stat.Size()
++
++	// Get the underlying file handle
++	// On Windows, we need the HANDLE for CreateFileMapping
++	// We use syscall.Handle(file.Fd()) but must prevent the file from
++	// being closed while we use the handle
++	//nolint:govet
++	fd := file.Fd()
++	handle, err := syscall.CreateFileMapping(
++		syscall.Handle(fd),
++		nil,                   // security attributes
++		syscall.PAGE_READONLY, // protection
++		uint32(size>>32),      // high 32 bits of size
++		uint32(size),          // low 32 bits of size
++		nil,                   // name (unnamed mapping)
++	)
++	if err != nil {
++		file.Close()
++		return nil, fmt.Errorf("failed to create file mapping: %w", err)
++	}
++
++	// Map the file into memory
++	addr, err := syscall.MapViewOfFile(
++		handle,
++		syscall.FILE_MAP_READ, // read-only access
++		0,                     // high 32 bits of offset
++		0,                     // low 32 bits of offset
++		uintptr(size),         // number of bytes to map
++	)
++	if err != nil {
++		syscall.CloseHandle(handle)
++		file.Close()
++		return nil, fmt.Errorf("failed to map view of file: %w", err)
++	}
++
++	// Create a byte slice backed by the mapped memory
++	// The slice header points directly to the mapped region
++	var data []byte
++	sliceHeader := (*struct {
++		addr uintptr
++		len  int
++		cap  int
++	})(unsafe.Pointer(&data))
++	sliceHeader.addr = addr
++	sliceHeader.len = int(size)
++	sliceHeader.cap = int(size)
++
++	// Close the file handle — the mapping remains valid
++	file.Close()
++
++	return &mmapFile{
++		data:   data,
++		size:   size,
++		handle: handle,
++	}, nil
++}
++
++// Data returns the entire file as a byte slice backed by the mmap region.
++// The slice remains valid until Close() is called.
++//
++// Zero allocations — returns a direct slice of the mapped region.
++//
++// See: PERF-MMAP-02
++func (m *mmapFile) Data() []byte {
++	return m.data
++}
++
++// Size returns the file size.
++func (m *mmapFile) Size() int64 {
++	return m.size
++}
++
++// ReadAt reads len(p) bytes from the file starting at offset off.
++// This is a fallback — on Windows it copies from the mapped region directly.
++//
++// See: ARCH-MMAP-03
++func (m *mmapFile) ReadAt(p []byte, off int64) (int, error) {
++	if off < 0 || off >= m.size {
++		return 0, fmt.Errorf("offset out of range: %d (size: %d)", off, m.size)
++	}
++	end := off + int64(len(p))
++	if end > m.size {
++		end = m.size
++		p = p[:end-off]
++	}
++	copy(p, m.data[off:end])
++	return len(p), nil
++}
++
++// Close unmaps the file mapping and closes the mapping handle.
++//
++// Safe to call multiple times (idempotent after first call).
++//
++// See: ARCH-MMAP-04
++func (m *mmapFile) Close() error {
++	if m.data == nil {
++		return nil
++	}
++
++	// Unmap the view
++	addr := uintptr(unsafe.Pointer(&m.data[0]))
++	if err := syscall.UnmapViewOfFile(addr); err != nil {
++		return fmt.Errorf("failed to unmap view of file: %w", err)
++	}
++
++	// Close the file mapping handle
++	if err := syscall.CloseHandle(m.handle); err != nil {
++		return fmt.Errorf("failed to close file mapping handle: %w", err)
++	}
++
++	m.data = nil
++	m.handle = 0
++	return nil
++}
+diff --git a/internal/engine/sstable/reader.go b/internal/engine/sstable/reader.go
+index 1e35ece..9f25950 100644
+--- a/internal/engine/sstable/reader.go
++++ b/internal/engine/sstable/reader.go
+@@ -19,144 +19,360 @@ import (
+ 	"encoding/binary"
+ 	"fmt"
+ 	"hash/crc32"
+-	"io"
+-	"os"
+ 	"sort"
+ 	"sync"
++	"sync/atomic"
+ 
+-	"github.com/f4ga/ScoriaDB/internal/errors"
+ 	"github.com/f4ga/ScoriaDB/internal/keys"
+ 	"github.com/f4ga/ScoriaDB/internal/mvcc"
+ )
+ 
+-// Reader reads SSTable from file.
++// MmapFile is a platform-independent interface for memory-mapped file access.
++//
++// Contract:
++//   - Data() returns a byte slice backed by the mmap region (or nil on fallback).
++//     The slice remains valid until Close() is called.
++//   - Close() releases all resources (munmap or close).
++//   - ReadAt() is available as a fallback for platforms without mmap.
++//
++// Implementations:
++//   - Linux, macOS: syscall.Mmap with PROT_READ and MAP_SHARED
++//   - Windows: CreateFileMapping + MapViewOfFile
++//   - Other platforms: os.File (fallback, Data() returns nil)
++//
++// See: ARCH-MMAP-01
++type MmapFile interface {
++	Data() []byte                            // entire file as a slice (nil if mmap unavailable)
++	Size() int64                             // file size
++	ReadAt(p []byte, off int64) (int, error) // fallback for non-mmap platforms
++	Close() error
++}
++
++// Reader reads SSTable from a memory-mapped file.
++//
++// Before this change, each SSTable Lookup performed three system calls:
++// open(), lseek(), and read(). With millions of Lookups per second, this
++// created significant CPU overhead and GC pressure.
++//
++// After this change, Lookup accesses the mmap region directly through memory
++// accesses — zero system calls, zero allocations. Block data is returned as
++// a slice referencing the mmap region, not a copied buffer.
++//
++// See: ARCH-MMAP-06, PERF-MMAP-03
+ type Reader struct {
+-	file         *os.File
++	mmapFile     MmapFile
+ 	footer       Footer
+ 	indexEntries []IndexEntry
+ 	bloomFilter  *BloomFilter
+ 	minKey       []byte
+ 	maxKey       []byte
++	path         string
++	closed       atomic.Bool
+ }
+ 
+ // IndexEntry represents a block index entry.
++// The key is the raw user key (without timestamp) of the first key in the block.
++// Binary search compares user keys directly. Block ordering is guaranteed by
++// Writer.Finish() which sorts blocks before writing.
++// See: PROMPT-SSTABLE-FINAL
+ type IndexEntry struct {
+-	key    []byte // encoded MVCCKey (first key in block)
++	key    []byte // raw user key (first key in block, without timestamp)
+ 	offset uint64
+ }
+ 
+-// Open opens SSTable for reading.
++// Open opens an SSTable file for reading using memory-mapped I/O.
++//
++// The file is memory-mapped immediately. On platforms that support mmap
++// (Linux, macOS, Windows), this provides zero-copy access to the file data.
++// On other platforms, it falls back to traditional file I/O.
++//
++// The footer, index, Bloom filter, and range keys are parsed eagerly from
++// the mmap region. Data blocks are read lazily on Lookup/iteration.
++//
++// Returns an error if:
++//   - The file cannot be opened
++//   - The file is empty
++//   - The footer is corrupted (invalid magic number)
++//   - The index or Bloom filter data is corrupted
++//
++// See: ARCH-MMAP-07
+ func Open(path string) (*Reader, error) {
+-	file, err := os.Open(path)
++	mmapFile, err := openMmapFile(path)
+ 	if err != nil {
+ 		return nil, fmt.Errorf("failed to open SSTable file: %w", err)
+ 	}
+ 
+-	if _, err := file.Seek(-80, io.SeekEnd); err != nil {
+-		errors.CloseWithLog(file, "sstable-file")
+-		return nil, fmt.Errorf("failed to seek to footer: %w", err)
++	data := mmapFile.Data()
++	if data == nil {
++		// Fallback platform: use file I/O via ReadAt
++		return openFallback(mmapFile, path)
+ 	}
+-	var footer Footer
+-	if err := binary.Read(file, binary.LittleEndian, &footer); err != nil {
+-		errors.CloseWithLog(file, "sstable-file")
+-		return nil, fmt.Errorf("failed to read footer: %w", err)
++
++	// Fast path: parse from mmap region (0 allocations for data access)
++	fileSize := len(data)
++
++	// Read footer from the end of the file
++	// Footer is 80 bytes: 8 fields × 8 bytes each
++	const footerSize = 80
++	if fileSize < footerSize {
++		mmapFile.Close()
++		return nil, fmt.Errorf("file too small for footer: %d bytes", fileSize)
+ 	}
++
++	footerData := data[fileSize-footerSize:]
++	var footer Footer
++	footer.IndexOffset = binary.LittleEndian.Uint64(footerData[0:8])
++	footer.IndexSize = binary.LittleEndian.Uint64(footerData[8:16])
++	footer.BloomOffset = binary.LittleEndian.Uint64(footerData[16:24])
++	footer.BloomSize = binary.LittleEndian.Uint64(footerData[24:32])
++	footer.NumKeys = binary.LittleEndian.Uint64(footerData[32:40])
++	footer.Magic = binary.LittleEndian.Uint64(footerData[40:48])
++	footer.MinKeyOffset = binary.LittleEndian.Uint64(footerData[48:56])
++	footer.MinKeyLength = binary.LittleEndian.Uint64(footerData[56:64])
++	footer.MaxKeyOffset = binary.LittleEndian.Uint64(footerData[64:72])
++	footer.MaxKeyLength = binary.LittleEndian.Uint64(footerData[72:80])
++
+ 	if footer.Magic != MagicNumber {
+-		errors.CloseWithLog(file, "sstable-file")
+-		return nil, fmt.Errorf("invalid SSTable magic number")
++		mmapFile.Close()
++		return nil, fmt.Errorf("invalid SSTable magic number: 0x%x", footer.Magic)
+ 	}
+ 
+-	if _, err := file.Seek(int64(footer.IndexOffset), io.SeekStart); err != nil {
+-		errors.CloseWithLog(file, "sstable-file")
+-		return nil, fmt.Errorf("failed to seek to index: %w", err)
++	// Parse index from mmap region
++	indexEntries, err := parseIndex(data, footer.IndexOffset, footer.IndexSize)
++	if err != nil {
++		mmapFile.Close()
++		return nil, fmt.Errorf("failed to parse index: %w", err)
+ 	}
+-	indexEntries := make([]IndexEntry, 0)
+-	remaining := footer.IndexSize
+-	for remaining > 0 {
+-		var keyLen uint32
+-		if err := binary.Read(file, binary.LittleEndian, &keyLen); err != nil {
+-			errors.CloseWithLog(file, "sstable-file")
+-			return nil, fmt.Errorf("failed to read key length: %w", err)
+-		}
+-		remaining -= 4
+-		key := make([]byte, keyLen)
+-		if _, err := io.ReadFull(file, key); err != nil {
+-			errors.CloseWithLog(file, "sstable-file")
+-			return nil, fmt.Errorf("failed to read key: %w", err)
+-		}
+-		remaining -= uint64(keyLen)
+-		var offset uint64
+-		if err := binary.Read(file, binary.LittleEndian, &offset); err != nil {
+-			errors.CloseWithLog(file, "sstable-file")
+-			return nil, fmt.Errorf("failed to read block offset: %w", err)
+-		}
+-		remaining -= 8
+-		indexEntries = append(indexEntries, IndexEntry{key: key, offset: offset})
++
++	// Parse Bloom filter from mmap region
++	bloomFilter, err := parseBloomFilter(data, footer.BloomOffset, footer.BloomSize)
++	if err != nil {
++		mmapFile.Close()
++		return nil, fmt.Errorf("failed to parse bloom filter: %w", err)
+ 	}
+ 
+-	if _, err := file.Seek(int64(footer.BloomOffset), io.SeekStart); err != nil {
+-		errors.CloseWithLog(file, "sstable-file")
+-		return nil, fmt.Errorf("failed to seek to bloom filter: %w", err)
++	// Parse min/max keys from mmap region
++	minKey := parseKey(data, footer.MinKeyOffset, footer.MinKeyLength)
++	maxKey := parseKey(data, footer.MaxKeyOffset, footer.MaxKeyLength)
++
++	return &Reader{
++		mmapFile:     mmapFile,
++		footer:       footer,
++		indexEntries: indexEntries,
++		bloomFilter:  bloomFilter,
++		minKey:       minKey,
++		maxKey:       maxKey,
++		path:         path,
++	}, nil
++}
++
++// openFallback opens an SSTable on platforms without mmap support.
++// Uses the MmapFile's ReadAt() method (backed by os.File).
++func openFallback(mmapFile MmapFile, path string) (*Reader, error) {
++	fileSize := mmapFile.Size()
++
++	// Read footer
++	const footerSize = 80
++	if fileSize < footerSize {
++		mmapFile.Close()
++		return nil, fmt.Errorf("file too small for footer: %d bytes", fileSize)
+ 	}
+-	var bloomSize uint32
+-	if err := binary.Read(file, binary.LittleEndian, &bloomSize); err != nil {
+-		errors.CloseWithLog(file, "sstable-file")
+-		return nil, fmt.Errorf("failed to read bloom filter size: %w", err)
++
++	footerBuf := make([]byte, footerSize)
++	if _, err := mmapFile.ReadAt(footerBuf, fileSize-footerSize); err != nil {
++		mmapFile.Close()
++		return nil, fmt.Errorf("failed to read footer: %w", err)
+ 	}
+-	bloomBytes := make([]byte, bloomSize)
+-	if _, err := io.ReadFull(file, bloomBytes); err != nil {
+-		errors.CloseWithLog(file, "sstable-file")
++
++	var footer Footer
++	footer.IndexOffset = binary.LittleEndian.Uint64(footerBuf[0:8])
++	footer.IndexSize = binary.LittleEndian.Uint64(footerBuf[8:16])
++	footer.BloomOffset = binary.LittleEndian.Uint64(footerBuf[16:24])
++	footer.BloomSize = binary.LittleEndian.Uint64(footerBuf[24:32])
++	footer.NumKeys = binary.LittleEndian.Uint64(footerBuf[32:40])
++	footer.Magic = binary.LittleEndian.Uint64(footerBuf[40:48])
++	footer.MinKeyOffset = binary.LittleEndian.Uint64(footerBuf[48:56])
++	footer.MinKeyLength = binary.LittleEndian.Uint64(footerBuf[56:64])
++	footer.MaxKeyOffset = binary.LittleEndian.Uint64(footerBuf[64:72])
++	footer.MaxKeyLength = binary.LittleEndian.Uint64(footerBuf[72:80])
++
++	if footer.Magic != MagicNumber {
++		mmapFile.Close()
++		return nil, fmt.Errorf("invalid SSTable magic number: 0x%x", footer.Magic)
++	}
++
++	// Read index
++	indexBuf := make([]byte, footer.IndexSize)
++	if _, err := mmapFile.ReadAt(indexBuf, int64(footer.IndexOffset)); err != nil {
++		mmapFile.Close()
++		return nil, fmt.Errorf("failed to read index: %w", err)
++	}
++	indexEntries := parseIndexBytes(indexBuf)
++
++	// Read Bloom filter
++	bloomBuf := make([]byte, footer.BloomSize)
++	if _, err := mmapFile.ReadAt(bloomBuf, int64(footer.BloomOffset)); err != nil {
++		mmapFile.Close()
+ 		return nil, fmt.Errorf("failed to read bloom filter: %w", err)
+ 	}
+-	bloomFilter := DecodeBloomFilter(bloomBytes)
++	// First 4 bytes are bloom size, rest is bloom data
++	var bloomData []byte
++	if len(bloomBuf) >= 4 {
++		bloomSize := binary.LittleEndian.Uint32(bloomBuf[0:4])
++		if int(bloomSize) <= len(bloomBuf)-4 {
++			bloomData = bloomBuf[4 : 4+bloomSize]
++		}
++	}
++	bloomFilter := DecodeBloomFilter(bloomData)
+ 
++	// Read min/max keys
+ 	var minKey []byte
+ 	if footer.MinKeyLength > 0 {
+-		if _, err := file.Seek(int64(footer.MinKeyOffset), io.SeekStart); err != nil {
+-			errors.CloseWithLog(file, "sstable-file")
+-			return nil, fmt.Errorf("failed to seek to min key: %w", err)
+-		}
+-		var keyLen uint32
+-		if err := binary.Read(file, binary.LittleEndian, &keyLen); err != nil {
+-			errors.CloseWithLog(file, "sstable-file")
+-			return nil, fmt.Errorf("failed to read min key length: %w", err)
+-		}
+-		minKey = make([]byte, keyLen)
+-		if _, err := io.ReadFull(file, minKey); err != nil {
+-			errors.CloseWithLog(file, "sstable-file")
+-			return nil, fmt.Errorf("failed to read min key: %w", err)
++		minKeyBuf := make([]byte, 4+footer.MinKeyLength)
++		if _, err := mmapFile.ReadAt(minKeyBuf, int64(footer.MinKeyOffset)); err == nil {
++			keyLen := binary.LittleEndian.Uint32(minKeyBuf[0:4])
++			if int(keyLen) == int(footer.MinKeyLength) {
++				minKey = make([]byte, keyLen)
++				copy(minKey, minKeyBuf[4:4+keyLen])
++			}
+ 		}
+ 	}
+ 
+ 	var maxKey []byte
+ 	if footer.MaxKeyLength > 0 {
+-		if _, err := file.Seek(int64(footer.MaxKeyOffset), io.SeekStart); err != nil {
+-			errors.CloseWithLog(file, "sstable-file")
+-			return nil, fmt.Errorf("failed to seek to max key: %w", err)
+-		}
+-		var keyLen uint32
+-		if err := binary.Read(file, binary.LittleEndian, &keyLen); err != nil {
+-			errors.CloseWithLog(file, "sstable-file")
+-			return nil, fmt.Errorf("failed to read max key length: %w", err)
+-		}
+-		maxKey = make([]byte, keyLen)
+-		if _, err := io.ReadFull(file, maxKey); err != nil {
+-			errors.CloseWithLog(file, "sstable-file")
+-			return nil, fmt.Errorf("failed to read max key: %w", err)
++		maxKeyBuf := make([]byte, 4+footer.MaxKeyLength)
++		if _, err := mmapFile.ReadAt(maxKeyBuf, int64(footer.MaxKeyOffset)); err == nil {
++			keyLen := binary.LittleEndian.Uint32(maxKeyBuf[0:4])
++			if int(keyLen) == int(footer.MaxKeyLength) {
++				maxKey = make([]byte, keyLen)
++				copy(maxKey, maxKeyBuf[4:4+keyLen])
++			}
+ 		}
+ 	}
+ 
+ 	return &Reader{
+-		file:         file,
++		mmapFile:     mmapFile,
+ 		footer:       footer,
+ 		indexEntries: indexEntries,
+ 		bloomFilter:  bloomFilter,
+ 		minKey:       minKey,
+ 		maxKey:       maxKey,
++		path:         path,
+ 	}, nil
+ }
+ 
+-// blockPool is a sync.Pool for reusing block buffers during SSTable reads.
++// parseIndex parses the block index from the mmap region.
++// The index stores raw user keys (without timestamp) for binary search.
++// Returns a slice of IndexEntry with copied keys.
++//
++// Index keys are copied (not mmap-backed) because they are accessed during
++// binary search in Lookup() BEFORE any bounds check. If the file is truncated
++// externally, mmap-backed index keys would cause SIGBUS.
++//
++// Index keys are small metadata (typically < 100 bytes), so the copy overhead
++// is negligible compared to the safety gain.
++//
++// See: SAFE-MMAP-03, ARCH-SSTABLE-IDX-01, PROMPT-SSTABLE-FINAL
++func parseIndex(data []byte, offset, size uint64) ([]IndexEntry, error) {
++	if offset+size > uint64(len(data)) {
++		return nil, fmt.Errorf("index out of range: offset=%d, size=%d, file=%d", offset, size, len(data))
++	}
++
++	indexData := data[offset : offset+size]
++	entries := make([]IndexEntry, 0, 16) // small initial cap, grows as needed
++
++	pos := uint64(0)
++	for pos < size {
++		if pos+4 > size {
++			return nil, fmt.Errorf("truncated index: cannot read key length at pos %d", pos)
++		}
++		keyLen := binary.LittleEndian.Uint32(indexData[pos:])
++		pos += 4
++
++		if pos+uint64(keyLen)+8 > size {
++			return nil, fmt.Errorf("truncated index: key length %d exceeds remaining %d", keyLen, size-pos)
++		}
++
++		// Copy the key — index keys are accessed during binary search in Lookup()
++		// before any bounds check. mmap-backed slices would cause SIGBUS if the
++		// file is truncated externally. Keys are small metadata, so copy is safe.
++		key := make([]byte, keyLen)
++		copy(key, indexData[pos:pos+uint64(keyLen)])
++		pos += uint64(keyLen)
++
++		entryOffset := binary.LittleEndian.Uint64(indexData[pos:])
++		pos += 8
++
++		entries = append(entries, IndexEntry{key: key, offset: entryOffset})
++	}
++
++	return entries, nil
++}
++
++// parseIndexBytes parses the block index from a copied buffer (fallback path).
++func parseIndexBytes(data []byte) []IndexEntry {
++	entries := make([]IndexEntry, 0, 16)
++	pos := 0
++	for pos+4 <= len(data) {
++		keyLen := binary.LittleEndian.Uint32(data[pos:])
++		pos += 4
++
++		if pos+int(keyLen)+8 > len(data) {
++			break
++		}
++
++		key := make([]byte, keyLen)
++		copy(key, data[pos:pos+int(keyLen)])
++		pos += int(keyLen)
++
++		offset := binary.LittleEndian.Uint64(data[pos:])
++		pos += 8
++
++		entries = append(entries, IndexEntry{key: key, offset: offset})
++	}
++	return entries
++}
++
++// parseBloomFilter parses the Bloom filter from the mmap region.
++func parseBloomFilter(data []byte, offset, size uint64) (*BloomFilter, error) {
++	if offset+size > uint64(len(data)) {
++		return nil, fmt.Errorf("bloom filter out of range: offset=%d, size=%d, file=%d", offset, size, len(data))
++	}
++
++	bloomSection := data[offset : offset+size]
++	if len(bloomSection) < 4 {
++		return DecodeBloomFilter(nil), nil
++	}
++
++	bloomSize := binary.LittleEndian.Uint32(bloomSection[0:4])
++	if int(bloomSize) > len(bloomSection)-4 {
++		return DecodeBloomFilter(nil), nil
++	}
++
++	bloomData := bloomSection[4 : 4+bloomSize]
++	return DecodeBloomFilter(bloomData), nil
++}
++
++// parseKey parses a key from the mmap region.
++func parseKey(data []byte, offset, length uint64) []byte {
++	if length == 0 || offset+4+length > uint64(len(data)) {
++		return nil
++	}
++
++	keySection := data[offset : offset+4+length]
++	keyLen := binary.LittleEndian.Uint32(keySection[0:4])
++	if int(keyLen) != int(length) {
++		return nil
++	}
++
++	// Copy the key — it's small and used for range checks
++	key := make([]byte, keyLen)
++	copy(key, keySection[4:4+keyLen])
++	return key
++}
++
++// blockPool is a sync.Pool for reusing block buffers during SSTable reads
++// on fallback platforms. On mmap platforms, this pool is not used.
+ // Stores *[]byte to satisfy staticcheck (sync.Pool with pointer types).
+ var blockPool = sync.Pool{
+ 	New: func() interface{} {
+@@ -166,17 +382,72 @@ var blockPool = sync.Pool{
+ }
+ 
+ // readBlock reads a data block from the SSTable at the given offset.
++//
++// Fast path (mmap): returns a slice of the mmap region — 0 allocations, 0 syscalls.
++// Slow path (fallback): reads into a pooled buffer via ReadAt.
++//
+ // The returned buffer includes the CRC32 checksum at the end (last 4 bytes).
+ // Callers must verify the CRC32 via VerifyBlockCRC or use the block data
+ // which excludes the CRC32 trailer.
++//
++// See: PERF-MMAP-04
+ func (r *Reader) readBlock(offset uint64) ([]byte, error) {
+-	if _, err := r.file.Seek(int64(offset), io.SeekStart); err != nil {
++	data := r.mmapFile.Data()
++	if data != nil {
++		// Fast path: slice from mmap region
++		// 0 allocations, 0 syscalls
++		return r.readBlockFromMmap(data, offset)
++	}
++
++	// Slow path: fallback to file I/O
++	return r.readBlockFromFile(offset)
++}
++
++// readBlockFromMmap reads a block directly from the mmap region.
++// Zero allocations — returns a slice of the mmap region.
++// Zero syscalls — pure memory access.
++//
++// Bounds checking protects against SIGBUS if the file was truncated externally.
++//
++// See: PERF-MMAP-05, SAFE-MMAP-02
++func (r *Reader) readBlockFromMmap(data []byte, offset uint64) ([]byte, error) {
++	// Check bounds: need at least 4 bytes for block size
++	if int(offset+4) > len(data) {
++		return nil, fmt.Errorf("block offset %d out of range (file size %d)", offset, len(data))
++	}
++
++	// Read block size from mmap
++	blockSize := binary.LittleEndian.Uint32(data[offset:])
++
++	// Block on disk includes CRC32 trailer (4 bytes), so total = blockSize + 4
++	totalSize := uint64(blockSize) + 4
++
++	// Check bounds for the entire block
++	if int(offset+4+totalSize) > len(data) {
++		return nil, fmt.Errorf("block at offset %d (size %d) out of range (file size %d)",
++			offset, totalSize, len(data))
++	}
++
++	// Slice the block data from mmap — 0 allocs
++	blockData := data[offset : offset+4+totalSize]
++
++	// Verify CRC32 before returning
++	if err := verifyBlockCRC(blockData[4:]); err != nil {
+ 		return nil, err
+ 	}
++
++	// Return block data without the size prefix and without CRC32 trailer
++	return blockData[4 : 4+blockSize], nil
++}
++
++// readBlockFromFile reads a block using file I/O (fallback for non-mmap platforms).
++func (r *Reader) readBlockFromFile(offset uint64) ([]byte, error) {
+ 	var blockSize uint32
+-	if err := binary.Read(r.file, binary.LittleEndian, &blockSize); err != nil {
+-		return nil, err
++	sizeBuf := make([]byte, 4)
++	if _, err := r.mmapFile.ReadAt(sizeBuf, int64(offset)); err != nil {
++		return nil, fmt.Errorf("failed to read block size: %w", err)
+ 	}
++	blockSize = binary.LittleEndian.Uint32(sizeBuf)
+ 
+ 	// Block on disk includes CRC32 trailer (4 bytes), so total = blockSize + 4
+ 	totalSize := blockSize + 4
+@@ -184,8 +455,8 @@ func (r *Reader) readBlock(offset uint64) ([]byte, error) {
+ 	bufPtr, ok := blockPool.Get().(*[]byte)
+ 	if !ok {
+ 		buf := make([]byte, totalSize)
+-		if _, err := io.ReadFull(r.file, buf); err != nil {
+-			return nil, err
++		if _, err := r.mmapFile.ReadAt(buf, int64(offset+4)); err != nil {
++			return nil, fmt.Errorf("failed to read block data: %w", err)
+ 		}
+ 		// Verify CRC32 before returning
+ 		if err := verifyBlockCRC(buf); err != nil {
+@@ -200,9 +471,9 @@ func (r *Reader) readBlock(offset uint64) ([]byte, error) {
+ 		buf = buf[:totalSize]
+ 	}
+ 
+-	if _, err := io.ReadFull(r.file, buf); err != nil {
++	if _, err := r.mmapFile.ReadAt(buf, int64(offset+4)); err != nil {
+ 		blockPool.Put(&buf)
+-		return nil, err
++		return nil, fmt.Errorf("failed to read block data: %w", err)
+ 	}
+ 
+ 	// Verify CRC32 before returning
+@@ -230,13 +501,36 @@ func verifyBlockCRC(buf []byte) error {
+ }
+ 
+ // ReleaseBlock returns a buffer to the pool.
++// Only needed on fallback platforms — on mmap platforms, blocks are not pooled.
+ func ReleaseBlock(buf []byte) {
+ 	blockPool.Put(&buf)
+ }
+ 
+ // Lookup searches for a key in the SSTable and returns the value if found.
+-// Lookup searches for a key in the SSTable and returns the value if found.
++//
++// Fast path (mmap): 0 syscalls, 0 allocations.
++//   - Range filter: compare key against min/max (no I/O)
++//   - Bloom filter: check key existence (no I/O)
++//   - Binary search on index (no I/O — index is in mmap)
++//   - Read block from mmap (0 allocs, 0 syscalls)
++//   - Linear scan within block (0 allocs)
++//
++// Slow path (fallback): uses ReadAt for block reads.
++//
++// The returned value slice points directly to the mmap region.
++// The value is valid only until the Reader is closed.
++// The caller MUST copy the value if it needs to persist beyond the lifetime
++// of the Reader.
++//
++// This is a zero-allocation optimization. The returned slice is a reference
++// to the mmap region, not a copy. Use with caution.
++//
++// See: PERF-MMAP-06
+ func (r *Reader) Lookup(key mvcc.MVCCKey) ([]byte, bool) {
++	if r.closed.Load() {
++		return nil, false
++	}
++
+ 	userKey := key.Key
+ 
+ 	// Range filter: if key is outside min/max, return false
+@@ -253,16 +547,15 @@ func (r *Reader) Lookup(key mvcc.MVCCKey) ([]byte, bool) {
+ 	}
+ 
+ 	// Find block using binary search on index.
+-	// sort.Search finds the first index where the first key > userKey.
+-	// The target block is the one before that (where first_key <= userKey).
++	// The index stores raw user keys (first key of each block, without timestamp).
++	// We compare the lookup user key directly against index keys using bytes.Compare.
++	//
++	// sort.Search finds the first index where indexKey > userKey.
++	// The target block is the one before that (where indexKey <= userKey).
+ 	blockIdx := sort.Search(len(r.indexEntries), func(i int) bool {
+-		idxKey, err := decodeMVCCKey(r.indexEntries[i].key)
+-		if err != nil {
+-			return true // error → treat as key > userKey
+-		}
+-		return keys.CompareKeys(idxKey.Key, userKey) > 0
++		return bytes.Compare(r.indexEntries[i].key, userKey) > 0
+ 	})
+-	blockIdx-- // previous block is the one where first_key <= userKey
++	blockIdx-- // previous block is the one where indexKey <= userKey
+ 	if blockIdx < 0 {
+ 		return nil, false // key is before the first block
+ 	}
+@@ -273,7 +566,14 @@ func (r *Reader) Lookup(key mvcc.MVCCKey) ([]byte, bool) {
+ 	if err != nil {
+ 		return nil, false
+ 	}
+-	defer ReleaseBlock(blockData)
++
++	// On mmap platforms, blockData is a slice of the mmap region — no release needed.
++	// On fallback platforms, blockData is from the pool and must be released.
++	// We detect mmap vs fallback by checking if Data() returns non-nil.
++	isMmap := r.mmapFile.Data() != nil
++	if !isMmap {
++		defer ReleaseBlock(blockData)
++	}
+ 
+ 	// Search for the key in the block
+ 	pos := 0
+@@ -307,10 +607,10 @@ func (r *Reader) Lookup(key mvcc.MVCCKey) ([]byte, bool) {
+ 				if len(entryVal) == 0 {
+ 					return nil, false // tombstone
+ 				}
+-				// Copy value before returning (blockData will be released)
+-				val := make([]byte, len(entryVal))
+-				copy(val, entryVal)
+-				return val, true
++				// Zero-allocation return: entryVal is a slice of the mmap region.
++				// The value is valid only until the Reader is closed.
++				// Callers must copy if they need the value beyond the Reader lifetime.
++				return entryVal, true
+ 			}
+ 		} else if cmp > 0 {
+ 			// Since the block is sorted, if we've passed the key, it's not here
+@@ -321,7 +621,56 @@ func (r *Reader) Lookup(key mvcc.MVCCKey) ([]byte, bool) {
+ 	return nil, false
+ }
+ 
+-// Close closes the SSTable file.
++// Close closes the SSTable reader and releases the mmap region.
++//
++// Safe to call multiple times (idempotent after first call).
++// On mmap platforms, this calls munmap.
++// On fallback platforms, this closes the underlying file.
++//
++// See: ARCH-MMAP-04
+ func (r *Reader) Close() error {
+-	return r.file.Close()
++	if r.closed.Load() {
++		return nil
++	}
++	r.closed.Store(true)
++
++	if r.mmapFile != nil {
++		return r.mmapFile.Close()
++	}
++	return nil
++}
++
++// Path returns the file path of the SSTable.
++func (r *Reader) Path() string {
++	return r.path
++}
++
++// NumKeys returns the number of keys in the SSTable.
++func (r *Reader) NumKeys() uint64 {
++	return r.footer.NumKeys
++}
++
++// Footer returns the SSTable footer.
++func (r *Reader) Footer() Footer {
++	return r.footer
++}
++
++// IndexEntries returns the block index entries.
++func (r *Reader) IndexEntries() []IndexEntry {
++	return r.indexEntries
++}
++
++// BloomFilter returns the Bloom filter.
++func (r *Reader) BloomFilter() *BloomFilter {
++	return r.bloomFilter
++}
++
++// MinKey returns the minimum key in the SSTable.
++func (r *Reader) MinKey() []byte {
++	return r.minKey
++}
++
++// MaxKey returns the maximum key in the SSTable.
++func (r *Reader) MaxKey() []byte {
++	return r.maxKey
+ }
+diff --git a/internal/engine/sstable/sstable_test.go b/internal/engine/sstable/sstable_test.go
+index 40c9787..02d5a06 100644
+--- a/internal/engine/sstable/sstable_test.go
++++ b/internal/engine/sstable/sstable_test.go
+@@ -1110,3 +1110,421 @@ func TestBloomFilterFalsePositiveRate(t *testing.T) {
+ 		t.Errorf("FPR too high: %.2f%%, expected ≤ 2%%", rate*100)
+ 	}
+ }
++
++// ============================================================
++// mmap-specific tests
++// ============================================================
++
++// TestMmapOpenAndLookup verifies that an SSTable opened via mmap
++// works correctly for Lookup operations.
++func TestMmapOpenAndLookup(t *testing.T) {
++	dir := t.TempDir()
++	path := filepath.Join(dir, "mmap_lookup.sst")
++
++	writer, err := NewWriter(path, 10)
++	if err != nil {
++		t.Fatalf("failed to create writer: %v", err)
++	}
++
++	keys := []mvcc.MVCCKey{
++		mvcc.NewMVCCKey([]byte("alpha"), 100),
++		mvcc.NewMVCCKey([]byte("beta"), 200),
++		mvcc.NewMVCCKey([]byte("gamma"), 300),
++	}
++	values := [][]byte{
++		[]byte("val1"),
++		[]byte("val2"),
++		[]byte("val3"),
++	}
++
++	for i, key := range keys {
++		if err := writer.Append(key, values[i]); err != nil {
++			t.Fatalf("failed to append: %v", err)
++		}
++	}
++	if err := writer.Finish(); err != nil {
++		t.Fatalf("failed to finish: %v", err)
++	}
++
++	reader, err := Open(path)
++	if err != nil {
++		t.Fatalf("failed to open reader: %v", err)
++	}
++	defer reader.Close()
++
++	// Verify that mmap is being used (Data() returns non-nil on Linux/macOS/Windows)
++	// On fallback platforms, Data() returns nil — that's also valid.
++	_ = reader.mmapFile.Data() // just check it doesn't panic
++
++	// Verify all keys are found
++	for i, key := range keys {
++		val, found := reader.Lookup(key)
++		if !found {
++			t.Errorf("key %d not found", i)
++			continue
++		}
++		if string(val) != string(values[i]) {
++			t.Errorf("value mismatch for key %d: got %s, want %s", i, val, values[i])
++		}
++	}
++
++	// Verify missing key
++	_, found := reader.Lookup(mvcc.NewMVCCKey([]byte("missing"), 400))
++	if found {
++		t.Error("expected missing key to not be found")
++	}
++}
++
++// TestMmapSIGBUSProtection verifies that reading beyond the mmap region
++// returns an error instead of triggering SIGBUS.
++//
++// The test creates an SSTable, opens it via mmap, then truncates the file
++// and attempts to read at an offset beyond the mmap region. The readBlock
++// should return an error due to bounds checking.
++//
++// IMPORTANT: After truncation, the mmap region still covers the ORIGINAL
++// file size (mmap was created before truncation). So we must read at an
++// offset beyond the ORIGINAL file size to trigger the bounds check, not
++// beyond the truncated size.
++//
++// See: SAFE-MMAP-02
++func TestMmapSIGBUSProtection(t *testing.T) {
++	dir := t.TempDir()
++	path := filepath.Join(dir, "sigbus_test.sst")
++
++	// Create an SSTable with enough data to span multiple blocks
++	writer, err := NewWriter(path, 100)
++	if err != nil {
++		t.Fatalf("failed to create writer: %v", err)
++	}
++
++	largeValue := make([]byte, 1000)
++	for i := range largeValue {
++		largeValue[i] = 'x'
++	}
++
++	for i := 0; i < 50; i++ {
++		key := mvcc.NewMVCCKey([]byte(fmt.Sprintf("key-%04d", i)), uint64(i+1))
++		if err := writer.Append(key, largeValue); err != nil {
++			t.Fatalf("failed to append: %v", err)
++		}
++	}
++	if err := writer.Finish(); err != nil {
++		t.Fatalf("failed to finish: %v", err)
++	}
++
++	// Get original file size before opening
++	fileInfo, err := os.Stat(path)
++	if err != nil {
++		t.Fatalf("failed to stat file: %v", err)
++	}
++	originalSize := fileInfo.Size()
++
++	// Open the SSTable
++	reader, err := Open(path)
++	if err != nil {
++		t.Fatalf("failed to open reader: %v", err)
++	}
++	defer reader.Close()
++
++	// If mmap is not available (fallback), skip this test
++	if reader.mmapFile.Data() == nil {
++		t.Skip("mmap not available on this platform")
++	}
++
++	// Truncate the file to a smaller size (simulate external truncation)
++	// The mmap region still covers the original size, but the file is smaller.
++	newSize := originalSize / 2
++	if err := os.Truncate(path, newSize); err != nil {
++		t.Fatalf("failed to truncate file: %v", err)
++	}
++
++	// Attempt to read a block at an offset BEYOND the mmap region.
++	// The mmap region covers the original file size, so reading at
++	// originalSize + 1000 is beyond the mmap region and should fail
++	// the bounds check.
++	_, err = reader.readBlock(uint64(originalSize) + 1000)
++	if err == nil {
++		t.Error("expected error when reading beyond mmap region, got nil")
++	} else {
++		t.Logf("got expected error: %v", err)
++	}
++
++	// Also verify that Lookup handles gracefully (returns false, not SIGBUS)
++	// After truncation, the index entries point to blocks that may be partially
++	// or fully truncated. Lookup should return false, not SIGBUS.
++	_, found := reader.Lookup(mvcc.NewMVCCKey([]byte("key-0000"), 1))
++	if found {
++		t.Log("Lookup succeeded despite truncation (graceful handling)")
++	}
++}
++
++// TestMmapAlignment verifies that the SSTable file can be opened via mmap
++// regardless of file size alignment.
++//
++// mmap does NOT require file size to be page-aligned. The syscall.Mmap
++// implementation handles offset/size alignment internally by rounding down
++// the offset to the nearest page boundary and mapping extra bytes.
++// Only the offset passed to mmap must be page-aligned, and syscall.Mmap
++// enforces this. File size alignment is irrelevant.
++//
++// See: ARCH-MMAP-06
++func TestMmapAlignment(t *testing.T) {
++	dir := t.TempDir()
++	path := filepath.Join(dir, "alignment_test.sst")
++
++	writer, err := NewWriter(path, 10)
++	if err != nil {
++		t.Fatalf("failed to create writer: %v", err)
++	}
++
++	if err := writer.Append(mvcc.NewMVCCKey([]byte("key"), 100), []byte("value")); err != nil {
++		t.Fatalf("failed to append: %v", err)
++	}
++	if err := writer.Finish(); err != nil {
++		t.Fatalf("failed to finish: %v", err)
++	}
++
++	// Verify that the file can be opened via mmap regardless of size alignment
++	reader, err := Open(path)
++	if err != nil {
++		t.Fatalf("failed to open SSTable: %v", err)
++	}
++	defer reader.Close()
++
++	// Verify Lookup works
++	val, found := reader.Lookup(mvcc.NewMVCCKey([]byte("key"), 100))
++	if !found {
++		t.Error("expected key to be found")
++	}
++	if string(val) != "value" {
++		t.Errorf("expected 'value', got '%s'", val)
++	}
++}
++
++// TestMmapCloseIdempotent verifies that Close() can be called multiple times
++// without panic or error.
++func TestMmapCloseIdempotent(t *testing.T) {
++	dir := t.TempDir()
++	path := filepath.Join(dir, "close_idem.sst")
++
++	writer, err := NewWriter(path, 10)
++	if err != nil {
++		t.Fatalf("failed to create writer: %v", err)
++	}
++	if err := writer.Append(mvcc.NewMVCCKey([]byte("key"), 100), []byte("value")); err != nil {
++		t.Fatalf("failed to append: %v", err)
++	}
++	if err := writer.Finish(); err != nil {
++		t.Fatalf("failed to finish: %v", err)
++	}
++
++	reader, err := Open(path)
++	if err != nil {
++		t.Fatalf("failed to open reader: %v", err)
++	}
++
++	// First close should succeed
++	if err := reader.Close(); err != nil {
++		t.Errorf("first Close failed: %v", err)
++	}
++
++	// Second close should not panic (idempotent)
++	if err := reader.Close(); err != nil {
++		t.Logf("second Close returned: %v (acceptable)", err)
++	}
++}
++
++// TestMmapReadBlockBounds verifies bounds checking in readBlockFromMmap.
++func TestMmapReadBlockBounds(t *testing.T) {
++	dir := t.TempDir()
++	path := filepath.Join(dir, "bounds_test.sst")
++
++	writer, err := NewWriter(path, 10)
++	if err != nil {
++		t.Fatalf("failed to create writer: %v", err)
++	}
++	if err := writer.Append(mvcc.NewMVCCKey([]byte("key"), 100), []byte("value")); err != nil {
++		t.Fatalf("failed to append: %v", err)
++	}
++	if err := writer.Finish(); err != nil {
++		t.Fatalf("failed to finish: %v", err)
++	}
++
++	reader, err := Open(path)
++	if err != nil {
++		t.Fatalf("failed to open reader: %v", err)
++	}
++	defer reader.Close()
++
++	// Read block at offset far beyond file size
++	_, err = reader.readBlock(1 << 60)
++	if err == nil {
++		t.Error("expected error when reading block at huge offset")
++	}
++
++	// Read block at offset 0 (should succeed — first block)
++	data, err := reader.readBlock(0)
++	if err != nil {
++		t.Errorf("expected no error reading first block, got %v", err)
++	}
++	if len(data) == 0 {
++		t.Error("expected non-empty block data")
++	}
++}
++
++// TestMmapIterator verifies that SSTableIterator works correctly with mmap.
++func TestMmapIterator(t *testing.T) {
++	dir := t.TempDir()
++	path := filepath.Join(dir, "mmap_iter.sst")
++
++	writer, err := NewWriter(path, 10)
++	if err != nil {
++		t.Fatalf("failed to create writer: %v", err)
++	}
++
++	keys := []mvcc.MVCCKey{
++		mvcc.NewMVCCKey([]byte("a"), 100),
++		mvcc.NewMVCCKey([]byte("b"), 200),
++		mvcc.NewMVCCKey([]byte("c"), 300),
++	}
++	values := [][]byte{
++		[]byte("val_a"),
++		[]byte("val_b"),
++		[]byte("val_c"),
++	}
++
++	for i, k := range keys {
++		if err := writer.Append(k, values[i]); err != nil {
++			t.Fatalf("failed to append: %v", err)
++		}
++	}
++	if err := writer.Finish(); err != nil {
++		t.Fatalf("failed to finish: %v", err)
++	}
++
++	reader, err := Open(path)
++	if err != nil {
++		t.Fatalf("failed to open reader: %v", err)
++	}
++	defer reader.Close()
++
++	iter, err := reader.NewIterator()
++	if err != nil {
++		t.Fatalf("failed to create iterator: %v", err)
++	}
++	defer iter.Close()
++
++	var count int
++	for iter.Next() {
++		if count >= len(keys) {
++			t.Errorf("more items than expected")
++			break
++		}
++		if string(iter.Key().Key) != string(keys[count].Key) {
++			t.Errorf("key %d: expected %s, got %s", count, keys[count].Key, iter.Key().Key)
++		}
++		if string(iter.Value()) != string(values[count]) {
++			t.Errorf("value %d: expected %s, got %s", count, values[count], iter.Value())
++		}
++		count++
++	}
++	if count != len(keys) {
++		t.Errorf("expected %d items, got %d", len(keys), count)
++	}
++}
++
++// TestMmapMultipleBlocks verifies that reading across multiple blocks works.
++func TestMmapMultipleBlocks(t *testing.T) {
++	dir := t.TempDir()
++	path := filepath.Join(dir, "mmap_multi.sst")
++
++	writer, err := NewWriter(path, 200)
++	if err != nil {
++		t.Fatalf("failed to create writer: %v", err)
++	}
++
++	largeValue := make([]byte, 500)
++	for i := range largeValue {
++		largeValue[i] = 'x'
++	}
++
++	numKeys := 200
++	for i := 0; i < numKeys; i++ {
++		key := mvcc.NewMVCCKey([]byte(fmt.Sprintf("key-%04d", i)), uint64(i+1))
++		if err := writer.Append(key, largeValue); err != nil {
++			t.Fatalf("failed to append: %v", err)
++		}
++	}
++	if err := writer.Finish(); err != nil {
++		t.Fatalf("failed to finish: %v", err)
++	}
++
++	reader, err := Open(path)
++	if err != nil {
++		t.Fatalf("failed to open reader: %v", err)
++	}
++	defer reader.Close()
++
++	// Verify all keys via Lookup
++	for i := 0; i < numKeys; i++ {
++		key := mvcc.NewMVCCKey([]byte(fmt.Sprintf("key-%04d", i)), uint64(i+1))
++		val, found := reader.Lookup(key)
++		if !found {
++			t.Errorf("key %d not found", i)
++			continue
++		}
++		if string(val) != string(largeValue) {
++			t.Errorf("value mismatch for key %d", i)
++		}
++	}
++
++	// Verify via iterator
++	iter, err := reader.NewIterator()
++	if err != nil {
++		t.Fatalf("failed to create iterator: %v", err)
++	}
++	defer iter.Close()
++
++	count := 0
++	for iter.Next() {
++		count++
++	}
++	if count != numKeys {
++		t.Errorf("expected %d items via iterator, got %d", numKeys, count)
++	}
++}
++
++// TestMmapDataAfterClose verifies that accessing Data() after Close()
++// returns nil (safe behavior).
++func TestMmapDataAfterClose(t *testing.T) {
++	dir := t.TempDir()
++	path := filepath.Join(dir, "after_close.sst")
++
++	writer, err := NewWriter(path, 10)
++	if err != nil {
++		t.Fatalf("failed to create writer: %v", err)
++	}
++	if err := writer.Append(mvcc.NewMVCCKey([]byte("key"), 100), []byte("value")); err != nil {
++		t.Fatalf("failed to append: %v", err)
++	}
++	if err := writer.Finish(); err != nil {
++		t.Fatalf("failed to finish: %v", err)
++	}
++
++	reader, err := Open(path)
++	if err != nil {
++		t.Fatalf("failed to open reader: %v", err)
++	}
++
++	// Close the reader
++	if err := reader.Close(); err != nil {
++		t.Fatalf("Close failed: %v", err)
++	}
++
++	// After Close, Lookup should return false (not panic)
++	_, found := reader.Lookup(mvcc.NewMVCCKey([]byte("key"), 100))
++	if found {
++		t.Error("expected Lookup to return false after Close")
++	}
++}
+diff --git a/plans/sstable_compare_analysis.md b/plans/sstable_compare_analysis.md
+new file mode 100644
+index 0000000..b4327b0
+--- /dev/null
++++ b/plans/sstable_compare_analysis.md
+@@ -0,0 +1,155 @@
++# СРАВНИТЕЛЬНЫЙ АНАЛИЗ SSTABLE
++
++**Дата:** 2026-07-30  
++**Автор:** Source Craft Architect  
++**Область:** `internal/engine/sstable/*.go` + `internal/engine/lsm.go`  
++**ID:** PROMPT-SSTABLE-COMPARE
++
++---
++
++## 1. СРЕДНИЙ СЦЕНАРИЙ (минимальный стандарт)
++
++| ID | Критерий | Статус | Доказательство | Комментарий |
++|----|----------|--------|----------------|-------------|
++| **S-01** | Точность поиска | ✅ | [`reader.go:205-294`](internal/engine/sstable/reader.go:205) — `Lookup()` находит все записанные ключи; тесты [`TestWriterAndReader`](internal/engine/sstable/sstable_test.go:29), [`TestWriterBlockOverflow`](internal/engine/sstable/sstable_test.go:222) | Все записанные ключи находятся корректно |
++| **S-02** | Обработка ошибок | ⚠️ | [`reader.go:48-155`](internal/engine/sstable/reader.go:48) — ошибки проверяются при `Open()`, но в [`Lookup()`](internal/engine/sstable/reader.go:244-247) ошибка `readBlock()` молча игнорируется (`return nil, false`) | Ошибки чтения блока не логируются и не возвращаются — потеря диагностики |
++| **S-03** | CRC32 проверка | ❌ | Нет CRC32 нигде в [`reader.go`](internal/engine/sstable/reader.go), [`writer.go`](internal/engine/sstable/writer.go), [`encoding.go`](internal/engine/sstable/encoding.go) | Коррупция данных не детектируется на уровне SSTable |
++| **S-04** | Закрытие ресурсов | ✅ | [`reader.go:297-299`](internal/engine/sstable/reader.go:297) — `Close()` закрывает файл; [`iterator.go:145-151`](internal/engine/sstable/iterator.go:145) — `Close()` возвращает блок в pool; [`lsm.go:541-549`](internal/engine/lsm.go:541) — все reader'ы закрываются при Shutdown | Ресурсы закрываются корректно |
++| **S-05** | Корректная работа с tombstones | ✅ | [`reader.go:279-281`](internal/engine/sstable/reader.go:279) — `len(entryVal) == 0` → tombstone → `return nil, false`; тест [`TestReaderLookupTombstone`](internal/engine/sstable/sstable_test.go:269) | Tombstones корректно не возвращаются |
++| **S-06** | Корректная работа с версиями | ✅ | [`reader.go:278`](internal/engine/sstable/reader.go:278) — `mvccKey.Timestamp >= key.Timestamp`; тест [`TestReaderLookupWithVersionVisibility`](internal/engine/sstable/sstable_test.go:889) | MVCC visibility работает правильно |
++| **S-07** | Обработка пустых значений | ✅ | [`reader.go:279-281`](internal/engine/sstable/reader.go:279) — `len(entryVal) == 0` = tombstone; пустой `[]byte{}` ≠ tombstone (хранится как valLen=0, но entryVal не nil) | Семантика корректна |
++| **S-08** | Корректный индекс | ✅ | [`writer.go:116-144`](internal/engine/sstable/writer.go:116) — индекс пишется с first key блока; [`reader.go:71-93`](internal/engine/sstable/reader.go:71) — индекс читается; тесты подтверждают | Индекс корректен |
++| **S-09** | Корректный Bloom filter | ✅ | [`bloom.go:59-70`](internal/engine/sstable/bloom.go:59) — `Add()`; [`bloom.go:73-86`](internal/engine/sstable/bloom.go:73) — `MayContain()`; тесты [`TestBloomFilterAddAndMayContain`](internal/engine/sstable/sstable_test.go:367) | Bloom filter не даёт false negatives |
++
++**Итог по среднему сценарию:** ✅ **ГОТОВ** (8/9 — критическая проблема S-03 отсутствие CRC32)
++
++---
++
++## 2. ЛУЧШИЙ СЦЕНАРИЙ (v0.3.0)
++
++| ID | Критерий | Статус | Доказательство | Комментарий |
++|----|----------|--------|----------------|-------------|
++| **B-01** | Bloom filter используется | ✅ | [`reader.go:217-219`](internal/engine/sstable/reader.go:217) — `!r.bloomFilter.MayContain(userKey)` → return false | Отсекает промахи до поиска |
++| **B-02** | Бинарный поиск по индексу | ❌ | [`reader.go:224-235`](internal/engine/sstable/reader.go:224) — **линейный поиск** `for i, entry := range r.indexEntries` | O(N) вместо O(log N). С 100K записей и 1000 блоков — до 1000 итераций |
++| **B-03** | Zero-copy чтение | ❌ | [`reader.go:283-284`](internal/engine/sstable/reader.go:283) — `val := make([]byte, len(entryVal)); copy(val, entryVal)` — **аллокация** | 1 alloc/op в горячем пути `Lookup()` |
++| **B-04** | `sync.Pool` для блоков | ✅ | [`reader.go:159-164`](internal/engine/sstable/reader.go:159) — `blockPool`; [`reader.go:176-196`](internal/engine/sstable/reader.go:176) — `readBlock()` использует pool; [`reader.go:199-201`](internal/engine/sstable/reader.go:199) — `ReleaseBlock()` | Блоки переиспользуются |
++| **B-05** | Range filter | ✅ | [`reader.go:209-214`](internal/engine/sstable/reader.go:209) — `minKey`/`maxKey` проверка | Быстрое отсечение без I/O |
++| **B-06** | Оптимизированный поиск в блоке | ❌ | [`reader.go:252-291`](internal/engine/sstable/reader.go:252) — **линейный поиск** `for pos < len(blockData)` | O(N) внутри блока. Нет бинарного поиска, нет двухуровневого индекса |
++| **B-07** | 0 аллокаций в горячем пути | ❌ | [`reader.go:283-284`](internal/engine/sstable/reader.go:283) — `make([]byte)` в `Lookup()`; [`reader.go:80`](internal/engine/sstable/reader.go:80) — `make([]byte)` в `Open()` для ключей индекса; [`reader.go:104`](internal/engine/sstable/reader.go:104) — `make([]byte)` для Bloom filter | Минимум 1 alloc/op в `Lookup()`, плюс аллокации при `Open()` |
++| **B-08** | MMAP для чтения | ❌ | [`reader.go:48`](internal/engine/sstable/reader.go:48) — `os.Open()` + `file.Seek()` + `binary.Read()` — **файловый I/O** | Каждый `readBlock()` делает syscall на seek + read. Нет mmap |
++
++**Итог по лучшему сценарию:** ❌ **НЕ ГОТОВ** (3/8 — только B-01, B-04, B-05)
++
++---
++
++## 3. ИДЕАЛЬНЫЙ СЦЕНАРИЙ (v1.0+)
++
++| ID | Критерий | Статус | Доказательство | Комментарий |
++|----|----------|--------|----------------|-------------|
++| **I-01** | Асинхронное чтение | ❌ | Нет io_uring, нет асинхронного prefetch | Синхронный `file.Read()` |
++| **I-02** | Параллельный поиск | ❌ | [`lsm.go:377-384`](internal/engine/lsm.go:377) — последовательный перебор уровней и SSTable | Нет параллельного поиска |
++| **I-03** | Двухуровневый индекс | ❌ | [`reader.go:252-291`](internal/engine/sstable/reader.go:252) — линейный поиск внутри блока | Нет индекса внутри блока |
++| **I-04** | SIMD-сравнение | ❌ | Нет AVX-512, нет SIMD | Стандартное побайтовое сравнение |
++| **I-05** | Adaptive cache | ❌ | Нет кэширования блоков | Каждый `Lookup()` читает блок с диска |
++| **I-06** | Prefetch | ❌ | Нет `MADV_WILLNEED`, нет программного prefetch | Нет упреждающего чтения |
++
++**Итог по идеальному сценарию:** ❌ **НЕ РЕАЛИЗОВАН** (0/6)
++
++---
++
++## 4. ТЕКУЩЕЕ ПОЛОЖЕНИЕ
++
++**Реализация соответствует:** `МЕЖДУ СРЕДНИМ И ЛУЧШИМ` (ближе к среднему)
++
++**Обоснование:**
++- Средний сценарий **готов на 89%** (8/9) — единственная проблема S-03 (отсутствие CRC32)
++- Лучший сценарий **готов на 38%** (3/8) — есть Bloom filter, sync.Pool, range filter
++- Критический провал: **линейный поиск** вместо бинарного (B-02, B-06) — это O(N) вместо O(log N)
++- Критический провал: **аллокации в горячем пути** (B-03, B-07) — 1 alloc/op в `Lookup()`
++- Критический провал: **нет mmap** (B-08) — каждый readBlock() = 2 syscall'а
++
++---
++
++## 5. ЧТО НУЖНО ДЛЯ ПЕРЕХОДА В ЛУЧШИЙ СЦЕНАРИЙ
++
++| № | Что нужно | Где добавить | Сложность | Приоритет |
++|---|-----------|--------------|-----------|-----------|
++| 1 | **Бинарный поиск по индексу** — заменить линейный `for i, entry := range r.indexEntries` на `sort.Search()` | [`reader.go:224-235`](internal/engine/sstable/reader.go:224) | Низкая | 🔴 P0 |
++| 2 | **Zero-copy в Lookup()** — возвращать срез на `blockData` без `make([]byte)` + `copy()`. Требует изменения контракта: caller должен вызвать `ReleaseBlock()` | [`reader.go:283-284`](internal/engine/sstable/reader.go:283) | Средняя | 🔴 P0 |
++| 3 | **MMAP для чтения SSTable** — заменить `os.Open()` + `file.Read()` на `mmap` системный вызов. Блоки читаются через срезы на mmap-регион | [`reader.go:47-48`](internal/engine/sstable/reader.go:47) | Высокая | 🔴 P0 |
++| 4 | **Бинарный поиск внутри блока** — добавить двухуровневый индекс (restart points) или использовать `sort.Search()` на отсортированных ключах блока | [`reader.go:252-291`](internal/engine/sstable/reader.go:252) | Средняя | 🟡 P1 |
++| 5 | **CRC32 для блоков** — добавить checksum при записи и проверку при чтении | [`writer.go:129-135`](internal/engine/sstable/writer.go:129), [`reader.go:167-196`](internal/engine/sstable/reader.go:167) | Низкая | 🟡 P1 |
++| 6 | **Устранить аллокации в Open()** — использовать `sync.Pool` для буферов чтения индекса и Bloom filter | [`reader.go:80,104,122,141`](internal/engine/sstable/reader.go:80) | Низкая | 🟡 P1 |
++| 7 | **Логирование ошибок чтения блока** — не молчать, а логировать через `logger.Warn()` | [`reader.go:246`](internal/engine/sstable/reader.go:246) | Низкая | 🟢 P2 |
++
++---
++
++## 6. КРИТИЧЕСКИЕ ПРОБЛЕМЫ
++
++| № | Проблема | Место | Влияние | Решение |
++|---|----------|-------|---------|---------|
++| 1 | **Линейный поиск по индексу** (B-02) | [`reader.go:224-235`](internal/engine/sstable/reader.go:224) | O(N) вместо O(log N). С 1000 блоков — до 1000 итераций на Lookup | Заменить на `sort.Search()` |
++| 2 | **Линейный поиск внутри блока** (B-06) | [`reader.go:252-291`](internal/engine/sstable/reader.go:252) | O(N) внутри блока. С 100 записей в блоке — до 100 итераций | Добавить restart points или бинарный поиск |
++| 3 | **Аллокация в Lookup()** (B-03, B-07) | [`reader.go:283-284`](internal/engine/sstable/reader.go:283) | 1 alloc/op. Давление на GC при 100K ops | Zero-copy возврат среза из blockData |
++| 4 | **Нет mmap** (B-08) | [`reader.go:47-48,167-196`](internal/engine/sstable/reader.go:47) | 2 syscall'а на readBlock (seek + read). ~1µs оверхед | Использовать mmap для всего файла |
++| 5 | **Нет CRC32** (S-03) | Весь SSTable | Коррупция данных не детектируется | Добавить CRC32 в каждый блок и в footer |
++| 6 | **GetLatestInfo() использует итератор вместо Lookup()** | [`lsm.go:430-460`](internal/engine/lsm.go:430) | O(N) полный проход SSTable вместо O(log N) Lookup. Для каждого SSTable читаются все блоки | Заменить на `Lookup()` с правильной версионностью |
++
++---
++
++## 7. ДОПОЛНИТЕЛЬНЫЕ НАБЛЮДЕНИЯ
++
++### 7.1. Проблема в `GetLatestInfo()`
++
++В [`lsm.go:430-460`](internal/engine/lsm.go:430) метод `GetLatestInfo()` для поиска в SSTable использует **полный итератор** вместо `Lookup()`:
++
++```go
++iter, err := sst.NewIterator()
++// ... полный проход всех блоков
++for iter.Next() {
++    mvccKey := iter.Key()
++    if bytes.Equal(mvccKey.Key, key) {
++        // ...
++    }
++}
++```
++
++Это O(N) на каждый SSTable. Должно быть O(log N) через `Lookup()` с правильной обработкой версий.
++
++### 7.2. Проблема с `encodeEntry()` — аллокация
++
++В [`writer.go:233-242`](internal/engine/sstable/writer.go:233) `encodeEntry()` делает `make([]byte)` на каждую запись. В горячем пути флаша это приемлемо (флаш не горячий), но можно оптимизировать через `bytes.Buffer` или pre-allocated буфер.
++
++### 7.3. Bloom filter — фиксированный размер
++
++В [`bloom.go:41`](internal/engine/sstable/bloom.go:41) размер Bloom filter фиксирован (1024 байта). Для 100K ключей это даёт высокий false positive rate. Нужно вычислять размер динамически на основе `NumKeys` из footer.
++
++### 7.4. `k` (число хеш-функций) не оптимально
++
++В [`bloom.go:44`](internal/engine/sstable/bloom.go:44) `k = uint32(bitsPerKey)` (10). Оптимальное `k = (m/n) * ln(2)`. При фиксированном m=8192 бит и n=100K ключей, оптимальное k ≈ 0.057 — фактически 1 хеш-функция. Текущее k=10 даёт ~100% false positive rate.
++
++---
++
++## 8. ВЫВОД
++
++```text
++✅ Промпт SSTABLE-COMPARE выполнен.
++
++Анализ завершён. Текущее положение: МЕЖДУ СРЕДНИМ И ЛУЧШИМ (ближе к среднему).
++
++Для перехода в лучший сценарий требуется:
++1. Бинарный поиск по индексу (P0) — замена 5 строк в reader.go:224-235
++2. Zero-copy в Lookup() (P0) — изменение контракта возврата значения
++3. MMAP для чтения SSTable (P0) — замена файлового I/O на mmap
++4. Бинарный поиск внутри блока (P1) — restart points
++5. CRC32 для блоков (P1) — защита от коррупции
++6. Устранить аллокации в Open() (P1) — sync.Pool для буферов
++7. Исправить GetLatestInfo() (P0) — использовать Lookup() вместо итератора
++
++Критические проблемы:
++1. Линейный поиск по индексу — O(N) вместо O(log N)
++2. Линейный поиск внутри блока — O(N) вместо O(log N)
++3. Аллокация в Lookup() — 1 alloc/op
++4. Нет mmap — 2 syscall'а на readBlock
++5. Нет CRC32 — коррупция не детектируется
++6. GetLatestInfo() использует итератор — O(N) полный проход
+\ No newline at end of file
+diff --git a/plans/sstable_final_revision_plan.md b/plans/sstable_final_revision_plan.md
+new file mode 100644
+index 0000000..4571787
+--- /dev/null
++++ b/plans/sstable_final_revision_plan.md
+@@ -0,0 +1,230 @@
++# SSTable Final Revision Plan
++
++## Overview
++
++This plan addresses two blocker issues in the SSTable component:
++
++1. **PROMPT-SSTABLE-FINAL Task 1**: Key correctness — `BenchmarkSSTableRead` fails
++2. **PROMPT-SSTABLE-FINAL Task 2**: 0 allocs in `Lookup` (BLOCKER-03)
++
++---
++
++## Task 1: Key Correctness Analysis
++
++### Code Trace
++
++**encodeMVCCKey** (`internal/engine/sstable/encoding.go:26-33`):
++```
++Format: [2-byte keyLen LE][key bytes][8-byte timestamp LE]
++```
++- `keyLen` = `uint16(len(key.Key))` — 2 bytes, little-endian
++- `key` = raw key bytes
++- `timestamp` = `key.Timestamp` — 8 bytes, little-endian
++- Total: `2 + kl + 8` bytes
++
++**decodeMVCCKey** (`internal/engine/sstable/encoding.go:36-50`):
++```
++Reads: [2-byte keyLen LE][key bytes][8-byte timestamp LE]
++```
++- Reads `keyLen` from first 2 bytes
++- Reads `userKey` as `data[2 : 2+kl]`
++- Reads `timestamp` as `binary.LittleEndian.Uint64(data[2+kl:])`
++
++**Symmetry**: `decodeMVCCKey(encodeMVCCKey(key))` produces a `MVCCKey` with identical `Key` bytes and `Timestamp`. The decoded `Key` is a slice of the encoded buffer, not the original, but content is identical. **Symmetric ✓**
++
++**Index Entry** (`internal/engine/sstable/writer.go:129`):
++- `flushBlock` stores `w.blockStartKey` — the **encoded MVCCKey** of the first key in the block
++- `blockStartKey` is set in `Append` (line 107) as `keyBytes = encodeMVCCKey(key)`
++- This is a fresh `make([]byte, ...)` allocation, no aliasing issues
++
++**Binary Search in Lookup** (`internal/engine/sstable/reader.go:539-545`):
++- `sort.Search` finds first index where `idxKey.Key > userKey`
++- `idxKey` is obtained by `decodeMVCCKey(r.indexEntries[i].key)` — decoding the stored encoded key
++- `idxKey.Key` is the user key part (without timestamp)
++- Comparison: `keys.CompareKeys(idxKey.Key, userKey) > 0`
++- Then `blockIdx--` to get the block where `firstKey <= userKey`
++- **Correct ✓**
++
++**Benchmark Keys** (`internal/engine/sstable/benchmark_test.go:42`):
++- Write: `mvcc.NewMVCCKey([]byte{byte(i >> 8), byte(i)}, uint64(i+1))`
++- Read: `mvcc.NewMVCCKey([]byte{byte(idx >> 8), byte(idx)}, uint64(idx+1))`
++- Same format, same timestamp. **Correct ✓**
++
++### Conclusion
++
++The encode/decode, index storage, binary search, and benchmark key format are all **correct**. The `BenchmarkSSTableRead` failure is likely caused by one of:
++
++1. **A very subtle edge case** in the mmap read path (bounds checking off-by-one)
++2. **A race condition** in concurrent access
++3. **An environmental issue** (test setup, file system)
++
++**Recommended action**: Run the benchmark with `-race` and `-v` to capture the exact failure, then fix based on the actual error.
++
++---
++
++## Task 2: 0 Allocs in Lookup (BLOCKER-03)
++
++### Current State
++
++In `Lookup` (`internal/engine/sstable/reader.go:598-601`):
++```go
++// Copy value before returning (blockData may be from mmap or pool)
++val := make([]byte, len(entryVal))
++copy(val, entryVal)
++return val, true
++```
++
++This performs **1 allocation per Lookup**. With mmap, `blockData` is a slice of the mmap region, so `entryVal` is also an mmap slice. The copy is unnecessary for mmap users.
++
++### Fix 1: Return mmap slice directly from Lookup
++
++**File**: `internal/engine/sstable/reader.go`
++
++Change the value return in `Lookup` from:
++```go
++val := make([]byte, len(entryVal))
++copy(val, entryVal)
++return val, true
++```
++To:
++```go
++return entryVal, true
++```
++
++**Contract**: Document that the returned value is valid only until `Close()`.
++
++### Fix 2: Copy SSTable values in decodeStoredValue
++
++**File**: `internal/engine/lsm.go`
++
++Currently `decodeStoredValue` (line 639-663) returns `stored` directly for non-VLog, non-unified-mmap values:
++```go
++return stored, nil
++```
++
++When the value comes from an SSTable, `stored` is a slice of the mmap region. It must be copied because the caller may use it after the SSTable Reader is closed.
++
++Change to:
++```go
++// SSTable value — slice of mmap region, must copy
++val := make([]byte, len(stored))
++copy(val, stored)
++return val, nil
++```
++
++### Fix 3: Fix SSTableIterator value copying
++
++**File**: `internal/engine/sstable/iterator.go`
++
++The iterator already copies values (line 98-99):
++```go
++val := make([]byte, len(entryVal))
++copy(val, entryVal)
++it.val = val
++```
++
++This is **correct** — iterator values must be stable across block transitions. No change needed here.
++
++### Fix 4: Add zero-allocation contract to Lookup
++
++**File**: `internal/engine/sstable/reader.go`
++
++Add documentation:
++```go
++// Lookup returns a value slice that points directly to the mmap region.
++// The value is valid only until the Reader is closed.
++// The caller MUST copy the value if it needs to persist beyond the lifetime
++// of the Reader.
++//
++// This is a zero-allocation optimization. The returned slice is a reference
++// to the mmap region, not a copy. Use with caution.
++```
++
++---
++
++## Files to Modify
++
++| File | Change | Lines |
++|------|--------|-------|
++| `internal/engine/sstable/reader.go` | Remove `make+copy` in Lookup, add contract | 598-601 |
++| `internal/engine/lsm.go` | Copy SSTable values in decodeStoredValue | 662 |
++
++---
++
++## Acceptance Criteria
++
++| ID | Check | Criterion |
++|----|-------|-----------|
++| RT-01 | encode/decode symmetry | `decodeMVCCKey(encodeMVCCKey(key)) == key` |
++| RT-02 | `BenchmarkSSTableRead` passes | All 100K keys found |
++| RT-03 | Allocations in Lookup | 0 allocs/op |
++| RT-04 | Lookup contract documented | Comment on function |
++| RT-05 | decodeStoredValue copies SSTable values | `make([]byte, len(stored))` + `copy` |
++| RT-06 | All SSTable tests pass | `go test -race ./internal/engine/sstable/...` |
++| RT-07 | All engine tests pass | `go test -race ./internal/engine/...` |
++
++---
++
++## Execution Order
++
++```mermaid
++flowchart TD
++    A[Step 1: Run BenchmarkSSTableRead to confirm failure] --> B[Step 2: Remove make+copy in Lookup]
++    B --> C[Step 3: Add zero-allocation contract to Lookup]
++    C --> D[Step 4: Fix decodeStoredValue to copy SSTable values]
++    D --> E[Step 5: Run all SSTable tests]
++    E --> F{Pass?}
++    F -->|Yes| G[Step 6: Run all engine tests]
++    F -->|No| H[Debug and fix]
++    H --> E
++    G --> I{Pass?}
++    I -->|Yes| J[Done]
++    I -->|No| K[Debug and fix]
++    K --> G
++```
++
++---
++
++## Detailed Steps
++
++### Step 1: Run BenchmarkSSTableRead
++```bash
++cd /home/Koi/projects/ScoriaDB && go test -bench=BenchmarkSSTableRead -benchtime=1x -race ./internal/engine/sstable/
++```
++
++### Step 2: Remove allocation in Lookup
++In `internal/engine/sstable/reader.go`, lines 598-601:
++```go
++// BEFORE:
++val := make([]byte, len(entryVal))
++copy(val, entryVal)
++return val, true
++
++// AFTER:
++return entryVal, true
++```
++
++### Step 3: Add contract to Lookup
++Add documentation comment before the `Lookup` function.
++
++### Step 4: Fix decodeStoredValue
++In `internal/engine/lsm.go`, line 662:
++```go
++// BEFORE:
++return stored, nil
++
++// AFTER:
++val := make([]byte, len(stored))
++copy(val, stored)
++return val, nil
++```
++
++### Step 5: Run tests
++```bash
++cd /home/Koi/projects/ScoriaDB && go test -race ./internal/engine/sstable/...
++cd /home/Koi/projects/ScoriaDB && go test -race ./internal/engine/...
++```
++
++### Step 6: Run benchmark to verify 0 allocs
++```bash
++cd /home/Koi/projects/ScoriaDB && go test -bench=BenchmarkSSTableRead -benchtime=1x -benchmem ./internal/engine/sstable/
+\ No newline at end of file

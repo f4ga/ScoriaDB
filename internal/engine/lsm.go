@@ -16,8 +16,10 @@ package engine
 
 import (
 	"bytes"
+	"container/list"
 	"fmt"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -62,6 +64,11 @@ type LSMEngine struct {
 	lastCommitCache  map[string]uint64
 	cacheMu          sync.RWMutex
 
+	// lastCommitCacheMap and lastCommitCacheLRU implement a bounded LRU cache
+	// for the last-commit-timestamp lookup. See: DEF-D3.
+	lastCommitCacheMap map[string]*list.Element
+	lastCommitCacheLRU *list.List
+
 	// Background tasks
 	flushCh     chan struct{}
 	compactCh   chan struct{}
@@ -96,6 +103,9 @@ func NewLSMEngine(dataDir string, opts ...WALOptions) (*LSMEngine, error) {
 		walOpts = opts[0]
 	}
 	shardCount := DefaultShardCount()
+	if shardCount < 1 {
+		shardCount = 1
+	}
 
 	// Open unified mmap ring buffer (hot write path)
 	unifiedPath := filepath.Join(dataDir, "data.mmap")
@@ -156,16 +166,18 @@ func NewLSMEngine(dataDir string, opts ...WALOptions) (*LSMEngine, error) {
 	}
 
 	engine := &LSMEngine{
-		dataDir:          dataDir,
-		shards:           make([]*Shard, shardCount),
-		vlog:             vlog,
-		unifiedMmap:      unifiedMmap,
-		manifest:         manifest,
-		vfs:              vfs,
-		levels:           levels,
-		LastTS:           lastTS,
-		lastCommitCache:  make(map[string]uint64),
-		snapshotRegistry: newSnapshotRegistry(),
+		dataDir:            dataDir,
+		shards:             make([]*Shard, shardCount),
+		vlog:               vlog,
+		unifiedMmap:        unifiedMmap,
+		manifest:           manifest,
+		vfs:                vfs,
+		levels:             levels,
+		LastTS:             lastTS,
+		lastCommitCache:    make(map[string]uint64),
+		lastCommitCacheMap: make(map[string]*list.Element),
+		lastCommitCacheLRU: list.New(),
+		snapshotRegistry:   newSnapshotRegistry(),
 	}
 
 	// Create one shard per core. Each shard owns an independent MemTable (and
@@ -173,7 +185,12 @@ func NewLSMEngine(dataDir string, opts ...WALOptions) (*LSMEngine, error) {
 	// own mutex and group-commit writer), enabling concurrent writes to scale
 	// across cores. See: HOT-01
 	for i := range engine.shards {
-		engine.shards[i] = NewShard(i)
+		shard, err := NewShard(i, dataDir, walOpts)
+		if err != nil {
+			errors.CloseWithLog(engine, "engine")
+			return nil, fmt.Errorf("shard %d: %w", i, err)
+		}
+		engine.shards[i] = shard
 		engine.shards[i].wal = shardWALs[i]
 	}
 	// Backward-compatible handle: e.wal points to shard 0's WAL. Kept for
@@ -189,7 +206,7 @@ func NewLSMEngine(dataDir string, opts ...WALOptions) (*LSMEngine, error) {
 	// timestamps continue to be strictly monotonic and unique after restart.
 	var walMaxTS uint64
 	for _, shard := range engine.shards {
-		maxTS, err := recoverFromWAL(shard.wal, shard.memTable, engine.vlog)
+		maxTS, err := recoverFromWAL(shard.wal, shard.memTable, engine.vlog, shard.id, engine.shardIndex)
 		if err != nil {
 			errors.CloseWithLog(engine, "engine")
 			return nil, fmt.Errorf("failed to recover from wal for shard %d: %w", shard.id, err)
@@ -206,6 +223,46 @@ func NewLSMEngine(dataDir string, opts ...WALOptions) (*LSMEngine, error) {
 	engine.startBackgroundTasks()
 
 	return engine, nil
+}
+
+// shardIndex returns the shard responsible for key (O(1) hash).
+func (e *LSMEngine) shardIndex(key []byte) int {
+	if len(e.shards) == 0 {
+		return 0
+	}
+	return int(hashKey(key) % uint64(len(e.shards)))
+}
+
+// shard returns the shard responsible for key.
+func (e *LSMEngine) shard(key []byte) *Shard {
+	return e.shards[e.shardIndex(key)]
+}
+
+// DefaultShardCount returns the number of shards to create: one per CPU core,
+// capped at 16 to bound resource usage on very large machines. See: HOT-01.
+func DefaultShardCount() int {
+	n := runtime.GOMAXPROCS(0)
+	if n > 16 {
+		return 16
+	}
+	if n < 1 {
+		return 1
+	}
+	return n
+}
+
+// hashKey is a fast, allocation-free hash used to route a key to a shard.
+func hashKey(key []byte) uint64 {
+	const (
+		offset64 = 1469598103934665603
+		prime64  = 1099511628211
+	)
+	h := uint64(offset64)
+	for _, b := range key {
+		h ^= uint64(b)
+		h *= prime64
+	}
+	return h
 }
 
 // startBackgroundTasks starts background flush and compaction workers.
@@ -561,8 +618,23 @@ func (e *LSMEngine) GetLatestInfo(key []byte) ([]byte, uint64, bool, error) {
 	levels := make([][]*sstable.Reader, len(e.levels))
 	for i, level := range e.levels {
 		levels[i] = append([]*sstable.Reader(nil), level...)
+		for _, sst := range levels[i] {
+			sst.Acquire()
+		}
 	}
 	e.mu.RUnlock()
+
+	// Release the reader references acquired above. A concurrent compaction
+	// (compactLevel0) may Close() and munmap these readers; Acquire/Release
+	// guarantees the mmap region stays valid for the whole scan. See: LSM-02,
+	// Глава XIV.
+	defer func() {
+		for _, level := range levels {
+			for _, sst := range level {
+				sst.Release()
+			}
+		}
+	}()
 
 	// A key may live in any shard's active or frozen MemTable, so we scan all.
 	for _, mt := range mtList {

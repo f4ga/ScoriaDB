@@ -1,0 +1,265 @@
+unexpected fault address 0x7f3ee03065a8
+fatal error: fault
+[signal SIGSEGV: segmentation violation code=0x1 addr=0x7f3ee03065a8 pc=0x439586]
+
+goroutine 34 gp=0xc0043d25a0 m=10 mp=0xc000101808 [running]:
+runtime.throw({0x72ff36?, 0x15b60?})
+	/usr/lib/go/src/runtime/panic.go:1229 +0x48 fp=0xc0001e9770 sp=0xc0001e9740 pc=0x4c15c8
+runtime.sigpanic()
+	/usr/lib/go/src/runtime/signal_unix.go:945 +0x285 fp=0xc0001e97d0 sp=0xc0001e9770 pc=0x4c3465
+cmpbody()
+	/usr/lib/go/src/internal/bytealg/compare_amd64.s:124 +0xe6 fp=0xc0001e97d8 sp=0xc0001e97d0 pc=0x439586
+bytes.Compare(...)
+	/usr/lib/go/src/bytes/bytes.go:29
+github.com/f4ga/ScoriaDB/internal/engine.(*LSMEngine).compactLevel0.func1(0x4e2, 0x1c3)
+	/home/Koi/projects/ScoriaDB/internal/engine/compaction.go:85 +0x10b fp=0xc0001e9858 sp=0xc0001e97d8 pc=0x6588eb
+sort.partition_func({0xc0001e9ef0?, 0xc020428630?}, 0x1c3, 0x138a, 0x634)
+	/usr/lib/go/src/sort/zsortfunc.go:154 +0x16e fp=0xc0001e9898 sp=0xc0001e9858 pc=0x59558e
+sort.pdqsort_func({0xc0001e9ef0?, 0xc020428630?}, 0x0, 0x2710, 0xe)
+	/usr/lib/go/src/sort/zsortfunc.go:114 +0x27d fp=0xc0001e9940 sp=0xc0001e9898 pc=0x5952bd
+sort.Slice({0x6ead80, 0xc0001a0360}, 0xc0001e9ef0)
+	/usr/lib/go/src/sort/slice.go:29 +0xab fp=0xc0001e9998 sp=0xc0001e9940 pc=0x594bab
+github.com/f4ga/ScoriaDB/internal/engine.(*LSMEngine).compactLevel0(0xc0001f04b0)
+	/home/Koi/projects/ScoriaDB/internal/engine/compaction.go:83 +0x7d6 fp=0xc0001e9f20 sp=0xc0001e9998 pc=0x6562f6
+github.com/f4ga/ScoriaDB/internal/engine.(*LSMEngine).maybeCompact.func1()
+	/home/Koi/projects/ScoriaDB/internal/engine/compaction.go:285 +0x56 fp=0xc0001e9fe0 sp=0xc0001e9f20 pc=0x658b76
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0xc0001e9fe8 sp=0xc0001e9fe0 pc=0x4c8ae1
+created by github.com/f4ga/ScoriaDB/internal/engine.(*LSMEngine).maybeCompact in goroutine 20
+	/home/Koi/projects/ScoriaDB/internal/engine/compaction.go:279 +0x11a
+
+goroutine 1 gp=0xc0000081e0 m=nil [chan receive]:
+runtime.gopark(0x18?, 0x92dca0?, 0xf0?, 0x0?, 0xc0001ed6c8?)
+	/usr/lib/go/src/runtime/proc.go:462 +0xce fp=0xc0001ed660 sp=0xc0001ed640 pc=0x4c170e
+runtime.chanrecv(0xc0001c8200, 0xc0001ed746, 0x1)
+	/usr/lib/go/src/runtime/chan.go:667 +0x44f fp=0xc0001ed6d8 sp=0xc0001ed660 pc=0x4511ef
+runtime.chanrecv1(0x6fe860?, 0x6ed6c0?)
+	/usr/lib/go/src/runtime/chan.go:509 +0x12 fp=0xc0001ed700 sp=0xc0001ed6d8 pc=0x450d92
+testing.(*T).Run(0xc0001e6008, {0x736bf4, 0x19}, 0x744998)
+	/usr/lib/go/src/testing/testing.go:2109 +0xb3e fp=0xc0001ed850 sp=0xc0001ed700 pc=0x58aede
+testing.runTests.func1(0xc0001e6008)
+	/usr/lib/go/src/testing/testing.go:2585 +0x85 fp=0xc0001ed8a0 sp=0xc0001ed850 pc=0x58f3a5
+testing.tRunner(0xc0001e6008, 0xc0001eda90)
+	/usr/lib/go/src/testing/testing.go:2036 +0x21d fp=0xc0001ed970 sp=0xc0001ed8a0 pc=0x58917d
+testing.runTests({0x73657c, 0x18}, {0x73e665, 0x28}, 0xc0001a0090, {0x929260, 0x71, 0x71}, {0xc29576ff9f796587, 0x8bb2cef6d1, ...})
+	/usr/lib/go/src/testing/testing.go:2583 +0x9ea fp=0xc0001edac0 sp=0xc0001ed970 pc=0x58f1ca
+testing.(*M).Run(0xc00019e140)
+	/usr/lib/go/src/testing/testing.go:2443 +0xf4c fp=0xc0001ede40 sp=0xc0001edac0 pc=0x58c74c
+github.com/f4ga/ScoriaDB/internal/engine.TestMain(0xc00019e140)
+	/home/Koi/projects/ScoriaDB/internal/engine/main_test.go:28 +0x39 fp=0xc0001ede60 sp=0xc0001ede40 pc=0x6a4099
+main.main()
+	_testmain.go:340 +0x172 fp=0xc0001edf48 sp=0xc0001ede60 pc=0x6be212
+runtime.main()
+	/usr/lib/go/src/runtime/proc.go:290 +0x2d5 fp=0xc0001edfe0 sp=0xc0001edf48 pc=0x489f15
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0xc0001edfe8 sp=0xc0001edfe0 pc=0x4c8ae1
+
+goroutine 2 gp=0xc000008d20 m=nil [force gc (idle)]:
+runtime.gopark(0x902920?, 0x92dca0?, 0x0?, 0x0?, 0x0?)
+	/usr/lib/go/src/runtime/proc.go:462 +0xce fp=0xc0000627a8 sp=0xc000062788 pc=0x4c170e
+runtime.goparkunlock(...)
+	/usr/lib/go/src/runtime/proc.go:468
+runtime.forcegchelper()
+	/usr/lib/go/src/runtime/proc.go:375 +0xb3 fp=0xc0000627e0 sp=0xc0000627a8 pc=0x48a233
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0xc0000627e8 sp=0xc0000627e0 pc=0x4c8ae1
+created by runtime.init.7 in goroutine 1
+	/usr/lib/go/src/runtime/proc.go:363 +0x1a
+
+goroutine 3 gp=0xc0000092c0 m=nil [GC sweep wait]:
+runtime.gopark(0x1?, 0x0?, 0x0?, 0x0?, 0x0?)
+	/usr/lib/go/src/runtime/proc.go:462 +0xce fp=0xc000070f88 sp=0xc000070f68 pc=0x4c170e
+runtime.goparkunlock(...)
+	/usr/lib/go/src/runtime/proc.go:468
+runtime.bgsweep(0xc00002e080)
+	/usr/lib/go/src/runtime/mgcsweep.go:324 +0x151 fp=0xc000070fc8 sp=0xc000070f88 pc=0x472451
+runtime.gcenable.gowrap1()
+	/usr/lib/go/src/runtime/mgc.go:214 +0x17 fp=0xc000070fe0 sp=0xc000070fc8 pc=0x463717
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0xc000070fe8 sp=0xc000070fe0 pc=0x4c8ae1
+created by runtime.gcenable in goroutine 1
+	/usr/lib/go/src/runtime/mgc.go:214 +0x66
+
+goroutine 4 gp=0xc0000094a0 m=nil [GC scavenge wait]:
+runtime.gopark(0x10000?, 0x7456f0?, 0x0?, 0x0?, 0x0?)
+	/usr/lib/go/src/runtime/proc.go:462 +0xce fp=0xc000076f78 sp=0xc000076f58 pc=0x4c170e
+runtime.goparkunlock(...)
+	/usr/lib/go/src/runtime/proc.go:468
+runtime.(*scavengerState).park(0x92c980)
+	/usr/lib/go/src/runtime/mgcscavenge.go:425 +0x49 fp=0xc000076fa8 sp=0xc000076f78 pc=0x46fec9
+runtime.bgscavenge(0xc00002e080)
+	/usr/lib/go/src/runtime/mgcscavenge.go:658 +0x59 fp=0xc000076fc8 sp=0xc000076fa8 pc=0x470459
+runtime.gcenable.gowrap2()
+	/usr/lib/go/src/runtime/mgc.go:215 +0x17 fp=0xc000076fe0 sp=0xc000076fc8 pc=0x4636d7
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0xc000076fe8 sp=0xc000076fe0 pc=0x4c8ae1
+created by runtime.gcenable in goroutine 1
+	/usr/lib/go/src/runtime/mgc.go:215 +0xa5
+
+goroutine 18 gp=0xc0001843c0 m=nil [GOMAXPROCS updater (idle)]:
+runtime.gopark(0x0?, 0x0?, 0x0?, 0x0?, 0x0?)
+	/usr/lib/go/src/runtime/proc.go:462 +0xce fp=0xc00005e788 sp=0xc00005e768 pc=0x4c170e
+runtime.goparkunlock(...)
+	/usr/lib/go/src/runtime/proc.go:468
+runtime.updateMaxProcsGoroutine()
+	/usr/lib/go/src/runtime/proc.go:7095 +0xe7 fp=0xc00005e7e0 sp=0xc00005e788 pc=0x498a27
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0xc00005e7e8 sp=0xc00005e7e0 pc=0x4c8ae1
+created by runtime.defaultGOMAXPROCSUpdateEnable in goroutine 1
+	/usr/lib/go/src/runtime/proc.go:7083 +0x37
+
+goroutine 19 gp=0xc000184960 m=nil [finalizer wait]:
+runtime.gopark(0x0?, 0x0?, 0x0?, 0x0?, 0x0?)
+	/usr/lib/go/src/runtime/proc.go:462 +0xce fp=0xc000204e20 sp=0xc000204e00 pc=0x4c170e
+runtime.runFinalizers()
+	/usr/lib/go/src/runtime/mfinal.go:210 +0x13b fp=0xc000204fe0 sp=0xc000204e20 pc=0x46267b
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0xc000204fe8 sp=0xc000204fe0 pc=0x4c8ae1
+created by runtime.createfing in goroutine 1
+	/usr/lib/go/src/runtime/mfinal.go:172 +0x3d
+
+goroutine 20 gp=0xc000184b40 m=nil [runnable]:
+runtime.deferreturn()
+	/usr/lib/go/src/runtime/panic.go:658 +0x77 fp=0xc000039968 sp=0xc000039960 pc=0x4857f7
+github.com/f4ga/ScoriaDB/internal/engine/sstable.(*mmapFile).Close(0xc00011c020)
+	/home/Koi/projects/ScoriaDB/internal/engine/sstable/mmap_linux.go:148 +0x231 fp=0xc000039a30 sp=0xc000039968 pc=0x640531
+github.com/f4ga/ScoriaDB/internal/engine/sstable.(*Reader).Close(0xc0405060d0)
+	/home/Koi/projects/ScoriaDB/internal/engine/sstable/reader.go:638 +0x7f fp=0xc000039a68 sp=0xc000039a30 pc=0x64903f
+github.com/f4ga/ScoriaDB/internal/engine.(*LSMEngine).Close(0xc0001f04b0)
+	/home/Koi/projects/ScoriaDB/internal/engine/lsm.go:691 +0x385 fp=0xc000039bc0 sp=0xc000039a68 pc=0x666285
+github.com/f4ga/ScoriaDB/internal/engine.TestCrashDuringCompaction(0xc0001e6248)
+	/home/Koi/projects/ScoriaDB/internal/engine/crash_test.go:89 +0x805 fp=0xc000039ee0 sp=0xc000039bc0 pc=0x688845
+testing.tRunner(0xc0001e6248, 0x744998)
+	/usr/lib/go/src/testing/testing.go:2036 +0x21d fp=0xc000039fb0 sp=0xc000039ee0 pc=0x58917d
+testing.(*T).Run.gowrap1()
+	/usr/lib/go/src/testing/testing.go:2101 +0x39 fp=0xc000039fe0 sp=0xc000039fb0 pc=0x58b179
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0xc000039fe8 sp=0xc000039fe0 pc=0x4c8ae1
+created by testing.(*T).Run in goroutine 1
+	/usr/lib/go/src/testing/testing.go:2101 +0xb13
+
+goroutine 21 gp=0xc000184d20 m=nil [select]:
+runtime.gopark(0xc000205f60?, 0x3?, 0xb8?, 0x5d?, 0xc000205f22?)
+	/usr/lib/go/src/runtime/proc.go:462 +0xce fp=0xc000205d88 sp=0xc000205d68 pc=0x4c170e
+runtime.selectgo(0xc000205f60, 0xc000205f1c, 0xc000205f38?, 0x0, 0x3?, 0x1)
+	/usr/lib/go/src/runtime/select.go:351 +0xbb7 fp=0xc000205ee8 sp=0xc000205d88 pc=0x49e877
+github.com/f4ga/ScoriaDB/internal/engine.(*groupCommitWriter).flushLoop(0xc0001fc000)
+	/home/Koi/projects/ScoriaDB/internal/engine/wal_group.go:153 +0x13d fp=0xc000205fc0 sp=0xc000205ee8 pc=0x67ae7d
+github.com/f4ga/ScoriaDB/internal/engine.newGroupCommitWriter.gowrap1()
+	/home/Koi/projects/ScoriaDB/internal/engine/wal_group.go:86 +0x2f fp=0xc000205fe0 sp=0xc000205fc0 pc=0x67a76f
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0xc000205fe8 sp=0xc000205fe0 pc=0x4c8ae1
+created by github.com/f4ga/ScoriaDB/internal/engine.newGroupCommitWriter in goroutine 20
+	/home/Koi/projects/ScoriaDB/internal/engine/wal_group.go:86 +0x31d
+
+goroutine 22 gp=0xc000184f00 m=nil [select]:
+runtime.gopark(0xc000071f80?, 0x2?, 0xd4?, 0x57?, 0xc000071eec?)
+	/usr/lib/go/src/runtime/proc.go:462 +0xce fp=0xc000071d48 sp=0xc000071d28 pc=0x4c170e
+runtime.selectgo(0xc000071f80, 0xc000071ee8, 0xc000071f30?, 0x0, 0x2?, 0x1)
+	/usr/lib/go/src/runtime/select.go:351 +0xbb7 fp=0xc000071ea8 sp=0xc000071d48 pc=0x49e877
+github.com/f4ga/ScoriaDB/internal/engine.(*groupCommitWriter).syncLoop(0xc0001fc000)
+	/home/Koi/projects/ScoriaDB/internal/engine/wal_group.go:180 +0x16c fp=0xc000071fc0 sp=0xc000071ea8 pc=0x67b14c
+github.com/f4ga/ScoriaDB/internal/engine.newGroupCommitWriter.gowrap2()
+	/home/Koi/projects/ScoriaDB/internal/engine/wal_group.go:89 +0x2f fp=0xc000071fe0 sp=0xc000071fc0 pc=0x67a70f
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0xc000071fe8 sp=0xc000071fe0 pc=0x4c8ae1
+created by github.com/f4ga/ScoriaDB/internal/engine.newGroupCommitWriter in goroutine 20
+	/home/Koi/projects/ScoriaDB/internal/engine/wal_group.go:89 +0x39f
+
+goroutine 23 gp=0xc0001850e0 m=nil [GC worker (idle)]:
+runtime.gopark(0x0?, 0x0?, 0x0?, 0x0?, 0x0?)
+	/usr/lib/go/src/runtime/proc.go:462 +0xce fp=0xc000203f40 sp=0xc000203f20 pc=0x4c170e
+runtime.gcBgMarkWorker(0xc000192380)
+	/usr/lib/go/src/runtime/mgc.go:1791 +0xeb fp=0xc000203fc8 sp=0xc000203f40 pc=0x4661eb
+runtime.gcBgMarkStartWorkers.gowrap1()
+	/usr/lib/go/src/runtime/mgc.go:1695 +0x17 fp=0xc000203fe0 sp=0xc000203fc8 pc=0x4660d7
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0xc000203fe8 sp=0xc000203fe0 pc=0x4c8ae1
+created by runtime.gcBgMarkStartWorkers in goroutine 20
+	/usr/lib/go/src/runtime/mgc.go:1695 +0x105
+
+goroutine 24 gp=0xc0001852c0 m=nil [GC worker (idle)]:
+runtime.gopark(0x0?, 0x0?, 0x0?, 0x0?, 0x0?)
+	/usr/lib/go/src/runtime/proc.go:462 +0xce fp=0xc000202f40 sp=0xc000202f20 pc=0x4c170e
+runtime.gcBgMarkWorker(0xc000192380)
+	/usr/lib/go/src/runtime/mgc.go:1791 +0xeb fp=0xc000202fc8 sp=0xc000202f40 pc=0x4661eb
+runtime.gcBgMarkStartWorkers.gowrap1()
+	/usr/lib/go/src/runtime/mgc.go:1695 +0x17 fp=0xc000202fe0 sp=0xc000202fc8 pc=0x4660d7
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0xc000202fe8 sp=0xc000202fe0 pc=0x4c8ae1
+created by runtime.gcBgMarkStartWorkers in goroutine 20
+	/usr/lib/go/src/runtime/mgc.go:1695 +0x105
+
+goroutine 25 gp=0xc0001854a0 m=nil [GC worker (idle)]:
+runtime.gopark(0x71c9e1bde7?, 0x0?, 0x0?, 0x0?, 0x0?)
+	/usr/lib/go/src/runtime/proc.go:462 +0xce fp=0xc000201f40 sp=0xc000201f20 pc=0x4c170e
+runtime.gcBgMarkWorker(0xc000192380)
+	/usr/lib/go/src/runtime/mgc.go:1791 +0xeb fp=0xc000201fc8 sp=0xc000201f40 pc=0x4661eb
+runtime.gcBgMarkStartWorkers.gowrap1()
+	/usr/lib/go/src/runtime/mgc.go:1695 +0x17 fp=0xc000201fe0 sp=0xc000201fc8 pc=0x4660d7
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0xc000201fe8 sp=0xc000201fe0 pc=0x4c8ae1
+created by runtime.gcBgMarkStartWorkers in goroutine 20
+	/usr/lib/go/src/runtime/mgc.go:1695 +0x105
+
+goroutine 26 gp=0xc000185680 m=nil [GC worker (idle)]:
+runtime.gopark(0x71c9e08bb0?, 0x3?, 0xe2?, 0xf8?, 0x0?)
+	/usr/lib/go/src/runtime/proc.go:462 +0xce fp=0xc000200f40 sp=0xc000200f20 pc=0x4c170e
+runtime.gcBgMarkWorker(0xc000192380)
+	/usr/lib/go/src/runtime/mgc.go:1791 +0xeb fp=0xc000200fc8 sp=0xc000200f40 pc=0x4661eb
+runtime.gcBgMarkStartWorkers.gowrap1()
+	/usr/lib/go/src/runtime/mgc.go:1695 +0x17 fp=0xc000200fe0 sp=0xc000200fc8 pc=0x4660d7
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0xc000200fe8 sp=0xc000200fe0 pc=0x4c8ae1
+created by runtime.gcBgMarkStartWorkers in goroutine 20
+	/usr/lib/go/src/runtime/mgc.go:1695 +0x105
+
+goroutine 27 gp=0xc000185860 m=nil [GC worker (idle)]:
+runtime.gopark(0x71c9da906e?, 0x3?, 0x3d?, 0x3?, 0x0?)
+	/usr/lib/go/src/runtime/proc.go:462 +0xce fp=0xc0043cff40 sp=0xc0043cff20 pc=0x4c170e
+runtime.gcBgMarkWorker(0xc000192380)
+	/usr/lib/go/src/runtime/mgc.go:1791 +0xeb fp=0xc0043cffc8 sp=0xc0043cff40 pc=0x4661eb
+runtime.gcBgMarkStartWorkers.gowrap1()
+	/usr/lib/go/src/runtime/mgc.go:1695 +0x17 fp=0xc0043cffe0 sp=0xc0043cffc8 pc=0x4660d7
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0xc0043cffe8 sp=0xc0043cffe0 pc=0x4c8ae1
+created by runtime.gcBgMarkStartWorkers in goroutine 20
+	/usr/lib/go/src/runtime/mgc.go:1695 +0x105
+
+goroutine 28 gp=0xc000185a40 m=nil [GC worker (idle)]:
+runtime.gopark(0x71c9da7da4?, 0x0?, 0x0?, 0x0?, 0x0?)
+	/usr/lib/go/src/runtime/proc.go:462 +0xce fp=0xc0043cef40 sp=0xc0043cef20 pc=0x4c170e
+runtime.gcBgMarkWorker(0xc000192380)
+	/usr/lib/go/src/runtime/mgc.go:1791 +0xeb fp=0xc0043cefc8 sp=0xc0043cef40 pc=0x4661eb
+runtime.gcBgMarkStartWorkers.gowrap1()
+	/usr/lib/go/src/runtime/mgc.go:1695 +0x17 fp=0xc0043cefe0 sp=0xc0043cefc8 pc=0x4660d7
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0xc0043cefe8 sp=0xc0043cefe0 pc=0x4c8ae1
+created by runtime.gcBgMarkStartWorkers in goroutine 20
+	/usr/lib/go/src/runtime/mgc.go:1695 +0x105
+
+goroutine 29 gp=0xc000185c20 m=nil [GC worker (idle)]:
+runtime.gopark(0x71c9d68fe0?, 0x0?, 0x0?, 0x0?, 0x0?)
+	/usr/lib/go/src/runtime/proc.go:462 +0xce fp=0xc0043cdf40 sp=0xc0043cdf20 pc=0x4c170e
+runtime.gcBgMarkWorker(0xc000192380)
+	/usr/lib/go/src/runtime/mgc.go:1791 +0xeb fp=0xc0043cdfc8 sp=0xc0043cdf40 pc=0x4661eb
+runtime.gcBgMarkStartWorkers.gowrap1()
+	/usr/lib/go/src/runtime/mgc.go:1695 +0x17 fp=0xc0043cdfe0 sp=0xc0043cdfc8 pc=0x4660d7
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0xc0043cdfe8 sp=0xc0043cdfe0 pc=0x4c8ae1
+created by runtime.gcBgMarkStartWorkers in goroutine 20
+	/usr/lib/go/src/runtime/mgc.go:1695 +0x105
+
+goroutine 30 gp=0xc0043d2000 m=nil [GC worker (idle)]:
+runtime.gopark(0x71c9d69015?, 0x0?, 0x0?, 0x0?, 0x0?)
+	/usr/lib/go/src/runtime/proc.go:462 +0xce fp=0xc0043ccf40 sp=0xc0043ccf20 pc=0x4c170e
+runtime.gcBgMarkWorker(0xc000192380)
+	/usr/lib/go/src/runtime/mgc.go:1791 +0xeb fp=0xc0043ccfc8 sp=0xc0043ccf40 pc=0x4661eb
+runtime.gcBgMarkStartWorkers.gowrap1()
+	/usr/lib/go/src/runtime/mgc.go:1695 +0x17 fp=0xc0043ccfe0 sp=0xc0043ccfc8 pc=0x4660d7
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0xc0043ccfe8 sp=0xc0043ccfe0 pc=0x4c8ae1
+created by runtime.gcBgMarkStartWorkers in goroutine 20
+	/usr/lib/go/src/runtime/mgc.go:1695 +0x105
+FAIL	github.com/f4ga/ScoriaDB/internal/engine	0.191s
+FAIL
