@@ -27,9 +27,21 @@ type MemTable struct {
 	sl *SkipList
 }
 
-// NewMemTable creates a new MemTable.
+// NewMemTable creates a new MemTable with its OWN fresh flat arena.
+//
+// Each MemTable must own its own arena: during flush the active and frozen
+// tables must never share a FlatArena, because writes to the active table would
+// land in the same block and could overwrite nodes the frozen table still
+// references while it is iterated. See: ARENA-01.
 func NewMemTable() *MemTable {
 	return &MemTable{sl: NewSkipList()}
+}
+
+// NewMemTableWithArena creates a new MemTable backed by the given flat arena.
+// The caller is responsible for ensuring the arena is not shared between an
+// active and a concurrently-flushed frozen MemTable. See: ARENA-01.
+func NewMemTableWithArena(arena *FlatArena) *MemTable {
+	return &MemTable{sl: NewSkipListWithArena(arena)}
 }
 
 // Put inserts a key-value pair.

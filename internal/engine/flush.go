@@ -46,6 +46,13 @@ const (
 //
 //nolint:unused // flush goroutine worker
 func (e *LSMEngine) flushMemTable() error {
+	if e.manifest == nil {
+		return fmt.Errorf("flushMemTable: engine manifest is nil")
+	}
+	if e.closed.Load() {
+		return fmt.Errorf("flushMemTable: engine is closed")
+	}
+
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
@@ -63,7 +70,15 @@ func (e *LSMEngine) flushMemTable() error {
 			continue
 		}
 		old := shard.memTable
-		shard.memTable = memtable.NewMemTable()
+		// Replace the active MemTable with a fresh one that owns its OWN flat
+		// arena. Sharing the shard arena between the active and frozen tables is
+		// unsafe: while we iterate the frozen table during flush, new writes to
+		// the active table would land in the same 64 MB block and could overwrite
+		// nodes the frozen table still references, corrupting flushed data.
+		// See: ARENA-01. The lock-free arena is never exhausted because the 4 MB
+		// flush watermark is far below the 64 MB block, so a live table never
+		// grows. See: HOT-01, PERF-01.
+		shard.memTable = memtable.NewMemTable() // own arena, see ARENA-01
 		shard.frozenMemTable = old
 		atomic.StoreInt64(&shard.memSize, 0)
 		candidates = append(candidates, flushCandidate{shard: shard, mt: old})
@@ -124,9 +139,11 @@ func (e *LSMEngine) flushOneMemTable(mt *memtable.MemTable, fileNum uint64) (*ss
 
 	// Iterate over all MemTable entries
 	iter := mt.NewIterator()
+	count := 0
 	var minKey, maxKey []byte
 	var first = true
 	for iter.Next() {
+		count++
 		key, value := iter.Key(), iter.Value()
 		// For range filter we need user keys (without timestamp)
 		userKey := key.Key
@@ -144,7 +161,12 @@ func (e *LSMEngine) flushOneMemTable(mt *memtable.MemTable, fileNum uint64) (*ss
 				maxKey = userKey
 			}
 		}
-		if err := writer.Append(key, value); err != nil {
+		// The MemTable value is already in the tagged storage format (leading
+		// type tag + payload). Pass it via AppendTagged so the writer preserves
+		// the tag verbatim; a TypeValuePointer (large value) must survive to
+		// the SSTable so reads can resolve it through the VLog.
+		// See: WIS-KEY-01
+		if err := writer.AppendTagged(key, value); err != nil {
 			writer = nil
 			// Delete partially written file via VFS
 			if err := e.vfs.Remove(sstPath); err != nil {
@@ -170,6 +192,9 @@ func (e *LSMEngine) flushOneMemTable(mt *memtable.MemTable, fileNum uint64) (*ss
 		}
 		return nil, fmt.Errorf("failed to open SSTable: %w", err)
 	}
+
+	logger.Info(
+		"flushOneMemTable: wrote %d entries to SSTable (fileNum=%d, path=%s)", count, fileNum, sstPath)
 
 	// Get file size
 	stat, err := e.vfs.Stat(sstPath)
